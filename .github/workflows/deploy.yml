@@ -59,6 +59,20 @@ jobs:
             exit 1
           fi
 
+      - name: Validate Slack OAuth client IDs
+        env:
+          SB_ID: ${{ secrets.SB_SLACK_CLIENT_ID }}
+          QS_ID: ${{ secrets.QS_SLACK_CLIENT_ID }}
+        run: |
+          if [[ -z "$SB_ID" ]]; then
+            echo "::error::SB_SLACK_CLIENT_ID secret is not set for this environment"
+            exit 1
+          fi
+          if [[ -z "$QS_ID" ]]; then
+            echo "::error::QS_SLACK_CLIENT_ID secret is not set for this environment"
+            exit 1
+          fi
+
       # --- PAXminer (zip packaging) ---
       - name: Build PAXminer
         run: sam build -t PAXminer/template.yaml
@@ -128,6 +142,7 @@ jobs:
               SlackToken=${{ secrets.SB_SLACK_TOKEN }} \
               SlackSigningSecret=${{ secrets.SB_SLACK_SIGNING_SECRET }} \
               SlackClientSecret=${{ secrets.SB_SLACK_CLIENT_SECRET }} \
+              SlackClientId=${{ secrets.SB_SLACK_CLIENT_ID }} \
               DbEncryptionKey=${{ secrets.DB_ENCRYPTION_KEY }} \
               StravaClientID=${{ secrets.SB_STRAVA_CLIENT_ID }} \
               StravaClientSecret=${{ secrets.SB_STRAVA_CLIENT_SECRET }} \
@@ -153,6 +168,7 @@ jobs:
             "SlackToken=${{ secrets.QS_SLACK_TOKEN }}"
             "SlackSigningSecret=${{ secrets.QS_SLACK_SIGNING_SECRET }}"
             "SlackClientSecret=${{ secrets.QS_SLACK_CLIENT_SECRET }}"
+            "SlackClientId=${{ secrets.QS_SLACK_CLIENT_ID }}"
             "DbEncryptionKey=${{ secrets.DB_ENCRYPTION_KEY }}"
           )
           [[ -n "${QS_GOOGLE_CLIENT_ID:-}" ]] && OVERRIDES+=("GoogleClientId=${QS_GOOGLE_CLIENT_ID}")

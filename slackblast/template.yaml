@@ -5,7 +5,7 @@ Description: slackblast-build-template
 Globals:
   Function:
     Timeout: 10
-    MemorySize: 128
+    MemorySize: 256
     Tracing: Active
   Api:
     TracingEnabled: true
@@ -88,14 +88,15 @@ Parameters:
   ImageBucketName:
     Description: Globally unique S3 bucket name for backblast / Strava static images (must be available)
     Type: String
+  SlackClientId:
+    Description: Slack app OAuth Client ID (Basic Information in api.slack.com); must match your self-hosted app
+    Type: String
 
 Mappings:
   StagesMap:
     test:
-      SlackClientID: "3135457248691.4852586913543"
       KeepWarmName: "SlackblastKeepWarmTest"
     prod:
-      SlackClientID: "3135457248691.3241841713426"
       KeepWarmName: "SlackblastKeepWarmProd"
 
 Resources:
@@ -145,6 +146,10 @@ Resources:
               Resource:
                 - !Sub "${SlackblastImageBucket.Arn}/*"
                 - !GetAtt SlackblastImageBucket.Arn
+            - Sid: SelfInvoke
+              Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*"
       Timeout: 400
       Events:
         Slackblast:
@@ -186,10 +191,7 @@ Resources:
           DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
           TIMEZONE: !Ref Timezone
           IMAGE_S3_BUCKET: !Ref ImageBucketName
-          ENV_SLACK_CLIENT_ID: !FindInMap
-            - StagesMap
-            - Ref: Stage
-            - SlackClientID
+          ENV_SLACK_CLIENT_ID: !Ref SlackClientId
           STRAVA_CLIENT_ID: !Ref StravaClientID
           STRAVA_CLIENT_SECRET: !Ref StravaClientSecret
 

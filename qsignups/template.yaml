@@ -6,7 +6,7 @@ Description: qsignups-build-template
 Globals:
   Function:
     Timeout: 10
-    MemorySize: 128
+    MemorySize: 256
     Tracing: Active
   Api:
     TracingEnabled: true
@@ -105,6 +105,9 @@ Parameters:
   DefaultEventDurationMinutes:
     Type: String
     Default: "45"
+  SlackClientId:
+    Description: Slack app OAuth Client ID (Basic Information in api.slack.com); must match your self-hosted app
+    Type: String
   # PasswordEncryptKey:
   #   Description: Hash encrypt key for decrypting email passwords
   #   Type: String
@@ -121,10 +124,8 @@ Parameters:
 Mappings:
   StagesMap:
     test:
-      SlackClientID: "1966318390773.5843549611120"
       KeepWarmName: "QSignupsKeepWarmTest"
     prod:
-      SlackClientID: "3135457248691.3137775183364"
       KeepWarmName: "QSignupsKeepWarmProd"
 
 Resources:
@@ -136,6 +137,12 @@ Resources:
       Runtime: python3.12
       Architectures:
         - x86_64
+      Policies:
+        - Statement:
+            - Sid: SelfInvoke
+              Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*"
       Timeout: 400
       Events:
         QSingups:
@@ -185,10 +192,7 @@ Resources:
           DEFAULT_EVENT_START: !Ref DefaultEventStart
           DEFAULT_EVENT_END: !Ref DefaultEventEnd
           DEFAULT_EVENT_DURATION_MINUTES: !Ref DefaultEventDurationMinutes
-          ENV_SLACK_CLIENT_ID: !FindInMap
-            - StagesMap
-            - Ref: Stage
-            - SlackClientID
+          ENV_SLACK_CLIENT_ID: !Ref SlackClientId
           # STRAVA_CLIENT_ID: !Ref StravaClientID
           # STRAVA_CLIENT_SECRET: !Ref StravaClientSecret
 

@@ -73,6 +73,7 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 |----------|-------------|
 | `SB_SLACK_TOKEN` | Slack Bot token |
 | `SB_SLACK_SIGNING_SECRET` | Slack signing secret |
+| `SB_SLACK_CLIENT_ID` | Slack OAuth **Client ID** (App credentials on [api.slack.com](https://api.slack.com/apps); must match the app that owns `SB_SLACK_TOKEN`) |
 | `SB_SLACK_CLIENT_SECRET` | Slack OAuth client secret |
 | `SB_STRAVA_CLIENT_ID` | Strava API client ID |
 | `SB_STRAVA_CLIENT_SECRET` | Strava API client secret |
@@ -83,6 +84,7 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 |----------|-------------|
 | `QS_SLACK_TOKEN` | Slack Bot token |
 | `QS_SLACK_SIGNING_SECRET` | Slack signing secret |
+| `QS_SLACK_CLIENT_ID` | Slack OAuth **Client ID** for the qsignups Slack app (must match `QS_SLACK_TOKEN`) |
 | `QS_SLACK_CLIENT_SECRET` | Slack OAuth client secret |
 | `QS_GOOGLE_CLIENT_ID` | Google Calendar API client ID |
 | `QS_GOOGLE_CLIENT_SECRET` | Google Calendar API client secret |
@@ -90,6 +92,30 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 ## Slack OAuth (database)
 
 **slackblast** and **qsignups** store Slack app install data in the **same MySQL/TiDB schema** as the rest of each app (the suffixed schema: e.g. `slackblast_test` / `qsignups_prod`), not in S3. On first Lambda cold start after deploy, the code creates (if missing) three tables: `slack_bots`, `slack_installations`, `slack_oauth_states`. Ensure the DB user has `CREATE TABLE` on that schema (typical for app-owned schemas).
+
+**`ENV_SLACK_CLIENT_ID` in Lambda** comes from `SB_SLACK_CLIENT_ID` / `QS_SLACK_CLIENT_ID` in your deploy env (SAM parameter `SlackClientId`). It must match the Slack app whose install row you store; otherwise Bolt cannot resolve the bot token from `slack_installations`.
+
+### Populating `slack_installations` after deploy
+
+Bolt resolves the workspace bot token from the **`slack_installations`** table (keyed by `client_id` + `team_id`), not from the placeholder `SLACK_BOT_TOKEN` parameter alone.
+
+1. Deploy the stack and note the API base URL from CloudFormation (same base as **`SlackblastApi`** / **`QSignupsApi`**, e.g. `https://xxxx.execute-api.us-east-1.amazonaws.com/Prod`).
+2. In each Slack app’s settings, add an **OAuth Redirect URL**: `{API_BASE}/slack/install` (Bolt’s install path).
+3. Open **`{API_BASE}/slack/install`** in a browser while signed into Slack and complete the install for your workspace. That writes **`slack_installations`** (and related rows) in `slackblast_<stage>` / `qsignups_<stage>`.
+
+If you skip this, slash commands and modals can fail (e.g. missing auth, `expired_trigger_id` on cold starts, or `lambda:InvokeFunction` errors until the lazy listener can run with a valid client).
+
+### Weaselbot `regions` row
+
+Scheduled Weaselbot Lambdas read **`slack_token`** from **`weaselbot_<stage>.regions`** for each PAXminer regional schema (see `weaselbot/weaselbot/pax_achievements.py`). For your workspace to receive achievement/Kotter Slack messages:
+
+- Ensure **`WB_SLACK_TOKEN`**, **`F3_REGION_NAME`**, **`STAGE`**, **`WEASELBOT_SCHEMA`**, and **`F3_REGION_SLACK_TEAM_ID`** are set on the Weaselbot Lambda (via deploy). On cold start, [`weaselbot/handlers.py`](weaselbot/handlers.py) can bootstrap an encrypted token into **`weaselbot_<stage>.regions`** when all of those are present.
+- The row’s **`paxminer_schema`** must match the regional schema name (e.g. `f3ttown_test` for `F3_REGION_NAME=f3ttown` and `STAGE=test`).
+- Set **`achievement_channel`** (and other Weaselbot fields) via slackblast’s Weaselbot config UI or direct SQL if achievements should post to a channel.
+
+### Lambda lazy listeners and `lambda:InvokeFunction`
+
+**slackblast** and **qsignups** use Bolt’s **`process_before_response`** pattern on Lambda: the function must be allowed to **invoke itself** so the “lazy” handler runs after Slack gets an immediate `ack`. The SAM templates grant **`lambda:InvokeFunction`** on functions in the same stack. If this permission were missing, you would see **`AccessDeniedException`** on self-invoke and Slack would report that the app did not respond.
 
 ## Local development
 
@@ -177,11 +203,13 @@ Create environments **`test`** and **`prod`** in your repo settings (or run `./d
 | `WB_SLACK_TOKEN` | Weaselbot |
 | `SB_SLACK_TOKEN` | slackblast |
 | `SB_SLACK_SIGNING_SECRET` | slackblast |
+| `SB_SLACK_CLIENT_ID` | slackblast |
 | `SB_SLACK_CLIENT_SECRET` | slackblast |
 | `SB_STRAVA_CLIENT_ID` | slackblast |
 | `SB_STRAVA_CLIENT_SECRET` | slackblast |
 | `QS_SLACK_TOKEN` | qsignups |
 | `QS_SLACK_SIGNING_SECRET` | qsignups |
+| `QS_SLACK_CLIENT_ID` | qsignups |
 | `QS_SLACK_CLIENT_SECRET` | qsignups |
 | `QS_GOOGLE_CLIENT_ID` | qsignups |
 | `QS_GOOGLE_CLIENT_SECRET` | qsignups |

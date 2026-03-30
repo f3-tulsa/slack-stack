@@ -244,11 +244,13 @@ run_setup_github() {
   gh secret set WB_SLACK_TOKEN --env "$STAGE" --body "$WB_SLACK_TOKEN" -R "$repo"
   gh secret set SB_SLACK_TOKEN --env "$STAGE" --body "$SB_SLACK_TOKEN" -R "$repo"
   gh secret set SB_SLACK_SIGNING_SECRET --env "$STAGE" --body "$SB_SLACK_SIGNING_SECRET" -R "$repo"
+  gh secret set SB_SLACK_CLIENT_ID --env "$STAGE" --body "$SB_SLACK_CLIENT_ID" -R "$repo"
   gh secret set SB_SLACK_CLIENT_SECRET --env "$STAGE" --body "$SB_SLACK_CLIENT_SECRET" -R "$repo"
   gh secret set SB_STRAVA_CLIENT_ID --env "$STAGE" --body "$SB_STRAVA_CLIENT_ID" -R "$repo"
   gh secret set SB_STRAVA_CLIENT_SECRET --env "$STAGE" --body "$SB_STRAVA_CLIENT_SECRET" -R "$repo"
   gh secret set QS_SLACK_TOKEN --env "$STAGE" --body "$QS_SLACK_TOKEN" -R "$repo"
   gh secret set QS_SLACK_SIGNING_SECRET --env "$STAGE" --body "$QS_SLACK_SIGNING_SECRET" -R "$repo"
+  gh secret set QS_SLACK_CLIENT_ID --env "$STAGE" --body "$QS_SLACK_CLIENT_ID" -R "$repo"
   gh secret set QS_SLACK_CLIENT_SECRET --env "$STAGE" --body "$QS_SLACK_CLIENT_SECRET" -R "$repo"
   [[ -n "${QS_GOOGLE_CLIENT_ID:-}" ]] && gh secret set QS_GOOGLE_CLIENT_ID --env "$STAGE" --body "$QS_GOOGLE_CLIENT_ID" -R "$repo"
   [[ -n "${QS_GOOGLE_CLIENT_SECRET:-}" ]] && gh secret set QS_GOOGLE_CLIENT_SECRET --env "$STAGE" --body "$QS_GOOGLE_CLIENT_SECRET" -R "$repo"
@@ -294,12 +296,14 @@ fi
 
 : "${SB_SLACK_TOKEN:?}"
 : "${SB_SLACK_SIGNING_SECRET:?}"
+: "${SB_SLACK_CLIENT_ID:?}"
 : "${SB_SLACK_CLIENT_SECRET:?}"
 : "${SB_STRAVA_CLIENT_ID:?}"
 : "${SB_STRAVA_CLIENT_SECRET:?}"
 
 : "${QS_SLACK_TOKEN:?}"
 : "${QS_SLACK_SIGNING_SECRET:?}"
+: "${QS_SLACK_CLIENT_ID:?}"
 : "${QS_SLACK_CLIENT_SECRET:?}"
 
 : "${F3_REGION_NAME:?}"
@@ -471,6 +475,7 @@ deploy_slackblast() {
       "SlackToken=${SB_SLACK_TOKEN}" \
       "SlackSigningSecret=${SB_SLACK_SIGNING_SECRET}" \
       "SlackClientSecret=${SB_SLACK_CLIENT_SECRET}" \
+      "SlackClientId=${SB_SLACK_CLIENT_ID}" \
       "DbEncryptionKey=${DB_ENCRYPTION_KEY}" \
       "StravaClientID=${SB_STRAVA_CLIENT_ID}" \
       "StravaClientSecret=${SB_STRAVA_CLIENT_SECRET}" \
@@ -502,6 +507,7 @@ deploy_qsignups() {
       "SlackToken=${QS_SLACK_TOKEN}" \
       "SlackSigningSecret=${QS_SLACK_SIGNING_SECRET}" \
       "SlackClientSecret=${QS_SLACK_CLIENT_SECRET}" \
+      "SlackClientId=${QS_SLACK_CLIENT_ID}" \
       "DbEncryptionKey=${DB_ENCRYPTION_KEY}" \
       ${google_overrides} \
     2>&1 | tee -a "$RECEIPT_FILE"

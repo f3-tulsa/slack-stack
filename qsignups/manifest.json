@@ -41,6 +41,12 @@
         "description": "Query for upcoming schedule",
         "usage_hint": "/schedule tomorrow",
         "url": "__HOSTNAME__/slack/events"
+      },
+      {
+        "command": "/qsignups",
+        "description": "Manage the Q signup schedule",
+        "usage_hint": "/qsignups",
+        "url": "__HOSTNAME__/slack/events"
       }
     ]
   },
