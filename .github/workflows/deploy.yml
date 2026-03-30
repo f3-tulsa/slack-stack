@@ -65,15 +65,15 @@ jobs:
 
       - name: Validate Slack OAuth client IDs
         env:
-          SB_ID: ${{ secrets.SB_SLACK_CLIENT_ID }}
-          QS_ID: ${{ secrets.QS_SLACK_CLIENT_ID }}
+          SB_ID: ${{ vars.SB_SLACK_CLIENT_ID }}
+          QS_ID: ${{ vars.QS_SLACK_CLIENT_ID }}
         run: |
           if [[ -z "$SB_ID" ]]; then
-            echo "::error::SB_SLACK_CLIENT_ID secret is not set for this environment"
+            echo "::error::SB_SLACK_CLIENT_ID variable is not set for this environment"
             exit 1
           fi
           if [[ -z "$QS_ID" ]]; then
-            echo "::error::QS_SLACK_CLIENT_ID secret is not set for this environment"
+            echo "::error::QS_SLACK_CLIENT_ID variable is not set for this environment"
             exit 1
           fi
 
@@ -145,7 +145,7 @@ jobs:
             "SlackToken=${{ secrets.SB_SLACK_TOKEN }}"
             "SlackSigningSecret=${{ secrets.SB_SLACK_SIGNING_SECRET }}"
             "SlackClientSecret=${{ secrets.SB_SLACK_CLIENT_SECRET }}"
-            "SlackClientId=${{ secrets.SB_SLACK_CLIENT_ID }}"
+            "SlackClientId=${{ vars.SB_SLACK_CLIENT_ID }}"
             "DbEncryptionKey=${{ secrets.DB_ENCRYPTION_KEY }}"
             "ImageBucketName=${{ vars.IMAGE_S3_BUCKET }}"
           )
@@ -178,7 +178,7 @@ jobs:
             "SlackToken=${{ secrets.QS_SLACK_TOKEN }}"
             "SlackSigningSecret=${{ secrets.QS_SLACK_SIGNING_SECRET }}"
             "SlackClientSecret=${{ secrets.QS_SLACK_CLIENT_SECRET }}"
-            "SlackClientId=${{ secrets.QS_SLACK_CLIENT_ID }}"
+            "SlackClientId=${{ vars.QS_SLACK_CLIENT_ID }}"
             "DbEncryptionKey=${{ secrets.DB_ENCRYPTION_KEY }}"
           )
           [[ -n "${QS_GOOGLE_CLIENT_ID:-}" ]] && OVERRIDES+=("GoogleClientId=${QS_GOOGLE_CLIENT_ID}")

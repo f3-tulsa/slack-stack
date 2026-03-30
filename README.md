@@ -213,13 +213,11 @@ Create environments **`test`** and **`prod`** in your repo settings (or run `./d
 | `WB_SLACK_TOKEN` | Weaselbot |
 | `SB_SLACK_TOKEN` | slackblast |
 | `SB_SLACK_SIGNING_SECRET` | slackblast |
-| `SB_SLACK_CLIENT_ID` | slackblast |
 | `SB_SLACK_CLIENT_SECRET` | slackblast |
 | `SB_STRAVA_CLIENT_ID` | slackblast (optional — Strava) |
 | `SB_STRAVA_CLIENT_SECRET` | slackblast (optional — Strava) |
 | `QS_SLACK_TOKEN` | qsignups |
 | `QS_SLACK_SIGNING_SECRET` | qsignups |
-| `QS_SLACK_CLIENT_ID` | qsignups |
 | `QS_SLACK_CLIENT_SECRET` | qsignups |
 | `QS_GOOGLE_CLIENT_ID` | qsignups (optional — Google Calendar) |
 | `QS_GOOGLE_CLIENT_SECRET` | qsignups (optional — Google Calendar) |
@@ -238,6 +236,8 @@ Create environments **`test`** and **`prod`** in your repo settings (or run `./d
 | `IMAGE_S3_BUCKET` | `slack-stack-images-prod` | Globally unique |
 | `F3_REGION_NAME` | `f3ttown` | Region key in `paxminer.regions`; regional schema `{F3_REGION_NAME}_${STAGE}` |
 | `F3_REGION_SLACK_TEAM_ID` | `T01234567` | Slack workspace Team ID (available to any app that needs it; Weaselbot uses it for `weaselbot.regions`) |
+| `SB_SLACK_CLIENT_ID` | `10773766677089.xxx` | Slack OAuth Client ID for slackblast (public app id; use a variable, not a secret) |
+| `QS_SLACK_CLIENT_ID` | `10773766677089.xxx` | Slack OAuth Client ID for qsignups (public app id; use a variable, not a secret) |
 
 ### AWS OIDC (one-time setup)
 
