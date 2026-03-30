@@ -849,6 +849,21 @@ def _s3_url_key_and_skip(url: str, new_bucket: str) -> tuple[str | None, bool]:
     return path, False
 
 
+def _s3_object_key_from_bucket_url(url: str, bucket: str) -> str | None:
+    """If url is an object in bucket (virtual-hosted style), return the object key; else None."""
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in ("http", "https"):
+        return None
+    netloc = (parsed.netloc or "").lower()
+    nb = bucket.lower()
+    if netloc == f"{nb}.s3.amazonaws.com" or (
+        netloc.startswith(f"{nb}.s3.") and netloc.endswith(".amazonaws.com")
+    ):
+        path = (parsed.path or "").lstrip("/")
+        return path if path else None
+    return None
+
+
 def post_migration_s3_images(conn, schema_map: dict[str, str], report: dict) -> None:
     new_bucket = (os.environ.get("IMAGE_S3_BUCKET") or "").strip()
     if not new_bucket:
@@ -865,10 +880,12 @@ def post_migration_s3_images(conn, schema_map: dict[str, str], report: dict) -> 
 
     s3 = boto3.client("s3")
     cur = conn.cursor(DictCursor)
-    stats = {"downloaded": 0, "updated_rows": 0, "errors": []}
+    stats: dict[str, Any] = {"downloaded": 0, "updated_rows": 0, "errors": [], "url_mappings": []}
 
     uploaded_keys: set[str] = set()
     targets = list(schema_map.values())
+    current_schema: str = ""
+    current_row: dict[str, Any] = {}
     LOG.info(
         "S3 image migration starting: bucket=%s, schemas=%s (%d)",
         new_bucket,
@@ -901,6 +918,16 @@ def post_migration_s3_images(conn, schema_map: dict[str, str], report: dict) -> 
                         new_bucket,
                         stats["updated_rows"],
                     )
+            stats["url_mappings"].append(
+                {
+                    "old_url": url,
+                    "new_url": new_url,
+                    "s3_key": key,
+                    "schema": current_schema,
+                    "ao_id": str(current_row.get("ao_id", "")),
+                    "bd_date": str(current_row.get("bd_date", "")),
+                }
+            )
             return new_url
         except Exception as e:
             stats["errors"].append({"url": url, "error": str(e)})
@@ -924,6 +951,8 @@ def post_migration_s3_images(conn, schema_map: dict[str, str], report: dict) -> 
         nrows = len(rows)
         LOG.info("Schema %s: fetched %d rows with json", tgt, nrows)
         for row_idx, row in enumerate(rows, start=1):
+            current_schema = tgt
+            current_row = row
             if row_idx % 100 == 0 or row_idx == nrows:
                 LOG.info(
                     "Schema %s: scanning row %d/%d (downloaded=%s updated=%s errors=%s)",
@@ -1014,6 +1043,278 @@ def post_migration_s3_images(conn, schema_map: dict[str, str], report: dict) -> 
     conn.commit()
     report["s3_image_migration"] = stats
     LOG.info("S3 image migration: %s objects copied, %s rows updated", stats["downloaded"], stats["updated_rows"])
+
+
+def source_fallback_reupload(
+    source_conn: Any,
+    target_conn: Any,
+    schema_map: dict[str, str],
+    report: dict[str, Any],
+) -> None:
+    """
+    Re-upload images when target beatdowns.json already points at IMAGE_S3_BUCKET but objects were deleted.
+    For each target URL on the bucket, looks up the same beatdowns row on source RDS and uses the
+    original URL at the same index in files/low_res_files to re-download and PUT to the existing key.
+    Does not modify the target database.
+    """
+    new_bucket = (os.environ.get("IMAGE_S3_BUCKET") or "").strip()
+    if not new_bucket:
+        LOG.info("S3 source-fallback skipped (set IMAGE_S3_BUCKET)")
+        return
+
+    try:
+        import boto3
+        import requests
+    except ImportError:
+        LOG.warning("boto3/requests not installed; skipping S3 source-fallback")
+        return
+
+    s3 = boto3.client("s3")
+    target_cur = target_conn.cursor(DictCursor)
+    source_cur = source_conn.cursor(DictCursor)
+    target_to_source = {tgt: src for src, tgt in schema_map.items()}
+    stats: dict[str, Any] = {
+        "downloaded": 0,
+        "skipped_rows": 0,
+        "errors": [],
+        "url_mappings": [],
+    }
+    uploaded_keys: set[str] = set()
+
+    LOG.info(
+        "S3 source-fallback: bucket=%s, target schemas=%s",
+        new_bucket,
+        list(target_to_source.keys()),
+    )
+
+    for tgt, src in target_to_source.items():
+        if not _table_exists(target_cur, tgt, "beatdowns"):
+            LOG.info("Source-fallback: schema %s has no beatdowns, skipping", tgt)
+            continue
+        if not _table_exists(source_cur, src, "beatdowns"):
+            LOG.warning("Source-fallback: source schema %s has no beatdowns, skipping target %s", src, tgt)
+            continue
+        try:
+            target_cur.execute(
+                f"SELECT `ao_id`, `bd_date`, `q_user_id`, `json` FROM `{tgt}`.`beatdowns` WHERE `json` IS NOT NULL"
+            )
+        except Exception as e:
+            stats["errors"].append({"schema": tgt, "error": str(e)})
+            LOG.error("Source-fallback: SELECT target %s failed: %s", tgt, e)
+            continue
+        rows = target_cur.fetchall()
+        LOG.info("Source-fallback: schema %s, %d rows with json", tgt, len(rows))
+        for row in rows:
+            j_t = row["json"]
+            if not j_t:
+                continue
+            if isinstance(j_t, str):
+                try:
+                    j_t = json.loads(j_t)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            if not isinstance(j_t, dict):
+                continue
+
+            needs_fallback = False
+            for list_key in ("files", "low_res_files"):
+                lst = j_t.get(list_key)
+                if not isinstance(lst, list):
+                    continue
+                for u in lst:
+                    if isinstance(u, str) and _s3_object_key_from_bucket_url(u, new_bucket):
+                        needs_fallback = True
+                        break
+                if needs_fallback:
+                    break
+            if not needs_fallback:
+                stats["skipped_rows"] += 1
+                continue
+
+            try:
+                source_cur.execute(
+                    f"SELECT `json` FROM `{src}`.`beatdowns` "
+                    f"WHERE `ao_id`=%s AND `bd_date`=%s AND `q_user_id`=%s",
+                    (row["ao_id"], row["bd_date"], row["q_user_id"]),
+                )
+            except Exception as e:
+                stats["errors"].append(
+                    {
+                        "schema": tgt,
+                        "ao_id": str(row.get("ao_id")),
+                        "error": f"source SELECT: {e}",
+                    }
+                )
+                continue
+            srow = source_cur.fetchone()
+            if not srow or not srow.get("json"):
+                stats["errors"].append(
+                    {
+                        "schema": tgt,
+                        "ao_id": str(row.get("ao_id")),
+                        "bd_date": str(row.get("bd_date")),
+                        "error": "no matching source beatdowns row",
+                    }
+                )
+                LOG.warning(
+                    "Source-fallback: no source row %s.%s ao_id=%s bd_date=%s",
+                    src,
+                    tgt,
+                    row.get("ao_id"),
+                    row.get("bd_date"),
+                )
+                continue
+            j_s = srow["json"]
+            if isinstance(j_s, str):
+                try:
+                    j_s = json.loads(j_s)
+                except (json.JSONDecodeError, TypeError):
+                    stats["errors"].append(
+                        {
+                            "schema": tgt,
+                            "ao_id": str(row.get("ao_id")),
+                            "error": "source json parse failed",
+                        }
+                    )
+                    continue
+            if not isinstance(j_s, dict):
+                continue
+
+            for list_key in ("files", "low_res_files"):
+                t_list = j_t.get(list_key)
+                if not isinstance(t_list, list):
+                    continue
+                s_list = j_s.get(list_key)
+                if not isinstance(s_list, list):
+                    s_list = []
+                for i, target_url in enumerate(t_list):
+                    if not isinstance(target_url, str):
+                        continue
+                    s3_key = _s3_object_key_from_bucket_url(target_url, new_bucket)
+                    if not s3_key:
+                        continue
+                    old_url = s_list[i] if i < len(s_list) else None
+                    if not isinstance(old_url, str) or not old_url.strip():
+                        stats["errors"].append(
+                            {
+                                "schema": tgt,
+                                "ao_id": str(row.get("ao_id")),
+                                "bd_date": str(row.get("bd_date")),
+                                "list_key": list_key,
+                                "index": i,
+                                "error": "missing source URL at index",
+                            }
+                        )
+                        continue
+                    new_url = f"https://{new_bucket}.s3.amazonaws.com/{s3_key}"
+                    try:
+                        if s3_key not in uploaded_keys:
+                            LOG.debug("Source-fallback GET %s -> key %s", old_url, s3_key)
+                            r = requests.get(old_url, timeout=120)
+                            r.raise_for_status()
+                            ct = r.headers.get("Content-Type", "application/octet-stream")
+                            s3.put_object(Bucket=new_bucket, Key=s3_key, Body=r.content, ContentType=ct)
+                            uploaded_keys.add(s3_key)
+                            stats["downloaded"] += 1
+                            if stats["downloaded"] % 25 == 0:
+                                LOG.info(
+                                    "Source-fallback progress: uploaded=%s to s3://%s",
+                                    stats["downloaded"],
+                                    new_bucket,
+                                )
+                        stats["url_mappings"].append(
+                            {
+                                "old_url": old_url,
+                                "new_url": new_url,
+                                "s3_key": s3_key,
+                                "schema": tgt,
+                                "ao_id": str(row.get("ao_id", "")),
+                                "bd_date": str(row.get("bd_date", "")),
+                            }
+                        )
+                    except Exception as e:
+                        stats["errors"].append({"old_url": old_url, "s3_key": s3_key, "error": str(e)})
+                        LOG.warning("Source-fallback upload failed %s: %s", old_url, e)
+
+    report["s3_image_migration"] = stats
+    LOG.info(
+        "S3 source-fallback done: uploaded=%s skipped_rows=%s errors=%s",
+        stats["downloaded"],
+        stats["skipped_rows"],
+        len(stats["errors"]),
+    )
+
+
+def receipt_fallback_reupload(receipt_path: Path, report: dict[str, Any]) -> None:
+    """Re-upload using old_url -> s3_key from a prior migrate_images receipt JSON."""
+    new_bucket = (os.environ.get("IMAGE_S3_BUCKET") or "").strip()
+    if not new_bucket:
+        LOG.error("Set IMAGE_S3_BUCKET for receipt-fallback")
+        return
+
+    try:
+        import boto3
+        import requests
+    except ImportError:
+        LOG.warning("boto3/requests not installed; skipping receipt-fallback")
+        return
+
+    data = json.loads(receipt_path.read_text(encoding="utf-8"))
+    mig = data.get("s3_image_migration") or {}
+    mappings = mig.get("url_mappings") or []
+    if not mappings:
+        LOG.error(
+            "No url_mappings in %s — need a receipt from a run after url mapping was added, or use --source-fallback",
+            receipt_path,
+        )
+        report["s3_image_migration"] = {
+            "downloaded": 0,
+            "errors": [{"error": "empty url_mappings"}],
+            "url_mappings": [],
+        }
+        return
+
+    s3 = boto3.client("s3")
+    stats: dict[str, Any] = {"downloaded": 0, "errors": [], "url_mappings": []}
+    uploaded_keys: set[str] = set()
+
+    for m in mappings:
+        old_url = m.get("old_url")
+        s3_key = m.get("s3_key")
+        if not old_url or not s3_key:
+            stats["errors"].append({"mapping": m, "error": "missing old_url or s3_key"})
+            continue
+        new_url = f"https://{new_bucket}.s3.amazonaws.com/{s3_key}"
+        try:
+            if s3_key not in uploaded_keys:
+                r = requests.get(old_url, timeout=120)
+                r.raise_for_status()
+                ct = r.headers.get("Content-Type", "application/octet-stream")
+                s3.put_object(Bucket=new_bucket, Key=s3_key, Body=r.content, ContentType=ct)
+                uploaded_keys.add(s3_key)
+                stats["downloaded"] += 1
+                if stats["downloaded"] % 25 == 0:
+                    LOG.info("Receipt-fallback: uploaded %s objects", stats["downloaded"])
+            stats["url_mappings"].append(
+                {
+                    "old_url": old_url,
+                    "new_url": new_url,
+                    "s3_key": s3_key,
+                    "schema": m.get("schema", ""),
+                    "ao_id": m.get("ao_id", ""),
+                    "bd_date": m.get("bd_date", ""),
+                }
+            )
+        except Exception as e:
+            stats["errors"].append({"old_url": old_url, "s3_key": s3_key, "error": str(e)})
+            LOG.warning("Receipt-fallback failed %s: %s", old_url, e)
+
+    report["s3_image_migration"] = stats
+    LOG.info(
+        "Receipt-fallback done: uploaded=%s errors=%s",
+        stats["downloaded"],
+        len(stats["errors"]),
+    )
 
 
 def main() -> int:
