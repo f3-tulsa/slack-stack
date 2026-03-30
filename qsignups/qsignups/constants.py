@@ -12,7 +12,9 @@ DEFAULT_EVENT_END = os.environ.get("DEFAULT_EVENT_END", "06:15")
 DEFAULT_EVENT_DURATION_MINUTES = int(os.environ.get("DEFAULT_EVENT_DURATION_MINUTES", "45"))
 
 SLACK_BOT_TOKEN = "SLACK_BOT_TOKEN"
-LOCAL_DEVELOPMENT = os.environ.get(SLACK_BOT_TOKEN, "123") != "123"
+# True only when running outside Lambda (local dev). In Lambda, AWS_LAMBDA_FUNCTION_NAME is always set.
+# Previously this checked SLACK_BOT_TOKEN != "123", which was True in Lambda -- backwards.
+LOCAL_DEVELOPMENT = not os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
 
 SLACK_CLIENT_ID = "ENV_SLACK_CLIENT_ID"
 SLACK_CLIENT_SECRET = "ENV_SLACK_CLIENT_SECRET"

@@ -191,8 +191,8 @@ def strava_exchange_token(event, context) -> dict:
     if not code:
         r = {
             "statusCode": 400,
-            "body": {"error": "No code provided."},
-            "headers": {},
+            "body": json.dumps({"error": "No code provided."}),
+            "headers": {"Content-Type": "application/json"},
         }
         return r
 
@@ -237,8 +237,8 @@ def strava_exchange_token(event, context) -> dict:
     logging.info("Strava OAuth success: stored tokens for team_id=%s user_id=%s", team_id, user_id)
     r = {
         "statusCode": 200,
-        "body": {"message": "Authorization successful! You can return to Slack."},
-        "headers": {},
+        "body": json.dumps({"message": "Authorization successful! You can return to Slack."}),
+        "headers": {"Content-Type": "application/json"},
     }
 
     return r
