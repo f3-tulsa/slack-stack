@@ -143,6 +143,10 @@ Resources:
               - cloudformation:ListStackResources
               - cloudformation:ValidateTemplate
             Resource: "*"
+          # SAM uploads templates/artifacts here. Scoped ONLY to DeploymentBucket below — not
+          # SAM CLI's auto bucket (aws-sam-cli-managed-default-samclisourcebucket-*). Local
+          # deploy.sh and .github/workflows/deploy.yml must pass --s3-bucket to this bucket (or
+          # equivalent); --resolve-s3 without extra IAM causes AccessDenied.
           - Sid: S3DeployBucket
             Effect: Allow
             Action:

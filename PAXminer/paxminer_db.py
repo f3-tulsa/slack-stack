@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import configparser
+import logging
 import os
 import ssl
 from pathlib import Path
@@ -90,6 +91,13 @@ def connect_from_env(database: str):
         )
     port = int(os.environ.get("DATABASE_PORT", os.environ.get("port", "3306")))
     tls = _env_bool("DATABASE_TLS_ENABLED", True)
+    logging.getLogger(__name__).info(
+        "connect_from_env: database=%s host=%s port=%s tls=%s",
+        database,
+        host,
+        port,
+        tls,
+    )
     return connect_mysql(
         host=host,
         port=port,

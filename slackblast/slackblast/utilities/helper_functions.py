@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from datetime import datetime
@@ -19,6 +20,8 @@ from utilities.field_encryption import decrypt_field, encrypt_field
 from utilities.database import DbManager, get_engine, paxminer_schema_name
 from utilities.database.orm import Attendance, Backblast, PaxminerAO, PaxminerRegion, PaxminerUser, Region
 from utilities.slack import actions
+
+_LOG = logging.getLogger(__name__)
 
 REGION_RECORDS: Dict[str, Region] = {}
 
@@ -289,8 +292,12 @@ def get_paxminer_schema(team_id: str, logger) -> str:
                 except Exception:
                     ao_index += 1
 
-        except Exception:
-            logger.debug("No AOs table, skipping...")
+        except Exception as exc:
+            logger.info(
+                "get_paxminer_schema: no AOs or query failed for region schema=%s: %s",
+                getattr(region, "schema_name", None),
+                exc,
+            )
             continue
 
         pm_team_id = safe_get(slack_response, "channel", "shared_team_ids", 0)
@@ -337,7 +344,14 @@ def get_region_record(team_id: str, body, context, client, logger) -> Region:
         try:
             team_info = client.team_info()
             team_name = team_info["team"]["name"]
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "team_info failed for team_id=%s; using domain=%s: %s",
+                team_id,
+                team_domain,
+                exc,
+                exc_info=True,
+            )
             team_name = team_domain
         paxminer_schema = get_paxminer_schema(team_id, logger)
         region_record: Region = DbManager.create_record(
@@ -379,7 +393,7 @@ def get_request_type(body: dict) -> Tuple[str]:
 
 
 def update_local_region_records() -> None:
-    print("Updating local region records...")
+    _LOG.info("Updating local region records...")
     region_records: List[Region] = DbManager.find_records(Region, filters=[True])
     global REGION_RECORDS
     REGION_RECORDS = {region.team_id: region for region in region_records}
@@ -485,6 +499,7 @@ def replace_user_channel_ids(
 
         return updated_text
     except Exception:
+        logger.exception("replace_user_channel_ids failed; returning original text")
         return text
 
 

@@ -8,6 +8,7 @@ on Q's for each AO and sends it to the AO channel in a Slack message.
 from __future__ import annotations
 
 import datetime
+import logging
 import os
 import sys
 from pathlib import Path
@@ -23,6 +24,8 @@ from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 _PAX_ROOT = Path(__file__).resolve().parent.parent
 if str(_PAX_ROOT) not in sys.path:
     sys.path.insert(0, str(_PAX_ROOT))
+
+_LOG = logging.getLogger(__name__)
 
 
 def _q_charter_period():
@@ -131,9 +134,8 @@ def run_q_charter(
                     )
                     total_ao_graphs += 1
                     plt.close()
-                except Exception as e:
-                    print(e)
-                    print("An Error Occurred in Sending")
+                except Exception:
+                    _LOG.exception("Q charter: send failed ao=%s channel_id=%s", ao, channel_id)
                 finally:
                     plt.close("all")
 

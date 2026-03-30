@@ -246,8 +246,8 @@ run_setup_github() {
   gh secret set SB_SLACK_SIGNING_SECRET --env "$STAGE" --body "$SB_SLACK_SIGNING_SECRET" -R "$repo"
   gh secret set SB_SLACK_CLIENT_ID --env "$STAGE" --body "$SB_SLACK_CLIENT_ID" -R "$repo"
   gh secret set SB_SLACK_CLIENT_SECRET --env "$STAGE" --body "$SB_SLACK_CLIENT_SECRET" -R "$repo"
-  gh secret set SB_STRAVA_CLIENT_ID --env "$STAGE" --body "$SB_STRAVA_CLIENT_ID" -R "$repo"
-  gh secret set SB_STRAVA_CLIENT_SECRET --env "$STAGE" --body "$SB_STRAVA_CLIENT_SECRET" -R "$repo"
+  [[ -n "${SB_STRAVA_CLIENT_ID:-}" ]] && gh secret set SB_STRAVA_CLIENT_ID --env "$STAGE" --body "$SB_STRAVA_CLIENT_ID" -R "$repo"
+  [[ -n "${SB_STRAVA_CLIENT_SECRET:-}" ]] && gh secret set SB_STRAVA_CLIENT_SECRET --env "$STAGE" --body "$SB_STRAVA_CLIENT_SECRET" -R "$repo"
   gh secret set QS_SLACK_TOKEN --env "$STAGE" --body "$QS_SLACK_TOKEN" -R "$repo"
   gh secret set QS_SLACK_SIGNING_SECRET --env "$STAGE" --body "$QS_SLACK_SIGNING_SECRET" -R "$repo"
   gh secret set QS_SLACK_CLIENT_ID --env "$STAGE" --body "$QS_SLACK_CLIENT_ID" -R "$repo"
@@ -298,8 +298,7 @@ fi
 : "${SB_SLACK_SIGNING_SECRET:?}"
 : "${SB_SLACK_CLIENT_ID:?}"
 : "${SB_SLACK_CLIENT_SECRET:?}"
-: "${SB_STRAVA_CLIENT_ID:?}"
-: "${SB_STRAVA_CLIENT_SECRET:?}"
+# Strava (slackblast) is optional — omit SB_STRAVA_* to use template defaults (Strava features disabled).
 
 : "${QS_SLACK_TOKEN:?}"
 : "${QS_SLACK_SIGNING_SECRET:?}"
@@ -319,14 +318,33 @@ if [[ "$CONFIRM" == false ]]; then
 fi
 SAM_DEPLOY_EXTRA+=(--no-fail-on-empty-changeset --capabilities CAPABILITY_IAM)
 
-# SAM artifact bucket: bootstrap output this run, or DEPLOYMENT_S3_BUCKET from env, else --resolve-s3
+# SAM artifact bucket (must stay aligned with GitHub Actions "Resolve deployment bucket" step).
+#
+# The bootstrap stack IAM policy (SlackStackDeployPolicy) grants s3:Get/Put/List only on the
+# DeploymentBucket from infra/template.bootstrap.yaml — NOT on SAM CLI's auto-managed bucket
+# (aws-sam-cli-managed-default-samclisourcebucket-*). Using --resolve-s3 without extra IAM
+# causes AccessDenied on sam deploy. Resolution order:
+#   1) DEPLOYMENT_S3_BUCKET from .env (explicit override)
+#   2) _BOOTSTRAP_DEPLOY_BUCKET (set in the same process when ./deploy.sh ran --bootstrap)
+#   3) CloudFormation output DeploymentBucketName from BOOTSTRAP_STACK_NAME (same as CI)
+#   4) Last resort: --resolve-s3 (warn — likely wrong bucket for this role)
 SAM_S3_BUCKET_ARGS=()
 if [[ -n "${DEPLOYMENT_S3_BUCKET:-}" ]]; then
   SAM_S3_BUCKET_ARGS=(--s3-bucket "$DEPLOYMENT_S3_BUCKET")
 elif [[ -n "${_BOOTSTRAP_DEPLOY_BUCKET:-}" ]]; then
   SAM_S3_BUCKET_ARGS=(--s3-bucket "$_BOOTSTRAP_DEPLOY_BUCKET")
 else
-  SAM_S3_BUCKET_ARGS=(--resolve-s3)
+  _resolved_deploy_bucket=""
+  _resolved_deploy_bucket="$(cf_output "$BOOTSTRAP_STACK_NAME" "DeploymentBucketName")"
+  if [[ -n "$_resolved_deploy_bucket" && "$_resolved_deploy_bucket" != "None" ]]; then
+    SAM_S3_BUCKET_ARGS=(--s3-bucket "$_resolved_deploy_bucket")
+    echo "SAM artifact bucket (from stack ${BOOTSTRAP_STACK_NAME}): ${_resolved_deploy_bucket}"
+  else
+    echo "WARN: Could not resolve DeploymentBucketName from stack '${BOOTSTRAP_STACK_NAME}'." >&2
+    echo "      Falling back to --resolve-s3. The deploy IAM role may lack s3:PutObject on SAM's" >&2
+    echo "      default bucket; set DEPLOYMENT_S3_BUCKET in your env file or run --bootstrap." >&2
+    SAM_S3_BUCKET_ARGS=(--resolve-s3)
+  fi
 fi
 
 mkdir -p "$ROOT/receipts"
@@ -459,6 +477,10 @@ deploy_slackblast() {
   local brc="${PIPESTATUS[0]}"
   if [[ "$brc" -ne 0 ]]; then return "$brc"; fi
   [[ "$BUILD_ONLY" == true ]] && return 0
+  # Omit Strava overrides when unset so SAM template defaults apply (optional integration).
+  local strava_overrides=""
+  [[ -n "${SB_STRAVA_CLIENT_ID:-}" ]] && strava_overrides+=" StravaClientID=${SB_STRAVA_CLIENT_ID}"
+  [[ -n "${SB_STRAVA_CLIENT_SECRET:-}" ]] && strava_overrides+=" StravaClientSecret=${SB_STRAVA_CLIENT_SECRET}"
   sam deploy \
     --stack-name "slackblast-${STAGE}" \
     "${SAM_DEPLOY_EXTRA[@]}" \
@@ -477,8 +499,7 @@ deploy_slackblast() {
       "SlackClientSecret=${SB_SLACK_CLIENT_SECRET}" \
       "SlackClientId=${SB_SLACK_CLIENT_ID}" \
       "DbEncryptionKey=${DB_ENCRYPTION_KEY}" \
-      "StravaClientID=${SB_STRAVA_CLIENT_ID}" \
-      "StravaClientSecret=${SB_STRAVA_CLIENT_SECRET}" \
+      ${strava_overrides} \
       "ImageBucketName=${IMAGE_S3_BUCKET}" \
     2>&1 | tee -a "$RECEIPT_FILE"
   return "${PIPESTATUS[0]}"

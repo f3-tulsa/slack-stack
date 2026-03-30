@@ -101,16 +101,15 @@ def run_pax_charter(
     def log_message_sent_error(user_id_tmp, db_name, pax, exc: Exception):
         err = getattr(exc, "response", None)
         if isinstance(err, dict) and "error" in err:
-            print(f"Error initiating conversation: {err['error']}")
+            logging.warning("Error initiating conversation: %s", err["error"])
         else:
-            print(f"Slack error: {exc}")
+            logging.warning("Slack error: %s", exc, exc_info=True)
         log_path = plot_base.parent.parent / "logs" / db_name / "PAXcharter.log"
         if log_to_file:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(f"Error: {user_id_tmp}\n")
-        logging.warning("Slack Error - Message not sent: %s %s", pax, user_id_tmp)
-        print("Slack error on " + pax + " " + user_id_tmp)
+        logging.warning("Slack Error - Message not sent: pax=%s user_id=%s", pax, user_id_tmp)
 
     def success_message_sent(user_id_tmp, pax, db_name):
         if log_to_file:
@@ -181,7 +180,9 @@ def run_pax_charter(
                             except SlackApiError as e:
                                 err = e.response.get("error") if e.response else None
                                 if err == "missing_scope":
-                                    print("Error: The app is missing required scopes. Please add the 'im:write' scope.")
+                                    logging.error(
+                                        "PAX charter: missing_scope — add im:write to Slack app; falling back to v1"
+                                    )
                                     current_method = "v1"
                                 else:
                                     log_message_sent_error(user_id_tmp, schema, pax, e)
@@ -198,10 +199,9 @@ def run_pax_charter(
                                 log_message_sent_error(user_id_tmp, schema, pax, e)
                                 raise e
                     else:
-                        print(pax + " skipped")
-        except Exception as e:
-            print(e)
-            print("An exception occurred for User ID " + str(user_id))
+                        logging.debug("PAX charter skipped (no graphs): %s", pax)
+        except Exception:
+            logging.exception("PAX charter: exception for user_id=%s", user_id)
         finally:
             plt.close("all")
 

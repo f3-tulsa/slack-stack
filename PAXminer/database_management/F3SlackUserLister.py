@@ -128,14 +128,14 @@ def database_slack_user_update(region_db, key, firsttime_run, mydb):
                         logging.info("Record inserted for user: " + user_name_tmp)
                         try:
                             slack.chat_postMessage(channel='paxminer_logs', text=" - New PAX record created for " + user_name_tmp)
-                        except:
-                            pass
+                        except Exception as log_exc:
+                            logging.debug("paxminer_logs notify (insert) failed: %s", log_exc)
                     elif result == 2:
                         logging.info("Record updated for user: " + user_name_tmp)
                         try:
                             slack.chat_postMessage(channel='paxminer_logs', text=" - PAX record updated for " + user_name_tmp)
-                        except:
-                            pass
+                        except Exception as log_exc:
+                            logging.debug("paxminer_logs notify (update) failed: %s", log_exc)
 
         finally:
             pass

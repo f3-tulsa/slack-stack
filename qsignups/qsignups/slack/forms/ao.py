@@ -81,8 +81,7 @@ def add_form(team_id, user_id, client, logger):
             }
         )
     except Exception as e:
-        logger.error(f"Error publishing home tab: {e}")
-        print(e)
+        logger.error("Error publishing home tab: %s", e, exc_info=True)
 
 def edit_form(team_id, user_id, client, logger):
 
@@ -133,8 +132,7 @@ def edit_form(team_id, user_id, client, logger):
             }
         )
     except Exception as e:
-        logger.error(f"Error publishing home tab: {e}")
-        print(e)
+        logger.error("Error publishing home tab: %s", e, exc_info=True)
 
 def delete_form(team_id, user_id, client, logger):
 
@@ -184,8 +182,7 @@ def delete_form(team_id, user_id, client, logger):
             }
         )
     except Exception as e:
-        logger.error(f"Error publishing home tab: {e}")
-        print(e)
+        logger.error("Error publishing home tab: %s", e, exc_info=True)
 
 def pull_aos(team_id):
     aos: list[AO] = DbManager.find_records(AO, [AO.team_id == team_id])

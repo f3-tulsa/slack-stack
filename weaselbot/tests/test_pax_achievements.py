@@ -7,7 +7,6 @@ from sqlalchemy.sql import text
 
 from ..weaselbot.pax_achievements import (
     home_region_sub_query,
-    build_home_regions,
     the_priest,
     the_monk,
     leader_of_men,

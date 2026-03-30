@@ -1,4 +1,7 @@
+import logging
 from dataclasses import dataclass
+
+_LOG = logging.getLogger(__name__)
 def safe_get(data, *keys):
   try:
     result = data
@@ -27,7 +30,7 @@ class User:
 
 def get_user(user_id, client) -> User:
   user_info_dict = client.users_info(user=user_id)
-  print(user_info_dict)
+  _LOG.debug("users_info user_id=%s ok=%s", user_id, user_info_dict.get("ok") if isinstance(user_info_dict, dict) else None)
   user_name = safe_get(user_info_dict, 'user', 'profile', 'display_name') or \
               safe_get(user_info_dict, 'user', 'profile', 'real_name') or None
   if user_name:

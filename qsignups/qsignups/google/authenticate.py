@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 from database import DbManager
@@ -10,6 +11,8 @@ from field_encryption import decrypt_field, encrypt_field
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+
+_LOG = logging.getLogger(__name__)
 
 # If this gets modified, then all authenticated data (pickle data) needs to get flushed
 SCOPES = [
@@ -35,6 +38,7 @@ def _blob_to_credentials(blob) -> Credentials | None:
         try:
             info = json.loads(plain)
         except json.JSONDecodeError:
+            _LOG.info("Google credentials: using legacy/plain JSON blob (decrypt did not yield JSON)")
             info = json.loads(blob)
         return Credentials.from_authorized_user_info(info)
     if isinstance(blob, dict):

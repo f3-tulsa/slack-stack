@@ -99,6 +99,12 @@ Resources:
       DockerContext: ..
       Dockerfile: weaselbot/Dockerfile
 
+  AchievementsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-weaselbot-achievements"
+      RetentionInDays: 30
+
   KotterFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -133,6 +139,12 @@ Resources:
       DockerTag: weaselbot-kotter
       DockerContext: ..
       Dockerfile: weaselbot/Dockerfile
+
+  KotterLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-weaselbot-kotter"
+      RetentionInDays: 30
 
 Outputs:
   AchievementsFunctionArn:

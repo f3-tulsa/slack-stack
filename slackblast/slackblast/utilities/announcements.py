@@ -26,20 +26,35 @@ def send(client: WebClient, body: dict, logger: Logger, context: dict, region_re
             if region.paxminer_schema:
                 send_channel = paxminer_dict.get(region.paxminer_schema)
                 if send_channel:
-                    print(f"Sending message to {region.workspace_name}")
+                    logger.info("Announcement: sending message to %s", region.workspace_name)
                     client = WebClient(token=decrypt_field(region.bot_token))
                     try:
                         client.chat_postMessage(channel=send_channel, text=msg.format(region=region.workspace_name))
-                        print("Message sent!")
+                        logger.info("Announcement: message sent to %s", region.workspace_name)
                     except Exception as e:
-                        if e.response.get("error") == "ratelimited":
-                            print("Rate limited, waiting 10 seconds")
+                        resp = getattr(e, "response", None)
+                        slack_err = resp.get("error") if isinstance(resp, dict) else None
+                        if slack_err == "ratelimited":
+                            logger.info(
+                                "Announcement: rate limited, waiting 10 seconds (region=%s)", region.workspace_name
+                            )
                             time.sleep(10)
                             try:
                                 client.chat_postMessage(
                                     channel=send_channel, text=msg.format(region=region.workspace_name)
                                 )
-                                print("Message sent!")
-                            except Exception as e:
-                                print(f"Error sending message to {region.workspace_name}: {e}")
-                        print(f"Error sending message to {region.workspace_name}: {e}")
+                                logger.info("Announcement: message sent to %s after retry", region.workspace_name)
+                            except Exception as retry_exc:
+                                logger.error(
+                                    "Announcement: error sending to %s after retry: %s",
+                                    region.workspace_name,
+                                    retry_exc,
+                                    exc_info=True,
+                                )
+                        else:
+                            logger.error(
+                                "Announcement: error sending message to %s: %s",
+                                region.workspace_name,
+                                e,
+                                exc_info=True,
+                            )

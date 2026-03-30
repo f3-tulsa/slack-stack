@@ -9,6 +9,7 @@ The graph then is sent to each AO in a Slack message.
 from __future__ import annotations
 
 import datetime
+import logging
 import os
 import sys
 import time
@@ -26,6 +27,8 @@ from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 _PAX_ROOT = Path(__file__).resolve().parent.parent
 if str(_PAX_ROOT) not in sys.path:
     sys.path.insert(0, str(_PAX_ROOT))
+
+_LOG = logging.getLogger(__name__)
 
 
 def _lb_ao_period():
@@ -125,7 +128,7 @@ def run_ao_leaderboard(
                 except SlackApiError as e:
                     if e.response.status_code == 429:
                         delay = int(e.response.headers["Retry-After"])
-                        print(f"Rate limited. Retrying in {delay} seconds")
+                        _LOG.info("AO leaderboard: rate limited, retrying in %s seconds (ao=%s)", delay, ao)
                         time.sleep(delay)
                     else:
                         raise e
@@ -180,7 +183,7 @@ def run_ao_leaderboard(
                 except SlackApiError as e:
                     if e.response.status_code == 429:
                         delay = int(e.response.headers["Retry-After"])
-                        print(f"Rate limited. Retrying in {delay} seconds")
+                        _LOG.info("AO leaderboard YTD: rate limited, retrying in %s seconds (ao=%s)", delay, ao)
                         time.sleep(delay)
                     else:
                         raise e

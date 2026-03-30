@@ -384,7 +384,6 @@ def handle_edit_recurring_event_slot_select(ack, body, client, logger, context):
 def handle_edit_recurring_event(ack, body, client, logger, context):
     ack()
     logger.info(body)
-    print(body)
     user_id = context["user_id"]
     user = get_user(user_id, client)
     team_id = context["team_id"]
@@ -474,7 +473,6 @@ def delete_single_event_button(ack, client, body, context, logger):
 def handle_edit_ao_select(ack, body, client, logger, context):
     ack()
     logger.info(body)
-    print(body)
     user_id = context["user_id"]
     user = get_user(user_id, client)
     team_id = context["team_id"]
@@ -553,7 +551,6 @@ def handle_edit_ao_select(ack, body, client, logger, context):
 def handle_delete_ao_select(ack, body, client, logger, context):
     ack()
     logger.info(body)
-    print(body)
     user_id = context["user_id"]
     team_id = context["team_id"]
 
@@ -653,7 +650,6 @@ def handle_edit_event_ao_select(ack, body, client, logger, context):
 def submit_edit_ao_button(ack, body, client, logger, context):
     ack()
     logger.info(body)
-    print(body)
     user_id = context["user_id"]
     user = get_user(user_id, client)
     team_id = context["team_id"]
@@ -667,7 +663,6 @@ def submit_edit_ao_button(ack, body, client, logger, context):
 def submit_delete_ao_button(ack, body, client, logger, context):
     ack()
     logger.info(body)
-    print(body)
     user_id = context["user_id"]
     team_id = context["team_id"]
     user = get_user(user_id, client)
@@ -698,7 +693,6 @@ def handle_submit_general_settings_button(ack, body, client, logger, context):
 def handle_submit_add_ao_button(ack, body, client, logger, context):
     ack()
     logger.info(body)
-    print(body)
     user_id = context["user_id"]
     user = get_user(user_id, client)
     team_id = context["team_id"]
@@ -866,7 +860,11 @@ def handle_date_select_button_from_message(ack, client, body, logger, context):
         open_count = 0
         block_num = -1
         for counter, block in enumerate(message_blocks):
-            print(f"comparing {safe_get(block, 'accessory', 'value')} and {selected_date}")
+            logger.debug(
+                "comparing accessory value=%s selected_date=%s",
+                safe_get(block, "accessory", "value"),
+                selected_date,
+            )
             if safe_get(block, "accessory", "value") == selected_date:
                 block_num = counter
 
@@ -874,7 +872,7 @@ def handle_date_select_button_from_message(ack, client, body, logger, context):
                 if block["accessory"]["text"]["text"][-5] == "OPEN!":
                     open_count += 1
 
-        print(block_num)
+        logger.debug("assign_event_q message block_num=%s", block_num)
         if block_num >= 0:
             message_blocks[block_num]["text"]["text"] = message_blocks[block_num]["text"]["text"].replace(
                 "OPEN!", user.name

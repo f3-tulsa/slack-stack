@@ -1,9 +1,13 @@
 # Helper methods for common Db access
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 
 from database import DbManager
 from database.orm import Master, AO, Region, SignupFeature, Feature
+
+_LOG = logging.getLogger(__name__)
+
 
 def feature_enabled(team_id, feature: SignupFeature) -> bool:
   region: Region = DbManager.get_record(Region, team_id)
@@ -44,7 +48,7 @@ def find_master_event(team_id, selected_dt, ao_display_name = None, ao_channel_i
 
   ao: AO = find_ao(team_id, ao_channel_id = ao_channel_id, ao_display_name = ao_display_name)
   if not ao:
-    print(f"MASTER_LOOKUP_ERROR: {team_id}/{ao_display_name} could not find an AO")
+    _LOG.warning("MASTER_LOOKUP_ERROR: %s/%s could not find an AO", team_id, ao_display_name)
     return None
 
   selected_date_db = datetime.date(selected_dt).strftime('%Y-%m-%d')
@@ -58,5 +62,11 @@ def find_master_event(team_id, selected_dt, ao_display_name = None, ao_channel_i
   if len(masters) == 1:
     return MasterEventAndAO(ao = ao, event = masters[0])
   else:
-    print(f"MASTER_LOOKUP_ERROR: {ao_display_name}/{selected_date_db}/{selected_time_db} found {len(masters)} Masters")
+    _LOG.warning(
+        "MASTER_LOOKUP_ERROR: %s/%s/%s found %s Masters",
+        ao_display_name,
+        selected_date_db,
+        selected_time_db,
+        len(masters),
+    )
     return None

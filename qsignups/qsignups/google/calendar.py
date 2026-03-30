@@ -1,4 +1,6 @@
+import logging
 from datetime import datetime, timedelta, timezone
+
 import pytz
 
 import constants
@@ -8,6 +10,9 @@ from .authenticate import connect
 from . import GoogleCalendar
 
 from googleapiclient.discovery import build
+
+_LOG = logging.getLogger(__name__)
+
 
 def __to_calendar(j) -> GoogleCalendar:
   return GoogleCalendar(
@@ -77,10 +82,10 @@ def __create_event(svc, user: User, region: Region, event: Master, ao: AO):
     })
 
   if event.google_event_id:
-    print("UPDATING", body)
+    _LOG.info("gcal UPDATING event_id=%s calendar=%s", event.google_event_id, region.google_calendar_id)
     return svc.events().patch(calendarId = region.google_calendar_id, eventId = event.google_event_id, body = body).execute()
   else:
-    print("CREATING", body)
+    _LOG.info("gcal CREATING calendar=%s summary=%s", region.google_calendar_id, body.get("summary"))
     return svc.events().insert(calendarId = region.google_calendar_id, body = body).execute()
 
 def __is_too_far_in_the_future(region: Region, event: Master) -> bool:

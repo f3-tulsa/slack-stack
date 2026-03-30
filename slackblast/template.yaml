@@ -195,6 +195,14 @@ Resources:
           STRAVA_CLIENT_ID: !Ref StravaClientID
           STRAVA_CLIENT_SECRET: !Ref StravaClientSecret
 
+  SlackblastLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub
+        - "/aws/lambda/${FnName}"
+        - FnName: !GetAtt SlackblastFunction.Name
+      RetentionInDays: 30
+
 Outputs:
   SlackblastApi:
     Description: API Gateway endpoint URL for Prod stage for Slackblast function

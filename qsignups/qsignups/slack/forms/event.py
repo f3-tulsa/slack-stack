@@ -73,8 +73,7 @@ def add_single_form(team_id, user_id, client, logger):
             }
         )
     except Exception as e:
-        logger.error(f"Error publishing home tab: {e}")
-        print(e)
+        logger.error("Error publishing home tab: %s", e, exc_info=True)
 
 def add_recurring_form(team_id, user_id, client, logger):
 
@@ -120,8 +119,7 @@ def add_recurring_form(team_id, user_id, client, logger):
             }
         )
     except Exception as e:
-        logger.error(f"Error publishing home tab: {e}")
-        print(e)
+        logger.error("Error publishing home tab: %s", e, exc_info=True)
 
 def edit_single_form(team_id, user_id, client, logger):
 
@@ -151,8 +149,7 @@ def edit_single_form(team_id, user_id, client, logger):
             }
         )
     except Exception as e:
-        logger.error(f"Error publishing home tab: {e}")
-        print(e)
+        logger.error("Error publishing home tab: %s", e, exc_info=True)
 
 def delete_single_form(team_id, user_id, client, logger):
 
@@ -202,8 +199,7 @@ def delete_single_form(team_id, user_id, client, logger):
             }
         )
     except Exception as e:
-        logger.error(f"Error publishing home tab: {e}")
-        print(e)
+        logger.error("Error publishing home tab: %s", e, exc_info=True)
 
 def select_recurring_form_for_edit(team_id, user_id, client, logger, input_data):
 
@@ -255,8 +251,7 @@ def select_recurring_form_for_edit(team_id, user_id, client, logger, input_data)
             }
         )
     except Exception as e:
-        logger.error(f"Error publishing home tab: {e}")
-        print(e)
+        logger.error("Error publishing home tab: %s", e, exc_info=True)
 
 def select_recurring_form_for_delete(team_id, user_id, client, logger, input_data):
     ao_channel_id = inputs.SECTION_SELECTOR.get_selected_value(input_data)
@@ -294,7 +289,7 @@ def select_recurring_form_for_delete(team_id, user_id, client, logger, input_dat
     # Cancel block
     blocks.append(forms.make_action_button_row([inputs.CANCEL_BUTTON]))
 
-    print(blocks)
+    logger.debug("add_recurring_form blocks count=%s", len(blocks))
     # Publish view
     try:
         client.views_publish(
@@ -305,8 +300,7 @@ def select_recurring_form_for_delete(team_id, user_id, client, logger, input_dat
             }
         )
     except Exception as e:
-        logger.error(f"Error publishing home tab: {e}")
-        print(e)
+        logger.error("Error publishing home tab: %s", e, exc_info=True)
 
 def edit_recurring_form(team_id, user_id, client, logger, input_data):
     event_id = int(input_data)
@@ -354,8 +348,7 @@ def edit_recurring_form(team_id, user_id, client, logger, input_data):
             }
         )
     except Exception as e:
-        logger.error(f"Error publishing home tab: {e}")
-        print(e)
+        logger.error("Error publishing home tab: %s", e, exc_info=True)
 
 def make_ao_section_selector(team_id, user_id, client, logger, label, action):
     # list of AOs for dropdown
@@ -381,5 +374,4 @@ def make_ao_section_selector(team_id, user_id, client, logger, label, action):
             }
         )
     except Exception as e:
-        logger.error(f"Error publishing home tab: {e}")
-        print(e)
+        logger.error("Error publishing home tab: %s", e, exc_info=True)

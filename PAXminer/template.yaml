@@ -117,6 +117,12 @@ Resources:
       BuildProperties:
         Manifest: requirements-lambda.txt
 
+  PaxminerSyncLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-paxminer-sync"
+      RetentionInDays: 30
+
   ChartFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -151,6 +157,12 @@ Resources:
       BuildMethod: python3.12
       BuildProperties:
         Manifest: requirements-lambda.txt
+
+  PaxminerChartsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-paxminer-charts"
+      RetentionInDays: 30
 
 Outputs:
   SyncFunctionArn:

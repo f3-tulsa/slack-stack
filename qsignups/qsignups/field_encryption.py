@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import base64
 import functools
+import logging
 import os
 from typing import Optional
 
 from cryptography.fernet import Fernet
 
+_LOG = logging.getLogger(__name__)
 _ENV_KEY = "DB_ENCRYPTION_KEY"
 _PLACEHOLDER_VALUES = frozenset({"", "123"})
 _MIN_KEY_LENGTH = 16
@@ -71,6 +73,7 @@ def decrypt_field(encrypted: Optional[str]) -> Optional[str]:
     key = require_encryption_key()
     raw = encrypted.encode()
     if not raw.startswith(_FERNET_PREFIX):
+        _LOG.warning("decrypt_field: value is not Fernet ciphertext (len=%s)", len(encrypted or ""))
         raise ValueError(
             "decrypt_field: value is not Fernet-encrypted (plaintext tokens are not supported)"
         )

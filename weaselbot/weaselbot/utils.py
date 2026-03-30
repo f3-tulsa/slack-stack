@@ -96,7 +96,7 @@ def mysql_connection() -> Engine:
     connect_args = {}
     if _database_tls_enabled():
         connect_args["ssl"] = ssl.create_default_context()
-    return create_engine(
+    eng = create_engine(
         db_url,
         poolclass=pool.QueuePool,
         pool_size=1,
@@ -105,6 +105,13 @@ def mysql_connection() -> Engine:
         pool_recycle=3600,
         connect_args=connect_args,
     )
+    logging.info(
+        "mysql_connection: engine created host=%s port=%s tls=%s",
+        host,
+        port,
+        _database_tls_enabled(),
+    )
+    return eng
 
 
 def slack_client(token: str) -> WebClient:

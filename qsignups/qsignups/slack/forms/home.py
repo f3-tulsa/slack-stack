@@ -1,3 +1,4 @@
+import logging
 from datetime import timedelta, date, datetime
 
 import constants
@@ -72,7 +73,7 @@ def refresh(client, user: User, logger, top_message, team_id, context):
                 q_name = event.q_pax_name
             sMsg += f"\n{event.ao_display_name} - {event.event_type} @ {event.event_time} - {q_name}"
 
-        print(sMsg)
+        logging.getLogger(__name__).debug("home upcoming schedule preview: %s", sMsg[:2000])
 
     except Exception as e:
         logger.error("Error pulling user db info: %s", e, exc_info=True)

@@ -1,3 +1,4 @@
+import logging
 import os
 import ssl
 from contextlib import ContextDecorator
@@ -28,6 +29,8 @@ DATABASE_TLS_ENABLED = "DATABASE_TLS_ENABLED"
 GLOBAL_ENGINE = None
 GLOBAL_SESSION = None
 
+_LOG = logging.getLogger(__name__)
+
 
 def _database_tls_enabled() -> bool:
     v = os.environ.get(DATABASE_TLS_ENABLED, "").strip().lower()
@@ -53,6 +56,7 @@ def get_engine(echo=False) -> Engine:
         connect_args = {}
         if _database_tls_enabled():
             connect_args["ssl"] = ssl.create_default_context()
+        _LOG.info("Creating SQLAlchemy engine host=%s port=%s database=%s", host, port, database)
         GLOBAL_ENGINE = create_engine(
             db_url,
             echo=echo,

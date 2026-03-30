@@ -53,5 +53,4 @@ def general_form(team_id, user_id, client, logger):
             }
         )
     except Exception as e:
-        logger.error(f"Error publishing home tab: {e}")
-        print(e)
+        logger.error("Error publishing home tab: %s", e, exc_info=True)

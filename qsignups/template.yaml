@@ -196,6 +196,14 @@ Resources:
           # STRAVA_CLIENT_ID: !Ref StravaClientID
           # STRAVA_CLIENT_SECRET: !Ref StravaClientSecret
 
+  QSignupsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub
+        - "/aws/lambda/${FnName}"
+        - FnName: !GetAtt QSignupsFunction.Name
+      RetentionInDays: 30
+
 Outputs:
   # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
   # Find out more about other implicit resources you can reference within SAM

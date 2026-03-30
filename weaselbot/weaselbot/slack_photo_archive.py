@@ -1,9 +1,12 @@
 import hashlib
 import io
+import logging
 import os
 import pickle
 import ssl
 from datetime import datetime
+
+_LOG = logging.getLogger(__name__)
 
 import cv2
 import numpy as np
@@ -69,13 +72,13 @@ def create_drive_service():
         service = build("drive", "v3", credentials=creds)
         return service
     except HttpError as error:
-        print(f"An error occurred: {error}")
+        _LOG.error("Drive service error: %s", error, exc_info=True)
         return None
 
 
 # Photos service
 def create_photos_service(client_secret_file, api_name, api_version, *scopes):
-    print(client_secret_file, api_name, api_version, scopes, sep="-")
+    _LOG.debug("create_photos_service: %s %s %s", client_secret_file, api_name, api_version)
     CLIENT_SECRET_FILE = client_secret_file
     API_SERVICE_NAME = api_name
     API_VERSION = api_version
@@ -102,10 +105,10 @@ def create_photos_service(client_secret_file, api_name, api_version, *scopes):
 
     try:
         service = build(API_SERVICE_NAME, API_VERSION, credentials=cred, static_discovery=False)
-        print(API_SERVICE_NAME, "service created successfully")
+        _LOG.info("%s service created successfully", API_SERVICE_NAME)
         return service
     except Exception as e:
-        print(e)
+        _LOG.exception("Photos service build failed: %s", e)
     return None
 
 
@@ -196,7 +199,7 @@ for channel in channels_list:
 # for channel in [channels_list[4]]:
 for channel in channels_list:
     if channel["is_member"] is True:
-        print(f'running {channel["name"]}...')
+        _LOG.info("slack_photo_archive: running channel %s", channel["name"])
         # Create a folder on Drive for this channel
         # try:
         #     file_metadata = {
@@ -274,7 +277,7 @@ for channel in channels_list:
 
             # Pull file data
             for _index, file in selected_messages.iterrows():
-                print(f"processing {file['file_id']}")
+                _LOG.debug("processing file_id=%s", file["file_id"])
                 try:
                     r = requests.get(file["file_url"], headers={"Authorization": f"Bearer {slack_secret}"})
 
@@ -315,7 +318,7 @@ for channel in channels_list:
 
                         # Only upload if faces are detected (still save down locally either way)
                         if len(faces) == 0:
-                            print("no faces detected")
+                            _LOG.debug("no faces detected file_id=%s", file["file_id"])
                             pillow_img.save(
                                 f'cache/not_uploaded/{file["file_id"]}.{filetype}', exif=piexif.dump(exif_dict)
                             )
@@ -330,9 +333,9 @@ for channel in channels_list:
                                 ],
                             )
                     else:
-                        print("duplicate detected, skipping")
+                        _LOG.debug("duplicate detected, skipping file_id=%s", file["file_id"])
                 except Exception as e:
-                    print(f"hit issue - Error: {e}")
+                    _LOG.exception("hit issue processing file_id=%s: %s", file.get("file_id"), e)
                 # # Upload to Drive
                 # try:
                 #     file_metadata = {

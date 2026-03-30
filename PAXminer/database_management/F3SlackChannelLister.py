@@ -42,14 +42,14 @@ def database_slack_channel_update(region_db, key, mydb):
                     logging.info(channel_name_tmp +  "record inserted.")
                     try:
                         slack.chat_postMessage(channel='paxminer_logs', text=" - Slack channel created for " + channel_name_tmp)
-                    except:
-                        pass
+                    except Exception as log_exc:
+                        logging.debug("paxminer_logs notify (channel insert) failed: %s", log_exc)
                 elif cursor.rowcount == 2:
                     logging.info(channel_name_tmp + " record updated.")
                     try:
                         slack.chat_postMessage(channel='paxminer_logs', text=" - Slack channel updated for " + channel_name_tmp)
-                    except:
-                        pass
+                    except Exception as log_exc:
+                        logging.debug("paxminer_logs notify (channel update) failed: %s", log_exc)
         with mydb.cursor() as cursor3:
             sql3 = "UPDATE aos SET backblast = 0 where backblast IS NULL"
             cursor3.execute(sql3)

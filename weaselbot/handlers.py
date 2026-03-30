@@ -8,9 +8,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import traceback
 
-import os
+# Configure root logging before cold-start bootstrap (token_bootstrap uses LOG.info).
+logging.basicConfig(
+    format="%(asctime)s [%(levelname)s]:%(message)s",
+    level=logging.INFO,
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 from common.encryption import require_encryption_key
 
@@ -39,9 +45,6 @@ _try_bootstrap_weaselbot_slack_token()
 
 
 def achievements_handler(event, context):
-    logging.basicConfig(
-        format="%(asctime)s [%(levelname)s]:%(message)s", level=logging.INFO, datefmt="%Y-%m-%d %H:%M:%S"
-    )
     try:
         from weaselbot.pax_achievements import main
 
@@ -56,9 +59,6 @@ def achievements_handler(event, context):
 
 
 def kotter_handler(event, context):
-    logging.basicConfig(
-        format="%(asctime)s [%(levelname)s]:%(message)s", level=logging.INFO, datefmt="%Y-%m-%d %H:%M:%S"
-    )
     try:
         from weaselbot.kotter_report import main
 

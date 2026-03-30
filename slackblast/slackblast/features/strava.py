@@ -1,5 +1,6 @@
 import copy
 import json
+import logging
 import os
 from datetime import datetime
 from logging import Logger
@@ -182,8 +183,11 @@ def build_strava_modify_form(body: dict, client: WebClient, logger: Logger, cont
 
 def strava_exchange_token(event, context) -> dict:
     """Exchanges a Strava auth code for an access token."""
-    team_id, user_id = event.get("queryStringParameters", {}).get("state").split("-")
-    code = event.get("queryStringParameters", {}).get("code")
+    qsp = event.get("queryStringParameters") or {}
+    state = qsp.get("state") or ""
+    team_id, user_id = state.split("-", 1) if "-" in state else ("", "")
+    code = qsp.get("code")
+    logging.info("Strava OAuth callback: team_id=%s user_id=%s has_code=%s", team_id, user_id, bool(code))
     if not code:
         r = {
             "statusCode": 400,
@@ -230,6 +234,7 @@ def strava_exchange_token(event, context) -> dict:
             )
         )
 
+    logging.info("Strava OAuth success: stored tokens for team_id=%s user_id=%s", team_id, user_id)
     r = {
         "statusCode": 200,
         "body": {"message": "Authorization successful! You can return to Slack."},

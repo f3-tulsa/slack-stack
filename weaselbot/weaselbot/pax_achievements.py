@@ -450,10 +450,18 @@ def load_to_database(schema: str, engine: Engine, metadata: MetaData, data_to_lo
 
     try:
         aa = Table("achievements_awarded", metadata, autoload_with=engine, schema=schema)
+        table_name = "achievements_awarded"
     except NoSuchTableError:
         aa = Table("achievement_awarded", metadata, autoload_with=engine, schema=schema)
+        table_name = "achievement_awarded"
 
     load_records = data_to_load.to_dicts()
+    logging.info(
+        "load_to_database: schema=%s table=%s rows=%s",
+        schema,
+        table_name,
+        len(load_records),
+    )
     sql = insert(aa).values(load_records)
     with engine.begin() as cnxn:
         cnxn.execute(sql)

@@ -34,6 +34,10 @@ def build_achievement_form(body: dict, client: WebClient, logger: Logger, contex
         try:
             achievement_list = DbManager.find_records(schema=paxminer_schema, cls=AchievementsList, filters=[True])
         except ProgrammingError:
+            logger.exception(
+                "Weaselbot achievement list unavailable (schema=%s); showing setup error to user",
+                paxminer_schema,
+            )
             error_form = copy.deepcopy(forms.ERROR_FORM)
             error_msg = constants.ERROR_FORM_MESSAGE_TEMPLATE.format(
                 error="It looks like Weaselbot has not been set up for this region. Please contact your workspace admin."
@@ -140,6 +144,11 @@ def build_config_form(body: dict, client: WebClient, logger: Logger, context: di
             schema=region_record.paxminer_schema,
         )
     except ProgrammingError:
+        logger.warning(
+            "Weaselbot config: achievements_list query failed for schema=%s",
+            region_record.paxminer_schema,
+            exc_info=True,
+        )
         weaselbot_achievements = None
 
     if not weaselbot_achievements:

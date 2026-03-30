@@ -33,6 +33,9 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      # Must match deploy.sh SAM artifact bucket resolution: only this bootstrap bucket is allowed
+      # by SlackStackDeployPolicy (S3DeployBucket). Do not switch to --resolve-s3 here without
+      # widening IAM — SAM's default aws-sam-cli-managed-default-samclisourcebucket-* is not covered.
       - name: Resolve deployment bucket
         run: |
           BUCKET=$(aws cloudformation describe-stacks \
@@ -124,29 +127,35 @@ jobs:
       - name: Build slackblast
         run: sam build -t slackblast/template.yaml
       - name: Deploy slackblast
+        env:
+          SB_STRAVA_CLIENT_ID: ${{ secrets.SB_STRAVA_CLIENT_ID }}
+          SB_STRAVA_CLIENT_SECRET: ${{ secrets.SB_STRAVA_CLIENT_SECRET }}
         run: |
+          set -euo pipefail
+          OVERRIDES=(
+            "Stage=${{ vars.STAGE }}"
+            "DatabaseHost=${{ secrets.DATABASE_HOST }}"
+            "DatabasePort=${{ secrets.DATABASE_PORT }}"
+            "DatabaseUser=${{ secrets.DATABASE_USER }}"
+            "DatabasePassword=${{ secrets.DATABASE_PASSWORD }}"
+            "DatabaseTlsEnabled=${{ vars.DATABASE_TLS_ENABLED }}"
+            "DatabaseSchema=${{ vars.SLACKBLAST_SCHEMA }}_${{ vars.STAGE }}"
+            "PaxminerSchema=${{ vars.PAXMINER_SCHEMA }}_${{ vars.STAGE }}"
+            "SlackToken=${{ secrets.SB_SLACK_TOKEN }}"
+            "SlackSigningSecret=${{ secrets.SB_SLACK_SIGNING_SECRET }}"
+            "SlackClientSecret=${{ secrets.SB_SLACK_CLIENT_SECRET }}"
+            "SlackClientId=${{ secrets.SB_SLACK_CLIENT_ID }}"
+            "DbEncryptionKey=${{ secrets.DB_ENCRYPTION_KEY }}"
+            "ImageBucketName=${{ vars.IMAGE_S3_BUCKET }}"
+          )
+          [[ -n "${SB_STRAVA_CLIENT_ID:-}" ]] && OVERRIDES+=("StravaClientID=${SB_STRAVA_CLIENT_ID}")
+          [[ -n "${SB_STRAVA_CLIENT_SECRET:-}" ]] && OVERRIDES+=("StravaClientSecret=${SB_STRAVA_CLIENT_SECRET}")
           sam deploy \
             --stack-name slackblast-${{ vars.STAGE }} \
             --no-confirm-changeset --no-fail-on-empty-changeset \
             --s3-bucket ${{ env.SAM_S3_BUCKET }} \
             --capabilities CAPABILITY_IAM \
-            --parameter-overrides \
-              Stage=${{ vars.STAGE }} \
-              DatabaseHost=${{ secrets.DATABASE_HOST }} \
-              DatabasePort=${{ secrets.DATABASE_PORT }} \
-              DatabaseUser=${{ secrets.DATABASE_USER }} \
-              DatabasePassword=${{ secrets.DATABASE_PASSWORD }} \
-              DatabaseTlsEnabled=${{ vars.DATABASE_TLS_ENABLED }} \
-              DatabaseSchema=${{ vars.SLACKBLAST_SCHEMA }}_${{ vars.STAGE }} \
-              PaxminerSchema=${{ vars.PAXMINER_SCHEMA }}_${{ vars.STAGE }} \
-              SlackToken=${{ secrets.SB_SLACK_TOKEN }} \
-              SlackSigningSecret=${{ secrets.SB_SLACK_SIGNING_SECRET }} \
-              SlackClientSecret=${{ secrets.SB_SLACK_CLIENT_SECRET }} \
-              SlackClientId=${{ secrets.SB_SLACK_CLIENT_ID }} \
-              DbEncryptionKey=${{ secrets.DB_ENCRYPTION_KEY }} \
-              StravaClientID=${{ secrets.SB_STRAVA_CLIENT_ID }} \
-              StravaClientSecret=${{ secrets.SB_STRAVA_CLIENT_SECRET }} \
-              ImageBucketName=${{ vars.IMAGE_S3_BUCKET }}
+            --parameter-overrides "${OVERRIDES[@]}"
 
       # --- qsignups ---
       - name: Build qsignups

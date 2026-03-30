@@ -36,6 +36,7 @@ Usage:
     This module is intended to be executed as a script to set up the achievements tables and initial data in the database.
 """
 
+import logging
 import os
 
 from sqlalchemy import Column, ForeignKey, MetaData, Table, func, select, text
@@ -196,7 +197,9 @@ with engine.begin() as cnxn:
     try:
         cnxn.execute(text(f"ALTER TABLE `{schema}`.aos ADD site_q_user_id VARCHAR(45) NULL;"))
     except ProgrammingError as e:
-        print(e)
+        logging.getLogger(__name__).warning(
+            "ALTER TABLE aos ADD site_q_user_id skipped or failed (expected if column exists): %s", e
+        )
 
 
 u = Table("users", metadata, autoload_with=engine, schema=schema)

@@ -23,6 +23,9 @@ import sys
 import traceback
 from pathlib import Path
 
+# Configure root logging before cold-start bootstrap (token_bootstrap uses LOG.info).
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
 _ROOT = Path(__file__).resolve().parent
 _CHART_DIR = Path(_ROOT, "monthly_charts")
 
@@ -86,7 +89,6 @@ def _load_charter_module(module_file_stem: str):
 
 def sync_handler(event, context):
     """Daily user + channel sync for all active regions (Slackblast / TiDB env names)."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     os.environ.setdefault("host", os.environ.get("DATABASE_HOST", ""))
     os.environ.setdefault("user", os.environ.get("DATABASE_USER", ""))
     os.environ.setdefault("password", os.environ.get("DATABASE_PASSWORD", ""))
@@ -105,7 +107,6 @@ def sync_handler(event, context):
 
 def chart_handler(event, context):
     """Monthly charts: PAX, Q, region leaderboard, AO leaderboard per `regions` flags."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     from paxminer_db import connect_from_env
 
     pm = _pm_schema()

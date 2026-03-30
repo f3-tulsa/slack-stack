@@ -295,8 +295,12 @@ def send_weaselbot_report(
                 client.conversations_join(channel=default_siteq)
                 client.chat_postMessage(channel=default_siteq, text=sMessage, link_names=True)
                 logging.info("Sent kotter report after join (%d chars)", len(sMessage))
-            except Exception as e:
-                logging.error("hit exception joining channel")
+            except Exception:
+                logging.exception(
+                    "kotter: exception after conversations_join default_siteq=%s schema=%s",
+                    default_siteq,
+                    schema,
+                )
         elif e.response.get("error") == "channel_not_found":
             logging.error(f"The channel or user {default_siteq} doesn't exist for {schema}.")
         else:

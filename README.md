@@ -59,7 +59,7 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 | Variable | Description |
 |----------|-------------|
 | `AWS_ROLE_ARN` | OIDC deploy role ARN for `--setup-github` if not reading from the bootstrap stack outputs |
-| `DEPLOYMENT_S3_BUCKET` | SAM deploy artifact bucket (bootstrap output `DeploymentBucketName`). If unset and you did not pass `--bootstrap` in the same run, `sam deploy` uses `--resolve-s3`. |
+| `DEPLOYMENT_S3_BUCKET` | SAM deploy artifact bucket override (bootstrap output `DeploymentBucketName`). If unset, `deploy.sh` reads `DeploymentBucketName` from the bootstrap stack (same as GitHub Actions). Falls back to `--resolve-s3` only as a last resort — the OIDC deploy role may lack `s3:PutObject` on SAM’s default bucket. |
 
 ### PAXminer / Weaselbot and Slack
 
@@ -75,7 +75,12 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 | `SB_SLACK_SIGNING_SECRET` | Slack signing secret |
 | `SB_SLACK_CLIENT_ID` | Slack OAuth **Client ID** (App credentials on [api.slack.com](https://api.slack.com/apps); must match the app that owns `SB_SLACK_TOKEN`) |
 | `SB_SLACK_CLIENT_SECRET` | Slack OAuth client secret |
-| `SB_STRAVA_CLIENT_ID` | Strava API client ID |
+
+### Optional (slackblast)
+
+| Variable | Description |
+|----------|-------------|
+| `SB_STRAVA_CLIENT_ID` | Strava API client ID (omit to disable Strava in slackblast; SAM uses template defaults) |
 | `SB_STRAVA_CLIENT_SECRET` | Strava API client secret |
 
 ### Required (qsignups)
@@ -86,7 +91,12 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 | `QS_SLACK_SIGNING_SECRET` | Slack signing secret |
 | `QS_SLACK_CLIENT_ID` | Slack OAuth **Client ID** for the qsignups Slack app (must match `QS_SLACK_TOKEN`) |
 | `QS_SLACK_CLIENT_SECRET` | Slack OAuth client secret |
-| `QS_GOOGLE_CLIENT_ID` | Google Calendar API client ID |
+
+### Optional (qsignups)
+
+| Variable | Description |
+|----------|-------------|
+| `QS_GOOGLE_CLIENT_ID` | Google Calendar API client ID (omit if Google Calendar integration is not used) |
 | `QS_GOOGLE_CLIENT_SECRET` | Google Calendar API client secret |
 
 ## Slack OAuth (database)
@@ -205,14 +215,14 @@ Create environments **`test`** and **`prod`** in your repo settings (or run `./d
 | `SB_SLACK_SIGNING_SECRET` | slackblast |
 | `SB_SLACK_CLIENT_ID` | slackblast |
 | `SB_SLACK_CLIENT_SECRET` | slackblast |
-| `SB_STRAVA_CLIENT_ID` | slackblast |
-| `SB_STRAVA_CLIENT_SECRET` | slackblast |
+| `SB_STRAVA_CLIENT_ID` | slackblast (optional — Strava) |
+| `SB_STRAVA_CLIENT_SECRET` | slackblast (optional — Strava) |
 | `QS_SLACK_TOKEN` | qsignups |
 | `QS_SLACK_SIGNING_SECRET` | qsignups |
 | `QS_SLACK_CLIENT_ID` | qsignups |
 | `QS_SLACK_CLIENT_SECRET` | qsignups |
-| `QS_GOOGLE_CLIENT_ID` | qsignups |
-| `QS_GOOGLE_CLIENT_SECRET` | qsignups |
+| `QS_GOOGLE_CLIENT_ID` | qsignups (optional — Google Calendar) |
+| `QS_GOOGLE_CLIENT_SECRET` | qsignups (optional — Google Calendar) |
 
 **Variables:**
 

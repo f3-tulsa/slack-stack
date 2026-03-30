@@ -208,7 +208,7 @@ def handle_custom_field_add(body: dict, client: WebClient, logger: Logger, conte
     DbManager.update_record(cls=Region, id=region_record.team_id, fields={Region.custom_fields: custom_fields})
     update_local_region_records()
 
-    print(
+    logger.info(
         json.dumps(
             {
                 "event_type": "successful_custom_field_add_edit",

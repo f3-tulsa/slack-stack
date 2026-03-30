@@ -1,6 +1,7 @@
 # import json
 import json
 import logging
+import os
 import re
 from typing import Callable, Tuple
 
@@ -24,12 +25,14 @@ from utilities.field_encryption import require_encryption_key
 
 require_encryption_key()
 
-# SlackRequestHandler.clear_all_log_handlers()
+# Avoid duplicate CloudWatch lines: Lambda already attaches a root handler; Bolt can add more.
+SlackRequestHandler.clear_all_log_handlers()
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-if LOCAL_DEVELOPMENT:
-    handler = logging.StreamHandler()
-    logger.addHandler(handler)
+# Local / non-Lambda runs need an explicit handler; Lambda must not get a second StreamHandler.
+if not os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+    _stream_handler = logging.StreamHandler()
+    logger.addHandler(_stream_handler)
 
 app = App(
     process_before_response=not LOCAL_DEVELOPMENT,
