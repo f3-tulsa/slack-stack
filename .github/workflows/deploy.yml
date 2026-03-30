@@ -33,6 +33,19 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      - name: Resolve deployment bucket
+        run: |
+          BUCKET=$(aws cloudformation describe-stacks \
+            --stack-name slack-stack-bootstrap \
+            --query "Stacks[0].Outputs[?OutputKey=='DeploymentBucketName'].OutputValue | [0]" \
+            --output text)
+          if [[ -z "$BUCKET" || "$BUCKET" == "None" ]]; then
+            echo "::error::Could not resolve DeploymentBucketName from slack-stack-bootstrap stack"
+            exit 1
+          fi
+          echo "SAM_S3_BUCKET=$BUCKET" >> "$GITHUB_ENV"
+          echo "Using deployment bucket: $BUCKET"
+
       - name: Validate DB_ENCRYPTION_KEY
         env:
           KEY: ${{ secrets.DB_ENCRYPTION_KEY }}
@@ -54,7 +67,7 @@ jobs:
           sam deploy \
             --stack-name paxminer-${{ vars.STAGE }} \
             --no-confirm-changeset --no-fail-on-empty-changeset \
-            --resolve-s3 \
+            --s3-bucket ${{ env.SAM_S3_BUCKET }} \
             --capabilities CAPABILITY_IAM \
             --parameter-overrides \
               DatabaseHost=${{ secrets.DATABASE_HOST }} \
@@ -77,6 +90,7 @@ jobs:
             --stack-name weaselbot-${{ vars.STAGE }} \
             --no-confirm-changeset --no-fail-on-empty-changeset \
             --resolve-image-repos \
+            --s3-bucket ${{ env.SAM_S3_BUCKET }} \
             --capabilities CAPABILITY_IAM \
             --parameter-overrides \
               DatabaseHost=${{ secrets.DATABASE_HOST }} \
@@ -100,7 +114,7 @@ jobs:
           sam deploy \
             --stack-name slackblast-${{ vars.STAGE }} \
             --no-confirm-changeset --no-fail-on-empty-changeset \
-            --resolve-s3 \
+            --s3-bucket ${{ env.SAM_S3_BUCKET }} \
             --capabilities CAPABILITY_IAM \
             --parameter-overrides \
               Stage=${{ vars.STAGE }} \
@@ -146,7 +160,7 @@ jobs:
           sam deploy \
             --stack-name qsignups-${{ vars.STAGE }} \
             --no-confirm-changeset --no-fail-on-empty-changeset \
-            --resolve-s3 \
+            --s3-bucket ${{ env.SAM_S3_BUCKET }} \
             --capabilities CAPABILITY_IAM \
             --parameter-overrides "${OVERRIDES[@]}"
 
