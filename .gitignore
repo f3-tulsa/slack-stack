@@ -1,0 +1,84 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# Env and secrets
+.env
+.env.*
+!.env.example
+!.env.migration.example
+.env-prod
+.env.test
+.env.prod
+env.json
+aws-env.sh
+credentials.ini
+credentials.json
+token.pickle
+client_secret*.json
+secrets/
+.env.migration
+*.pem
+*.key
+samconfig.toml
+node_modules/
+
+# AWS / SAM
+.aws-sam/
+.aws/
+
+# IDE / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# App artifacts
+data/*.csv
+cache/
+plots/
+logs/
+
+# Testing / caches
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# SQLite (local dev)
+*.sqlite3
+db.sqlite3
+
+# Migration run artifacts (hosts, SQL error text — do not commit)
+migration/migration_report.json
+migration/migration_checkpoint.json
+migration/receipts/
+
+# Deploy receipts and generated Slack manifests (contain API URLs)
+receipts/
+**/manifest-*.json

@@ -1,0 +1,7 @@
+# Lambda deployment for sync + monthly charts (no scraping / dateparser)
+cryptography>=42.0.0
+PyMySQL>=1.1.1
+slack-sdk>=3.27.0
+pandas>=2.1.0
+numpy>=1.26.0
+matplotlib>=3.8.0

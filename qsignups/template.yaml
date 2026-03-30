@@ -1,0 +1,210 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: qsignups-build-template
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 10
+    MemorySize: 128
+    Tracing: Active
+  Api:
+    TracingEnabled: true
+
+Parameters:
+  SlackToken:
+    Description: Slack token that is passed by the bot
+    Type: String
+    Default: "123"
+    NoEcho: true
+  SlackSigningSecret:
+    Description: Auth token used to pass to the controller to get the commands
+    Type: String
+    Default: "123"
+    NoEcho: true
+  SlackClientSecret:
+    Description: Auth token used to pass to the controller to get the commands
+    Type: String
+    Default: "123"
+    NoEcho: true
+  SlackOauthScopes:
+    Description: Auth token used to pass to the controller to get the commands
+    Type: String
+    Default: "app_mentions:read,channels:history,channels:join,channels:read,chat:write,chat:write.customize,chat:write.public,commands,files:read,files:write,im:history,im:read,im:write,reactions:read,reactions:write,team:read,users:read,users:read.email"
+  Stage:
+    Description: Parameter for getting the deployment stage
+    Type: String
+    Default: test
+  DatabaseHost:
+    Description: RDS Database Host
+    Type: String
+    Default: "123"
+  DatabaseUser:
+    Description: RDS Database User
+    Type: String
+    Default: ""
+  DatabasePassword:
+    Description: RDS Database Password
+    Type: String
+    Default: "123"
+    NoEcho: true
+  DatabaseSchema:
+    Description: RDS / TiDB database (schema) name
+    Type: String
+    Default: "qsignups"
+  DatabasePort:
+    Description: MySQL / TiDB port (3306 MySQL, 4000 TiDB)
+    Type: String
+    Default: "3306"
+  DatabaseTlsEnabled:
+    Description: Enable TLS for DB connections (true for TiDB Cloud)
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+  DbEncryptionKey:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: Passphrase for DB field encryption (bot_token, google_auth_data)
+  GoogleClientId:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: Google OAuth client ID for Calendar
+  GoogleClientSecret:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: Google OAuth client secret
+  Timezone:
+    Type: String
+    Default: "US/Central"
+  ScheduleCreateLengthDays:
+    Type: String
+    Default: "365"
+  GcalLookaheadDays:
+    Type: String
+    Default: "30"
+  GcalReminderMinutes:
+    Type: String
+    Default: "1440"
+  EventPickerWeeks:
+    Type: String
+    Default: "12"
+  UpcomingDays:
+    Type: String
+    Default: "7"
+  DefaultEventStart:
+    Type: String
+    Default: "05:30"
+  DefaultEventEnd:
+    Type: String
+    Default: "06:15"
+  DefaultEventDurationMinutes:
+    Type: String
+    Default: "45"
+  # PasswordEncryptKey:
+  #   Description: Hash encrypt key for decrypting email passwords
+  #   Type: String
+  #   Default: "123"
+  # StravaClientID:
+  #   Description: Strava Client ID
+  #   Type: String
+  #   Default: "123"
+  # StravaClientSecret:
+  #   Description: Strava Client Secret
+  #   Type: String
+  #   Default: "123"
+
+Mappings:
+  StagesMap:
+    test:
+      SlackClientID: "1966318390773.5843549611120"
+      KeepWarmName: "QSignupsKeepWarmTest"
+    prod:
+      SlackClientID: "3135457248691.3137775183364"
+      KeepWarmName: "QSignupsKeepWarmProd"
+
+Resources:
+  QSignupsFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: qsignups/
+      Handler: app.handler
+      Runtime: python3.12
+      Architectures:
+        - x86_64
+      Timeout: 400
+      Events:
+        QSingups:
+          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+          Properties:
+            Path: /slack/events
+            Method: post
+        QSignupsInstall:
+          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+          Properties:
+            Path: /slack/install
+            Method: get
+        QSignupsKeepWarm:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: "rate(5 minutes)"
+            Name: !FindInMap
+              - StagesMap
+              - Ref: Stage
+              - KeepWarmName
+        # StravaExchange:
+        #   Type: Api
+        #   Properties:
+        #     Path: /exchange_token
+        #     Method: get
+      Environment:
+        Variables:
+          SLACK_BOT_TOKEN: !Ref SlackToken
+          SLACK_SIGNING_SECRET: !Ref SlackSigningSecret
+          ENV_SLACK_CLIENT_SECRET: !Ref SlackClientSecret
+          ENV_SLACK_SCOPES: !Ref SlackOauthScopes
+          DATABASE_HOST: !Ref DatabaseHost
+          ADMIN_DATABASE_USER: !Ref DatabaseUser
+          ADMIN_DATABASE_PASSWORD: !Ref DatabasePassword
+          ADMIN_DATABASE_SCHEMA: !Ref DatabaseSchema
+          DATABASE_PORT: !Ref DatabasePort
+          DATABASE_TLS_ENABLED: !Ref DatabaseTlsEnabled
+          DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
+          GOOGLE_CLIENT_ID: !Ref GoogleClientId
+          GOOGLE_CLIENT_SECRET: !Ref GoogleClientSecret
+          TIMEZONE: !Ref Timezone
+          SCHEDULE_CREATE_LENGTH_DAYS: !Ref ScheduleCreateLengthDays
+          GCAL_LOOKAHEAD_DAYS: !Ref GcalLookaheadDays
+          GCAL_REMINDER_MINUTES: !Ref GcalReminderMinutes
+          EVENT_PICKER_WEEKS: !Ref EventPickerWeeks
+          UPCOMING_DAYS: !Ref UpcomingDays
+          DEFAULT_EVENT_START: !Ref DefaultEventStart
+          DEFAULT_EVENT_END: !Ref DefaultEventEnd
+          DEFAULT_EVENT_DURATION_MINUTES: !Ref DefaultEventDurationMinutes
+          ENV_SLACK_CLIENT_ID: !FindInMap
+            - StagesMap
+            - Ref: Stage
+            - SlackClientID
+          # STRAVA_CLIENT_ID: !Ref StravaClientID
+          # STRAVA_CLIENT_SECRET: !Ref StravaClientSecret
+
+Outputs:
+  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
+  # Find out more about other implicit resources you can reference within SAM
+  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
+  QSignupsApi:
+    Description: API Gateway endpoint URL for Prod stage for QSignups function
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/slack/events/"
+  QSignupsFunction:
+    Description: QSignups Lambda Function ARN
+    Value: !GetAtt QSignupsFunction.Arn
+  QSignupsFunctionIamRole:
+    Description: IAM role for the QSignups Lambda function
+    Value: !GetAtt QSignupsFunctionRole.Arn
+  # S3Bucket:
+  #   Description: Bucket Created using this template.
+  #   Value: !Ref S3Bucket

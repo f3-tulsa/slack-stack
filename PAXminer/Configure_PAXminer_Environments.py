@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+'''
+This script was written by Beaker from F3STL. Questions? @srschaecher on twitter or srschaecher@gmail.com.
+This script joins all required Slack channels and creates the log and plot directories for regions.
+'''
+
+import configparser
+import os
+import sys
+from pathlib import Path
+
+import pandas as pd
+import pymysql.cursors
+
+# Set the working directory to the directory of the script
+abspath = os.path.abspath(__file__)
+dname = os.path.dirname(abspath)
+os.chdir(dname)
+
+_PAX_ROOT = Path(__file__).resolve().parent
+if str(_PAX_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PAX_ROOT))
+from paxminer_db import connect_from_credentials_ini, paxminer_schema_from_ini
+
+_ini = _PAX_ROOT / "config" / "credentials.ini"
+_cfg = configparser.ConfigParser()
+_cfg.read(_ini)
+registry_db = _cfg["aws"]["db"]
+pm_schema = paxminer_schema_from_ini(_ini)
+
+mydb1 = connect_from_credentials_ini(registry_db, _ini)
+
+# Get list of regions and Slack tokens for PAXminer execution
+try:
+    with mydb1.cursor() as cursor:
+        sql = "SELECT * FROM `" + pm_schema + "`.`regions` where active = 1 and firstf_channel IS NOT NULL"  # <-- narrow filter if needed
+        # sql = "SELECT * FROM `"+pm_schema+"`.`regions` where region = 'Lake_Wylie'"
+        cursor.execute(sql)
+        regions = cursor.fetchall()
+        regions_df = pd.DataFrame(regions)
+finally:
+    print('Getting list of regions that use PAXminer...')
+
+for index, row in regions_df.iterrows():
+    region = row['region']
+    key = row['slack_token']
+    db = row['schema_name']
+    firstf = row['firstf_channel']
+    os.system("./Join_Channels_and_Create_Directories.py " + db + " " + key + " " + region + " " + firstf)
+    print('----------------- End of Region Configuration -----------------\n')
+print('\nPAXminer Configurations Complete.')

@@ -1,0 +1,206 @@
+name: Deploy Slack Stack
+
+on:
+  push:
+    branches: [test, prod]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub Environment name (must match branch deploy targets)
+        required: true
+        type: choice
+        options:
+          - test
+          - prod
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # --- PAXminer (zip packaging) ---
+      - name: Build PAXminer
+        run: sam build -t PAXminer/template.yaml
+      - name: Deploy PAXminer
+        run: |
+          sam deploy \
+            --stack-name paxminer-${{ vars.STAGE }} \
+            --no-confirm-changeset --no-fail-on-empty-changeset \
+            --resolve-s3 \
+            --capabilities CAPABILITY_IAM \
+            --parameter-overrides \
+              DatabaseHost=${{ secrets.DATABASE_HOST }} \
+              DatabasePort=${{ secrets.DATABASE_PORT }} \
+              DatabaseUser=${{ secrets.DATABASE_USER }} \
+              DatabasePassword=${{ secrets.DATABASE_PASSWORD }} \
+              DbEncryptionKey=${{ secrets.DB_ENCRYPTION_KEY }} \
+              PaxminerSchema=${{ vars.PAXMINER_SCHEMA }}_${{ vars.STAGE }}
+
+      # --- Weaselbot (container image) ---
+      - name: Build Weaselbot
+        run: sam build -t weaselbot/template.yaml
+      - name: Deploy Weaselbot
+        run: |
+          sam deploy \
+            --stack-name weaselbot-${{ vars.STAGE }} \
+            --no-confirm-changeset --no-fail-on-empty-changeset \
+            --resolve-image-repos \
+            --capabilities CAPABILITY_IAM \
+            --parameter-overrides \
+              DatabaseHost=${{ secrets.DATABASE_HOST }} \
+              DatabasePort=${{ secrets.DATABASE_PORT }} \
+              DatabaseUser=${{ secrets.DATABASE_USER }} \
+              DatabasePassword=${{ secrets.DATABASE_PASSWORD }} \
+              DbEncryptionKey=${{ secrets.DB_ENCRYPTION_KEY }} \
+              PaxminerSchema=${{ vars.PAXMINER_SCHEMA }}_${{ vars.STAGE }} \
+              WeaselbotSchema=${{ vars.WEASELBOT_SCHEMA }}_${{ vars.STAGE }}
+
+      # --- slackblast ---
+      - name: Build slackblast
+        run: sam build -t slackblast/template.yaml
+      - name: Deploy slackblast
+        run: |
+          sam deploy \
+            --stack-name slackblast-${{ vars.STAGE }} \
+            --no-confirm-changeset --no-fail-on-empty-changeset \
+            --resolve-s3 \
+            --capabilities CAPABILITY_IAM \
+            --parameter-overrides \
+              Stage=${{ vars.STAGE }} \
+              DatabaseHost=${{ secrets.DATABASE_HOST }} \
+              DatabasePort=${{ secrets.DATABASE_PORT }} \
+              DatabaseUser=${{ secrets.DATABASE_USER }} \
+              DatabasePassword=${{ secrets.DATABASE_PASSWORD }} \
+              DatabaseSchema=${{ vars.SLACKBLAST_SCHEMA }}_${{ vars.STAGE }} \
+              PaxminerSchema=${{ vars.PAXMINER_SCHEMA }}_${{ vars.STAGE }} \
+              SlackToken=${{ secrets.SB_SLACK_TOKEN }} \
+              SlackSigningSecret=${{ secrets.SB_SLACK_SIGNING_SECRET }} \
+              SlackClientSecret=${{ secrets.SB_SLACK_CLIENT_SECRET }} \
+              DbEncryptionKey=${{ secrets.DB_ENCRYPTION_KEY }} \
+              StravaClientID=${{ secrets.SB_STRAVA_CLIENT_ID }} \
+              StravaClientSecret=${{ secrets.SB_STRAVA_CLIENT_SECRET }} \
+              ImageBucketName=${{ vars.IMAGE_S3_BUCKET }}
+
+      # --- qsignups ---
+      - name: Build qsignups
+        run: sam build -t qsignups/template.yaml
+      - name: Deploy qsignups
+        run: |
+          sam deploy \
+            --stack-name qsignups-${{ vars.STAGE }} \
+            --no-confirm-changeset --no-fail-on-empty-changeset \
+            --resolve-s3 \
+            --capabilities CAPABILITY_IAM \
+            --parameter-overrides \
+              Stage=${{ vars.STAGE }} \
+              DatabaseHost=${{ secrets.DATABASE_HOST }} \
+              DatabasePort=${{ secrets.DATABASE_PORT }} \
+              DatabaseUser=${{ secrets.DATABASE_USER }} \
+              DatabasePassword=${{ secrets.DATABASE_PASSWORD }} \
+              DatabaseSchema=${{ vars.QSIGNUPS_SCHEMA }}_${{ vars.STAGE }} \
+              SlackToken=${{ secrets.QS_SLACK_TOKEN }} \
+              SlackSigningSecret=${{ secrets.QS_SLACK_SIGNING_SECRET }} \
+              SlackClientSecret=${{ secrets.QS_SLACK_CLIENT_SECRET }} \
+              DbEncryptionKey=${{ secrets.DB_ENCRYPTION_KEY }} \
+              GoogleClientId=${{ secrets.QS_GOOGLE_CLIENT_ID }} \
+              GoogleClientSecret=${{ secrets.QS_GOOGLE_CLIENT_SECRET }}
+
+      - name: Deploy summary, receipt, and stage Slack manifests
+        env:
+          STAGE: ${{ vars.STAGE }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          mkdir -p receipts
+          RECEIPT="receipts/deploy-ci-${STAGE}-$(date -u +%Y%m%d%H%M%S).txt"
+          {
+            echo "=== Deploy receipt (CI) ==="
+            echo "Started (UTC): $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "Stage: ${STAGE}"
+            echo "AWS region: ${AWS_DEFAULT_REGION}"
+            echo ""
+            echo "--- Stack outputs ---"
+            for s in paxminer weaselbot slackblast qsignups; do
+              name="${s}-${STAGE}"
+              echo "# ${name}"
+              aws cloudformation describe-stacks --stack-name "$name" \
+                --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output text 2>/dev/null || echo "(describe-stacks failed for ${name})"
+              echo ""
+            done
+          } | tee "$RECEIPT"
+
+          if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+            {
+              echo "## Deploy outputs (${STAGE})"
+              echo ""
+              echo '```'
+              cat "$RECEIPT"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          ROOT="${GITHUB_WORKSPACE}"
+          cd "$ROOT"
+          get_out() {
+            aws cloudformation describe-stacks --stack-name "$1" --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue | [0]" --output text 2>/dev/null || true
+          }
+          api_base() {
+            local url="$1"
+            [[ -z "$url" || "$url" == "None" ]] && { echo ""; return; }
+            url="${url%%/slack/events*}"
+            while [[ "$url" == */ ]]; do url="${url%/}"; done
+            echo "$url"
+          }
+          write_subst() {
+            local app="$1" base="$2"
+            python3 -c "import pathlib,sys; s=pathlib.Path(sys.argv[1]); d=pathlib.Path(sys.argv[2]); b=sys.argv[3]; d.write_text(s.read_text(encoding='utf-8').replace('__HOSTNAME__', b), encoding='utf-8')" \
+              "$ROOT/$app/manifest.json" "$ROOT/$app/manifest-${STAGE}.json" "$base"
+            echo "Wrote $app/manifest-${STAGE}.json"
+          }
+          SB_FULL="$(get_out "slackblast-${STAGE}" SlackblastApi)"
+          SB_BASE="$(api_base "$SB_FULL")"
+          if [[ -n "$SB_BASE" ]]; then
+            write_subst slackblast "$SB_BASE"
+          else
+            echo "WARN: SlackblastApi missing; skip slackblast manifest"
+          fi
+          QS_FULL="$(get_out "qsignups-${STAGE}" QSignupsApi)"
+          QS_BASE="$(api_base "$QS_FULL")"
+          if [[ -n "$QS_BASE" ]]; then
+            write_subst qsignups "$QS_BASE"
+          else
+            echo "WARN: QSignupsApi missing; skip qsignups manifest"
+          fi
+          for app in PAXminer weaselbot; do
+            cp "$ROOT/$app/manifest.json" "$ROOT/$app/manifest-${STAGE}.json"
+            echo "Wrote $app/manifest-${STAGE}.json (copy)"
+          done
+          echo "Receipt: ${RECEIPT}"
+
+      - name: Upload deploy receipt and manifests
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: deploy-receipt-manifests-${{ vars.STAGE }}-${{ github.run_id }}
+          path: |
+            receipts/
+            PAXminer/manifest-${{ vars.STAGE }}.json
+            weaselbot/manifest-${{ vars.STAGE }}.json
+            slackblast/manifest-${{ vars.STAGE }}.json
+            qsignups/manifest-${{ vars.STAGE }}.json
+          if-no-files-found: warn

@@ -1,0 +1,83 @@
+{
+  "display_information": {
+    "name": "slackblast",
+    "description": "Backblast and preblast forms for Slack",
+    "background_color": "#000000"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "slackblast",
+      "always_online": true
+    },
+    "slash_commands": [
+      {
+        "command": "/slackblast",
+        "url": "__HOSTNAME__/slack/events",
+        "description": "Launch backblast template"
+      },
+      {
+        "command": "/backblast",
+        "url": "__HOSTNAME__/slack/events",
+        "description": "Launch backblast template"
+      },
+      {
+        "command": "/preblast",
+        "url": "__HOSTNAME__/slack/events",
+        "description": "Launch preblast template"
+      },
+      {
+        "command": "/config-welcome-message",
+        "url": "__HOSTNAME__/slack/events",
+        "description": "Configure welcome messages"
+      },
+      {
+        "command": "/config-slackblast",
+        "url": "__HOSTNAME__/slack/events",
+        "description": "Region settings"
+      },
+      {
+        "command": "/tag-achievement",
+        "url": "__HOSTNAME__/slack/events",
+        "description": "Tag achievement"
+      },
+      {
+        "command": "/send-announcement",
+        "url": "__HOSTNAME__/slack/events",
+        "description": "Send announcement"
+      }
+    ]
+  },
+  "oauth_config": {
+    "redirect_urls": ["__HOSTNAME__/slack/install"],
+    "scopes": {
+      "bot": [
+        "channels:history",
+        "channels:read",
+        "chat:write",
+        "chat:write.customize",
+        "chat:write.public",
+        "commands",
+        "files:read",
+        "im:history",
+        "im:read",
+        "im:write",
+        "team:read",
+        "users:read",
+        "files:write"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "__HOSTNAME__/slack/events",
+      "bot_events": ["team_join"]
+    },
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "__HOSTNAME__/slack/events"
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

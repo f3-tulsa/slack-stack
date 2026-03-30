@@ -1,0 +1,139 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: PAXminer — Slack user/channel sync (daily) and monthly charts (scheduled Lambda).
+
+Globals:
+  Function:
+    Architectures:
+      - x86_64
+
+Parameters:
+  DatabaseHost:
+    Type: String
+  DatabasePort:
+    Type: String
+    Default: "4000"
+  DatabaseUser:
+    Type: String
+  DatabasePassword:
+    Type: String
+    NoEcho: true
+  DatabaseTlsEnabled:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+  PaxminerSchema:
+    Type: String
+    Default: paxminer
+  PaxminerRegistryDatabase:
+    Type: String
+    Default: ""
+    Description: Optional pymysql database name for registry connection; leave empty to use PaxminerSchema
+  DatabaseFullRun:
+    Type: String
+    Default: "false"
+    Description: If true, Slack user sync uses extended lookback (first-time style)
+  ChartRegionRegex:
+    Type: String
+    Default: ""
+    Description: Optional character class for PAX charts only (e.g. A-M); empty = all regions with send_pax_charts
+  DbEncryptionKey:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: Optional passphrase for DB field encryption (slack_token); maps to DB_ENCRYPTION_KEY
+  ChartSchedule:
+    Type: String
+    Default: cron(0 12 1 * ? *)
+    Description: When monthly charts run (EventBridge schedule)
+  LookbackDays:
+    Type: String
+    Default: "7"
+  BackblastMaxAgeDays:
+    Type: String
+    Default: "30"
+  BackblastMaxFutureDays:
+    Type: String
+    Default: "2"
+  QErrorDmHour:
+    Type: String
+    Default: "15"
+  ChartPeriodOffsetDays:
+    Type: String
+    Default: "7"
+    Description: Days offset for chart month labeling
+
+Resources:
+  SyncFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-paxminer-sync"
+      CodeUri: .
+      Handler: handlers.sync_handler
+      Runtime: python3.12
+      MemorySize: 512
+      Timeout: 300
+      Events:
+        DailySync:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 day)
+      Environment:
+        Variables:
+          DATABASE_HOST: !Ref DatabaseHost
+          DATABASE_PORT: !Ref DatabasePort
+          DATABASE_USER: !Ref DatabaseUser
+          DATABASE_PASSWORD: !Ref DatabasePassword
+          DATABASE_TLS_ENABLED: !Ref DatabaseTlsEnabled
+          PAXMINER_SCHEMA: !Ref PaxminerSchema
+          PAXMINER_REGISTRY_DATABASE: !Ref PaxminerRegistryDatabase
+          DATABASE_FULL_RUN: !Ref DatabaseFullRun
+          DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
+          LOOKBACK_DAYS: !Ref LookbackDays
+          BACKBLAST_MAX_AGE_DAYS: !Ref BackblastMaxAgeDays
+          BACKBLAST_MAX_FUTURE_DAYS: !Ref BackblastMaxFutureDays
+          Q_ERROR_DM_HOUR: !Ref QErrorDmHour
+    Metadata:
+      BuildMethod: python3.12
+      BuildProperties:
+        Manifest: requirements-lambda.txt
+
+  ChartFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-paxminer-charts"
+      CodeUri: .
+      Handler: handlers.chart_handler
+      Runtime: python3.12
+      MemorySize: 1024
+      Timeout: 900
+      Events:
+        MonthlyCharts:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref ChartSchedule
+      Environment:
+        Variables:
+          DATABASE_HOST: !Ref DatabaseHost
+          DATABASE_PORT: !Ref DatabasePort
+          DATABASE_USER: !Ref DatabaseUser
+          DATABASE_PASSWORD: !Ref DatabasePassword
+          DATABASE_TLS_ENABLED: !Ref DatabaseTlsEnabled
+          PAXMINER_SCHEMA: !Ref PaxminerSchema
+          PAXMINER_REGISTRY_DATABASE: !Ref PaxminerRegistryDatabase
+          CHART_PLOT_DIR: /tmp/paxminer_plots
+          CHART_REGION_REGEX: !Ref ChartRegionRegex
+          DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
+          CHART_PERIOD_OFFSET_DAYS: !Ref ChartPeriodOffsetDays
+    Metadata:
+      BuildMethod: python3.12
+      BuildProperties:
+        Manifest: requirements-lambda.txt
+
+Outputs:
+  SyncFunctionArn:
+    Value: !GetAtt SyncFunction.Arn
+  ChartFunctionArn:
+    Value: !GetAtt ChartFunction.Arn
