@@ -76,9 +76,9 @@ cd PAXminer && python3.12 -m venv .venv && source .venv/bin/activate && pip inst
 
 Use this when migrating data from an existing MySQL/RDS instance to a new TiDB or MySQL host.
 
-1. Copy `migration/.env.migration.example` to `migration/.env.migration` and set source/target connection vars.
+1. Copy `migration/.env.migration.example` to `migration/.env.migration` and fill in values. Set `STAGE` to `test` or `prod`. Schema base names (`PAXMINER_SCHEMA`, etc.) should match your deploy `.env`.
 2. Install deps: `pip install -r migration/requirements.txt` (use a venv).
-3. Run: `python migration/migrate_data.py --env test` (or `--env prod`).
+3. Run: `python migration/migrate_data.py`.
 4. Optional post-steps (set in `.env.migration`):
    - **`DB_ENCRYPTION_KEY`** — encrypt tokens after copy.
    - **`IMAGE_S3_BUCKET`** — copy backblast images from their stored public URLs into your S3 bucket and rewrite the URLs in `beatdowns.json`.

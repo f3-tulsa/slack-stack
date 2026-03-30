@@ -276,13 +276,17 @@ def with_retry(fn, operation_name: str):
 
 
 def default_schema_map(env_suffix: str) -> dict[str, str]:
+    pm = os.environ.get("PAXMINER_SCHEMA", "paxminer")
+    wb = os.environ.get("WEASELBOT_SCHEMA", "weaselbot")
+    sb = os.environ.get("SLACKBLAST_SCHEMA", "slackblast")
+    qs = os.environ.get("QSIGNUPS_SCHEMA", "qsignups")
     return {
-        "paxminer": f"paxminer_{env_suffix}",
+        "paxminer": f"{pm}_{env_suffix}",
         "f3ttown": f"f3ttown_{env_suffix}",
         "f3scissortail": f"f3scissortail_{env_suffix}",
-        "f3stcharles": f"qsignups_{env_suffix}",
-        "slackblast": f"slackblast_{env_suffix}",
-        "weaselbot": f"weaselbot_{env_suffix}",
+        "f3stcharles": f"{qs}_{env_suffix}",
+        "slackblast": f"{sb}_{env_suffix}",
+        "weaselbot": f"{wb}_{env_suffix}",
     }
 
 
@@ -633,14 +637,16 @@ def post_migration_s3_images(conn, schema_map: dict[str, str], report: dict) -> 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Migrate F3 schemas from RDS to TiDB")
-    parser.add_argument("--env", choices=("test", "prod"), required=True, help="Suffix for target schema names")
     parser.add_argument("--dry-run", action="store_true", help="Only log planned steps, no writes to target")
     parser.add_argument("--skip-schema", action="append", default=[], help="Skip a source schema name (repeatable)")
     parser.add_argument("--skip-table", action="append", default=[], help="Skip table as schema.table (repeatable)")
     parser.add_argument("--reset-checkpoint", action="store_true", help="Ignore existing checkpoint file")
     args = parser.parse_args()
 
-    env_suffix = args.env
+    env_suffix = os.environ.get("STAGE", "").strip()
+    if env_suffix not in ("test", "prod"):
+        LOG.error("STAGE must be 'test' or 'prod' (got %r). Set it in .env.migration.", env_suffix)
+        return 1
     schema_map = default_schema_map(env_suffix)
     rewrites = region_name_rewrites(env_suffix)
 
@@ -707,6 +713,7 @@ def main() -> int:
                 with tgt.cursor() as c:
                     c.execute(create_db_sql)
                 tgt.commit()
+                tgt.select_db(target_schema)
             except Exception as e:
                 report_append_error(se, "create target database", create_db_sql, e)
                 se["status"] = "error"
@@ -759,6 +766,10 @@ def main() -> int:
                 write_migration_report(report_path, report)
                 continue
 
+            with tgt.cursor() as c:
+                c.execute("SET FOREIGN_KEY_CHECKS=0")
+            tgt.commit()
+
             schema_aborted_access = False
             for table in tables:
                 key = f"{source_schema}.{table}"
@@ -792,15 +803,7 @@ def main() -> int:
 
                     with_retry(create_t, f"CREATE TABLE {target_schema}.{table}")
 
-                    with tgt.cursor() as c:
-                        c.execute("SET FOREIGN_KEY_CHECKS=0")
-                    tgt.commit()
-
                     rows_migrated = migrate_table(src, tgt, source_schema, target_schema, table, batch_size, read_delay)
-
-                    with tgt.cursor() as c:
-                        c.execute("SET FOREIGN_KEY_CHECKS=1")
-                    tgt.commit()
 
                     done.add(key)
                     save_checkpoint(checkpoint_path, done)
@@ -827,6 +830,10 @@ def main() -> int:
 
                 finalize_migration_summary(report)
                 write_migration_report(report_path, report)
+
+            with tgt.cursor() as c:
+                c.execute("SET FOREIGN_KEY_CHECKS=1")
+            tgt.commit()
 
             if not schema_aborted_access:
                 for view in views:

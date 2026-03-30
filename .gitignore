@@ -75,8 +75,7 @@ htmlcov/
 db.sqlite3
 
 # Migration run artifacts (hosts, SQL error text — do not commit)
-migration/migration_report.json
-migration/migration_checkpoint.json
+migration/migration_*.json
 migration/receipts/
 
 # Deploy receipts and generated Slack manifests (contain API URLs)
