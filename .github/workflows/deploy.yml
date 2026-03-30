@@ -40,6 +40,7 @@ jobs:
         run: |
           BUCKET=$(aws cloudformation describe-stacks \
             --stack-name slack-stack-bootstrap \
+            --region "${{ vars.AWS_REGION }}" \
             --query "Stacks[0].Outputs[?OutputKey=='DeploymentBucketName'].OutputValue | [0]" \
             --output text)
           if [[ -z "$BUCKET" || "$BUCKET" == "None" ]]; then
