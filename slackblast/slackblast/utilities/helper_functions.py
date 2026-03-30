@@ -270,8 +270,9 @@ def get_paxminer_schema(team_id: str, logger) -> str:
 
     for region in paxminer_region_records:
         tok = region.slack_token
-        plain = decrypt_field(tok) if tok else None
-        slack_client = WebClient(plain or tok)
+        if not tok:
+            continue
+        slack_client = WebClient(decrypt_field(tok))
 
         ao_index = 0
         try:

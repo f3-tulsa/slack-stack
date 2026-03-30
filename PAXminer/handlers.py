@@ -9,6 +9,7 @@ Environment variables (TiDB / SAM):
   DATABASE_FULL_RUN — optional; truthy => full Slack user history pull (first-time style)
   CHART_PLOT_DIR — optional; default /tmp/paxminer_plots
   CHART_REGION_REGEX — optional; restrict PAX charts to region names matching ^[CHAR] (see PAXcharter_Monthly_Execution)
+  STAGE, F3_REGION_NAME, PM_SLACK_TOKEN — optional; when set, encrypted bot token is upserted into paxminer.regions at cold start
 """
 
 from __future__ import annotations
@@ -30,7 +31,9 @@ for _p in (_ROOT, _ROOT / "database_management"):
     if s not in sys.path:
         sys.path.insert(0, s)
 
-from common.encryption import decrypt_field
+from common.encryption import decrypt_field, require_encryption_key
+
+require_encryption_key()
 
 
 def _registry_database() -> str:
@@ -44,6 +47,27 @@ def _registry_database() -> str:
 
 def _pm_schema() -> str:
     return os.environ.get("PAXMINER_SCHEMA", "paxminer").strip() or "paxminer"
+
+
+def _try_bootstrap_pm_slack_token() -> None:
+    f3 = os.environ.get("F3_REGION_NAME", "").strip()
+    st = os.environ.get("STAGE", "").strip()
+    tok = os.environ.get("PM_SLACK_TOKEN", "").strip()
+    if not (f3 and st and tok):
+        return
+    from common.token_bootstrap import upsert_paxminer_slack_token
+
+    registry = _pm_schema()
+    regional = f"{f3}_{st}"
+    upsert_paxminer_slack_token(
+        registry_schema=registry,
+        region_key=f3,
+        regional_schema_name=regional,
+        plaintext_token=tok,
+    )
+
+
+_try_bootstrap_pm_slack_token()
 
 
 def _chart_plot_dir() -> str:

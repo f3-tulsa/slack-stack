@@ -41,9 +41,9 @@ Parameters:
     Description: Optional character class for PAX charts only (e.g. A-M); empty = all regions with send_pax_charts
   DbEncryptionKey:
     Type: String
-    Default: ""
     NoEcho: true
-    Description: Optional passphrase for DB field encryption (slack_token); maps to DB_ENCRYPTION_KEY
+    MinLength: 16
+    Description: Required passphrase for DB field encryption (slack_token); maps to DB_ENCRYPTION_KEY. Min 16 chars.
   ChartSchedule:
     Type: String
     Default: cron(0 12 1 * ? *)
@@ -64,6 +64,20 @@ Parameters:
     Type: String
     Default: "7"
     Description: Days offset for chart month labeling
+  Stage:
+    Type: String
+    AllowedValues:
+      - test
+      - prod
+    Description: Deploy stage (suffix for regional schema names, e.g. f3ttown_test)
+  F3RegionName:
+    Type: String
+    Description: F3 region key in paxminer.regions (e.g. f3ttown)
+  PmSlackToken:
+    Type: String
+    NoEcho: true
+    MinLength: 16
+    Description: PAXminer Slack bot token for this region (encrypted into DB at cold start)
 
 Resources:
   SyncFunction:
@@ -95,6 +109,9 @@ Resources:
           BACKBLAST_MAX_AGE_DAYS: !Ref BackblastMaxAgeDays
           BACKBLAST_MAX_FUTURE_DAYS: !Ref BackblastMaxFutureDays
           Q_ERROR_DM_HOUR: !Ref QErrorDmHour
+          STAGE: !Ref Stage
+          F3_REGION_NAME: !Ref F3RegionName
+          PM_SLACK_TOKEN: !Ref PmSlackToken
     Metadata:
       BuildMethod: python3.12
       BuildProperties:
@@ -127,6 +144,9 @@ Resources:
           CHART_REGION_REGEX: !Ref ChartRegionRegex
           DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
           CHART_PERIOD_OFFSET_DAYS: !Ref ChartPeriodOffsetDays
+          STAGE: !Ref Stage
+          F3_REGION_NAME: !Ref F3RegionName
+          PM_SLACK_TOKEN: !Ref PmSlackToken
     Metadata:
       BuildMethod: python3.12
       BuildProperties:

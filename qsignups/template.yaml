@@ -65,9 +65,9 @@ Parameters:
       - "false"
   DbEncryptionKey:
     Type: String
-    Default: ""
     NoEcho: true
-    Description: Passphrase for DB field encryption (bot_token, google_auth_data)
+    MinLength: 16
+    Description: Required passphrase for DB field encryption (bot_token, google_auth_data). Min 16 chars.
   GoogleClientId:
     Type: String
     Default: ""

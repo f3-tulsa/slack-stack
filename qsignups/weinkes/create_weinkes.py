@@ -240,7 +240,7 @@ def main() -> None:
             ssl_context = ssl.create_default_context()
             try:
                 if (row["weekly_weinke_channel"] is not None) and (output_name == "current_week_weinke"):
-                    token = decrypt_field(row["bot_token"]) or row["bot_token"]
+                    token = decrypt_field(row["bot_token"])
                     slack_client = WebClient(token, ssl=ssl_context)
                     try:
                         if row["weekly_weinke_updated"] is not None:

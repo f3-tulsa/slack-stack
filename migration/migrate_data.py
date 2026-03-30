@@ -27,9 +27,7 @@ import pymysql
 from pymysql.cursors import DictCursor
 from dotenv import load_dotenv
 
-# Load .env.migration from this directory
-_ENV_FILE = Path(__file__).resolve().parent / ".env.migration"
-load_dotenv(_ENV_FILE)
+# Env file is loaded in main() from .env.migration.<env> (see --env).
 
 logging.basicConfig(
     level=logging.INFO,
@@ -573,12 +571,12 @@ def pre_migration_bootstrap_schemas(conn: Any, stage: str) -> None:
                 INSERT INTO `{pm_s}`.`regions`
                 (`region`, `slack_token`, `schema_name`, `active`)
                 VALUES
-                (%s, 'PLACEHOLDER', %s, 1),
-                (%s, 'PLACEHOLDER', %s, 1)
+                (%s, '', %s, 1),
+                (%s, '', %s, 1)
                 """,
                 ("f3ttown", f3ttown, "f3scissortail", f3sci),
             )
-            LOG.info("Inserted placeholder paxminer.regions rows for %s and %s", f3ttown, f3sci)
+            LOG.info("Inserted paxminer.regions rows (empty slack_token; deploy/Lambda upserts encrypted token)")
         else:
             LOG.info("Skipping seed: paxminer.regions already has rows for target schemas")
         conn.commit()
@@ -731,9 +729,13 @@ def pre_encryption_widen_columns(conn: Any, stage: str, report: dict[str, Any]) 
 
 
 def post_migration_encrypt_secrets(conn, schema_map: dict[str, str], report: dict, *, stage: str) -> None:
+    # Unlike deployed Lambdas (which require DB_ENCRYPTION_KEY at startup), this step stays optional:
+    # initial loads may run before a key exists. If you set a key, use the same min length as production (16+).
     key = (os.environ.get("DB_ENCRYPTION_KEY") or "").strip()
-    if not key or key == "123":
-        LOG.info("Post-migration encryption skipped (DB_ENCRYPTION_KEY unset or placeholder)")
+    if not key or key == "123" or len(key) < 16:
+        LOG.info(
+            "Post-migration encryption skipped (DB_ENCRYPTION_KEY unset, placeholder, or shorter than 16 chars)"
+        )
         return
     root = _repo_root()
     if str(root) not in sys.path:
@@ -944,16 +946,29 @@ def post_migration_s3_images(conn, schema_map: dict[str, str], report: dict) -> 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Migrate F3 schemas from RDS to TiDB")
+    parser.add_argument(
+        "--env",
+        required=True,
+        choices=["test", "prod"],
+        help="Environment: loads migration/.env.migration.<env> (same idea as deploy.sh --env)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Only log planned steps, no writes to target")
     parser.add_argument("--skip-schema", action="append", default=[], help="Skip a source schema name (repeatable)")
     parser.add_argument("--skip-table", action="append", default=[], help="Skip table as schema.table (repeatable)")
     parser.add_argument("--reset-checkpoint", action="store_true", help="Ignore existing checkpoint file")
     args = parser.parse_args()
 
-    env_suffix = os.environ.get("STAGE", "").strip()
-    if env_suffix not in ("test", "prod"):
-        LOG.error("STAGE must be 'test' or 'prod' (got %r). Set it in .env.migration.", env_suffix)
+    mig_dir = Path(__file__).resolve().parent
+    env_file = mig_dir / f".env.migration.{args.env}"
+    if not env_file.is_file():
+        LOG.error(
+            "Missing %s — copy from .env.migration.example to .env.migration.test or .env.migration.prod and fill in values.",
+            env_file,
+        )
         return 1
+    load_dotenv(env_file)
+    env_suffix = args.env
+    os.environ["STAGE"] = env_suffix
     schema_map = default_schema_map(env_suffix)
 
     read_delay = float(os.environ.get("READ_DELAY_SECONDS", "1"))

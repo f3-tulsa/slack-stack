@@ -29,17 +29,22 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 | Variable | Description |
 |----------|-------------|
 | `AWS_REGION` | AWS region, e.g. `us-east-2` |
-| `STAGE` | `test` or `prod` — maps to the SAM `StagesMap` in slackblast/qsignups |
+| *(stage)* | **Not in this file.** `./deploy.sh --env test` or `--env prod` sets `STAGE` for SAM, stack names, and manifests (must match `StagesMap` in slackblast/qsignups). |
 | `DATABASE_HOST` | MySQL / TiDB hostname |
 | `DATABASE_PORT` | Database port (default `4000` for TiDB, `3306` for MySQL) |
 | `DATABASE_USER` | Database user |
 | `DATABASE_PASSWORD` | Database password |
-| `DB_ENCRYPTION_KEY` | Fernet key for encrypting sensitive DB columns (see **Database encryption** below) |
+| `DATABASE_TLS_ENABLED` | `true` for TiDB Cloud and other TLS-required hosts; `false` for local MySQL or RDS without TLS |
+| `DB_ENCRYPTION_KEY` | **Required.** Any random string (min **16** characters) used as a passphrase for DB field encryption (see **Database encryption**). Must be the **same value** in `.env.deploy.*` and `migration/.env.migration.*` for a given stage. |
 | `PAXMINER_SCHEMA` | **Bare** base name for PAXminer (e.g. `paxminer`). Deploy appends `_${STAGE}` → `paxminer_test` / `paxminer_prod` |
 | `WEASELBOT_SCHEMA` | **Bare** base name for Weaselbot (e.g. `weaselbot`). Same auto-suffix |
 | `SLACKBLAST_SCHEMA` | **Bare** base name for slackblast (e.g. `slackblast`). Same auto-suffix |
 | `QSIGNUPS_SCHEMA` | **Bare** base name for qsignups (e.g. `qsignups`). Same auto-suffix |
 | `IMAGE_S3_BUCKET` | Globally unique S3 bucket name for backblast images (the slackblast stack creates this bucket) |
+| `F3_REGION_NAME` | F3 region key stored in `paxminer_<stage>.regions.region` (e.g. `f3ttown`); regional DB schema is `{F3_REGION_NAME}_{STAGE}` |
+| `PM_SLACK_TOKEN` | PAXminer Slack **bot** token for that region; SAM passes to Lambdas, which **encrypt** and **upsert** into `paxminer_<stage>.regions.slack_token` on cold start |
+| `WB_SLACK_TOKEN` | Weaselbot Slack **bot** token (separate app); encrypted and upserted into `weaselbot_<stage>.regions` on cold start |
+| `F3_REGION_SLACK_TEAM_ID` | Slack workspace Team ID (e.g. `T01234567`); passed to Lambdas (e.g. `weaselbot.regions.team_id` when inserting a new row) |
 
 ### Bootstrap (optional; for `--bootstrap`)
 
@@ -58,7 +63,9 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 
 ### PAXminer / Weaselbot and Slack
 
-**PAXminer** and **Weaselbot** do not take Slack app secrets in the deploy env file. They read per-region Slack tokens from the database (`paxminer.regions`, decrypted with `DB_ENCRYPTION_KEY`). Only **slackblast** (`SB_*`) and **qsignups** (`QS_*`) need Slack (and Google) app credentials here.
+**PAXminer** and **Weaselbot** use **`PM_SLACK_TOKEN`** and **`WB_SLACK_TOKEN`** in `.env.deploy.*` (separate Slack apps). Deploy passes them to SAM; on **Lambda cold start** each stack encrypts with **`DB_ENCRYPTION_KEY`** and **upserts** into **`paxminer_<stage>.regions`** and **`weaselbot_<stage>.regions`**. At runtime they still **read** tokens from the DB (decrypted). **`F3_REGION_NAME`** and **`F3_REGION_SLACK_TEAM_ID`** identify the region row and workspace.
+
+**slackblast** (`SB_*`) and **qsignups** (`QS_*`) use their own Slack (and Google) env vars as below.
 
 ### Required (slackblast)
 
@@ -99,22 +106,22 @@ Use this when migrating data from an existing MySQL/RDS instance to a new TiDB o
 
 ### What `migrate_data.py` does
 
-- **Target bootstrap (no source read):** creates `paxminer_{STAGE}`, `slackblast_{STAGE}`, `weaselbot_{STAGE}` with core admin tables and seeds placeholder `paxminer.regions` rows for `f3ttown_{STAGE}` / `f3scissortail_{STAGE}` (replace `PLACEHOLDER` tokens before production use).
+- **Target bootstrap (no source read):** creates `paxminer_{STAGE}`, `slackblast_{STAGE}`, `weaselbot_{STAGE}` with core admin tables and seeds `paxminer.regions` rows for `f3ttown_{STAGE}` / `f3scissortail_{STAGE}` with **empty** `slack_token` (first deploy/Lambda cold start fills encrypted tokens from **`PM_SLACK_TOKEN`** / **`WB_SLACK_TOKEN`**).
 - **Source copy:** `f3ttown`, `f3scissortail`, and `f3stcharles` → regional schemas on the target; **`f3stcharles`** only copies base tables named `qsignups_*` (regional PAXminer objects in that schema are skipped).
 - **Qsignups views:** after copy, recreates **`vw_weekly_events`**, **`vw_aos_sort`**, and **`vw_master_events`** on `{QSIGNUPS_SCHEMA}_{STAGE}` (same definitions as `qsignups/db/views/*.sql`).
-- **Encryption prep:** widens token columns to `VARCHAR(512)` and `qsignups_regions.google_auth_data` to `LONGTEXT` where needed, then optional **`DB_ENCRYPTION_KEY`** encrypts secrets.
-- **Images (optional):** if **`IMAGE_S3_BUCKET`** is set, copies backblast images and rewrites URLs at the end of the same run; otherwise run **`migrate_images.py`** after deploy creates the bucket.
+- **Encryption prep:** widens token columns to `VARCHAR(512)` and `qsignups_regions.google_auth_data` to `LONGTEXT` where needed. If **`DB_ENCRYPTION_KEY`** is set (min 16 characters, not a placeholder), the script encrypts secrets in place; otherwise this step is skipped (Lambdas still require the key at runtime after deploy).
+- **Images (optional):** if **`IMAGE_S3_BUCKET`** is set, copies backblast images and rewrites URLs at the end of the same run; otherwise run **`migrate_images.py --env test|prod`** after deploy creates the bucket.
 
 ### Setup
 
-1. Copy `migration/.env.migration.example` to `migration/.env.migration` and fill in values. Set `STAGE` to `test` or `prod`. Schema base names should match your deploy `.env.deploy.*` file.
+1. Copy `migration/.env.migration.example` to `migration/.env.migration.test` and/or `migration/.env.migration.prod` and fill in values. Pass **`--env test`** or **`--env prod`** when running the scripts (this selects the file and the stage suffix for schemas). Schema base names should match your deploy `.env.deploy.*` file. If you still have a legacy `migration/.env.migration`, rename it to `.env.migration.test` or `.env.migration.prod` to match its stage.
 2. Install deps: `pip install -r migration/requirements.txt` (use a venv).
 
 ### Recommended order
 
-1. **`python migration/migrate_data.py`** — bootstrap admin schemas, copy data, create qsignups views, widen columns, optional encryption, optional in-run S3 image migration.
+1. **`python migration/migrate_data.py --env test`** (or **`--env prod`**) — bootstrap admin schemas, copy data, create qsignups views, widen columns, optional in-run field encryption (if `DB_ENCRYPTION_KEY` is set and valid length), optional in-run S3 image migration.
 2. **Deploy** (`./deploy.sh --env test|prod`) if you have not already — creates the image S3 bucket (slackblast stack). Use `.env.deploy.test` / `.env.deploy.prod` (see **Deploy (local)** below).
-3. **`python migration/migrate_images.py`** — if the bucket did not exist during step 1, run this after deploy with **`IMAGE_S3_BUCKET`** set in `.env.migration` to copy images and rewrite `beatdowns.json` URLs.
+3. **`python migration/migrate_images.py --env test`** (or **`--env prod`**) — if the bucket did not exist during step 1, run this after deploy with **`IMAGE_S3_BUCKET`** set in the matching `.env.migration.<env>` to copy images and rewrite `beatdowns.json` URLs.
 
 ### Artifacts
 
@@ -125,7 +132,7 @@ Reports/checkpoints are written under `migration/` (gitignored). After `migrate_
 1. Copy `.env.deploy.example` to `.env.deploy.test` (or `.env.deploy.prod`) and fill in all values.
 2. **First-time AWS / GitHub Actions (optional):** from the repo root, with `origin` pointing at your GitHub repo:
    - `./deploy.sh --env test --bootstrap` — creates/updates [`infra/template.bootstrap.yaml`](infra/template.bootstrap.yaml): GitHub OIDC provider (if needed), SAM artifact bucket, and an IAM role trusted for `repo:<owner>/<repo>:*`. When combined with a full deploy in the same command, SAM uses the bootstrap bucket for packaged artifacts.
-   - After a successful deploy: `./deploy.sh --env test --setup-github` — requires `gh auth login`; creates the GitHub **environment** named like `STAGE` (`test` or `prod`) and sets the same variables/secrets documented under **GitHub Environments** below.
+   - After a successful deploy: `./deploy.sh --env test --setup-github` — requires `gh auth login`; creates the GitHub **environment** named after **`--env`** (`test` or `prod`) and sets the same variables/secrets documented under **GitHub Environments** below.
    - You can combine flags, e.g. `./deploy.sh --env test --bootstrap --setup-github`.
 3. Deploy:
 
@@ -165,7 +172,9 @@ Create environments **`test`** and **`prod`** in your repo settings (or run `./d
 | `DATABASE_PORT` | All |
 | `DATABASE_USER` | All |
 | `DATABASE_PASSWORD` | All |
-| `DB_ENCRYPTION_KEY` | All |
+| `DB_ENCRYPTION_KEY` | All (min 16 characters) |
+| `PM_SLACK_TOKEN` | PAXminer |
+| `WB_SLACK_TOKEN` | Weaselbot |
 | `SB_SLACK_TOKEN` | slackblast |
 | `SB_SLACK_SIGNING_SECRET` | slackblast |
 | `SB_SLACK_CLIENT_SECRET` | slackblast |
@@ -183,11 +192,14 @@ Create environments **`test`** and **`prod`** in your repo settings (or run `./d
 |----------|---------|-------|
 | `STAGE` | `test` or `prod` | Must match SAM `StagesMap` keys |
 | `AWS_REGION` | `us-east-2` | |
+| `DATABASE_TLS_ENABLED` | `true` | Passed to all four stacks as `DatabaseTlsEnabled`; use `false` if your DB has no TLS |
 | `PAXMINER_SCHEMA` | `paxminer` | Bare name; workflow appends `_${STAGE}` to match migrated DB |
 | `WEASELBOT_SCHEMA` | `weaselbot` | Same |
 | `SLACKBLAST_SCHEMA` | `slackblast` | Same |
 | `QSIGNUPS_SCHEMA` | `qsignups` | Same |
 | `IMAGE_S3_BUCKET` | `slack-stack-images-prod` | Globally unique |
+| `F3_REGION_NAME` | `f3ttown` | Region key in `paxminer.regions`; regional schema `{F3_REGION_NAME}_${STAGE}` |
+| `F3_REGION_SLACK_TEAM_ID` | `T01234567` | Slack workspace Team ID (available to any app that needs it; Weaselbot uses it for `weaselbot.regions`) |
 
 ### AWS OIDC (one-time setup)
 
@@ -202,10 +214,20 @@ Create environments **`test`** and **`prod`** in your repo settings (or run `./d
 
 ## Database encryption
 
-Sensitive columns in the shared DB use **Fernet** symmetric encryption derived from **`DB_ENCRYPTION_KEY`** (see `common/encryption.py`). All four apps use the same key. Generate a key with:
+Sensitive columns in the shared DB are encrypted using **`DB_ENCRYPTION_KEY`** as a **passphrase** (see `common/encryption.py`). The code stretches that string with PBKDF2 and then uses Fernet for the actual ciphertext — you do **not** paste a raw Fernet key; any cryptographically random string of **at least 16 characters** is valid. Avoid placeholders like `123`.
+
+All four apps share one key per environment. The key is **required** for every deploy and at Lambda cold start.
+
+**Migration and deploy must match:** use the **exact same** `DB_ENCRYPTION_KEY` in `migration/.env.migration.test` (or `.prod`) and in `.env.deploy.test` / `.env.deploy.prod` for that stage. If migration encrypts data with one passphrase and deploy uses another, decrypts will fail.
+
+Ways to generate a strong random passphrase (pick one):
 
 ```bash
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+```bash
+openssl rand -base64 32
 ```
 
 ## S3 buckets

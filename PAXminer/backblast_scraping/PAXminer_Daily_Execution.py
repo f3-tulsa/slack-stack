@@ -20,6 +20,7 @@ os.chdir(dname)
 _PAX_ROOT = Path(__file__).resolve().parent.parent
 if str(_PAX_ROOT) not in sys.path:
     sys.path.insert(0, str(_PAX_ROOT))
+from common.encryption import decrypt_field
 from paxminer_db import connect_from_credentials_ini, paxminer_schema_from_ini
 
 # Set RegEx range for which regions will be queried. Command line input parameter 1 should be a regex range (e.g. A-M) which will search for all regions starting with A through M.
@@ -52,7 +53,7 @@ finally:
 
 for index, row in regions_df.iterrows():
     region = row['region']
-    key = row['slack_token']
+    key = decrypt_field(row['slack_token'])
     db = row['schema_name']
     print('Executing user updates for region ' + region)
     #os.system("./F3SlackUserLister.py " + db + " " + key)

@@ -10,7 +10,7 @@ Typical data captured per beatdown:
 
 - AO, date, Q / Co-Q, attendance, FNGs, and related metadata
 
-Each region usually has its own **schema** in the same database; registry rows in `paxminer.regions` point Lambdas at the right schema and Slack token (tokens may be encrypted at rest with `DB_ENCRYPTION_KEY`).
+Each region usually has its own **schema** in the same database; registry rows in `paxminer.regions` point Lambdas at the right schema and Slack token. Deploy passes **`PM_SLACK_TOKEN`**, **`F3_REGION_NAME`**, and **`STAGE`** via SAM; the Lambda **encrypts** the token with **`DB_ENCRYPTION_KEY`** and **upserts** it into `paxminer.regions` on cold start.
 
 ## Slack app manifest
 
@@ -26,7 +26,7 @@ Use **[manifest.json](manifest.json)** (JSON) when creating the Slack app. PAXmi
 | `database_management/` | User/channel sync helpers |
 | `common/encryption.py` | Same Fernet-style helpers as repo root `common/encryption.py` (packaged for this zip build) |
 
-Legacy **manual / cron** scripts under this tree may still read `slack_token` from the DB without decrypting; the **deployed Lambda path** uses `decrypt_field` where configured. Prefer running through SAM after encryption is enabled.
+Legacy **manual / cron** scripts under this tree may still read `slack_token` from the DB without decrypting; the **deployed Lambda path** uses `decrypt_field` and requires `DB_ENCRYPTION_KEY` (min 16 characters). Prefer running through SAM for production.
 
 ## License
 

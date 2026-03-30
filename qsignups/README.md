@@ -11,7 +11,7 @@ Use the OAuth install URL from your deployed API (CloudFormation output **`QSign
 ## Features
 
 - Home tab / slash commands for schedule and signups.
-- Google Calendar sync (OAuth tokens for `google_auth_data` are encrypted at rest when `DB_ENCRYPTION_KEY` is set).
+- Google Calendar sync (OAuth tokens for `google_auth_data` are encrypted at rest; `DB_ENCRYPTION_KEY` is required at deploy/runtime — see root README).
 
 ## CI/CD
 

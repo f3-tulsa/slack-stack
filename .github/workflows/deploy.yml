@@ -33,6 +33,19 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      - name: Validate DB_ENCRYPTION_KEY
+        env:
+          KEY: ${{ secrets.DB_ENCRYPTION_KEY }}
+        run: |
+          if [[ -z "$KEY" ]]; then
+            echo "::error::DB_ENCRYPTION_KEY secret is not set for this environment"
+            exit 1
+          fi
+          if [[ "${#KEY}" -lt 16 ]]; then
+            echo "::error::DB_ENCRYPTION_KEY must be at least 16 characters"
+            exit 1
+          fi
+
       # --- PAXminer (zip packaging) ---
       - name: Build PAXminer
         run: sam build -t PAXminer/template.yaml
@@ -48,8 +61,12 @@ jobs:
               DatabasePort=${{ secrets.DATABASE_PORT }} \
               DatabaseUser=${{ secrets.DATABASE_USER }} \
               DatabasePassword=${{ secrets.DATABASE_PASSWORD }} \
+              DatabaseTlsEnabled=${{ vars.DATABASE_TLS_ENABLED }} \
               DbEncryptionKey=${{ secrets.DB_ENCRYPTION_KEY }} \
-              PaxminerSchema=${{ vars.PAXMINER_SCHEMA }}_${{ vars.STAGE }}
+              PaxminerSchema=${{ vars.PAXMINER_SCHEMA }}_${{ vars.STAGE }} \
+              Stage=${{ vars.STAGE }} \
+              F3RegionName=${{ vars.F3_REGION_NAME }} \
+              PmSlackToken=${{ secrets.PM_SLACK_TOKEN }}
 
       # --- Weaselbot (container image) ---
       - name: Build Weaselbot
@@ -66,9 +83,14 @@ jobs:
               DatabasePort=${{ secrets.DATABASE_PORT }} \
               DatabaseUser=${{ secrets.DATABASE_USER }} \
               DatabasePassword=${{ secrets.DATABASE_PASSWORD }} \
+              DatabaseTlsEnabled=${{ vars.DATABASE_TLS_ENABLED }} \
               DbEncryptionKey=${{ secrets.DB_ENCRYPTION_KEY }} \
               PaxminerSchema=${{ vars.PAXMINER_SCHEMA }}_${{ vars.STAGE }} \
-              WeaselbotSchema=${{ vars.WEASELBOT_SCHEMA }}_${{ vars.STAGE }}
+              WeaselbotSchema=${{ vars.WEASELBOT_SCHEMA }}_${{ vars.STAGE }} \
+              Stage=${{ vars.STAGE }} \
+              F3RegionName=${{ vars.F3_REGION_NAME }} \
+              WbSlackToken=${{ secrets.WB_SLACK_TOKEN }} \
+              F3RegionSlackTeamId=${{ vars.F3_REGION_SLACK_TEAM_ID }}
 
       # --- slackblast ---
       - name: Build slackblast
@@ -86,6 +108,7 @@ jobs:
               DatabasePort=${{ secrets.DATABASE_PORT }} \
               DatabaseUser=${{ secrets.DATABASE_USER }} \
               DatabasePassword=${{ secrets.DATABASE_PASSWORD }} \
+              DatabaseTlsEnabled=${{ vars.DATABASE_TLS_ENABLED }} \
               DatabaseSchema=${{ vars.SLACKBLAST_SCHEMA }}_${{ vars.STAGE }} \
               PaxminerSchema=${{ vars.PAXMINER_SCHEMA }}_${{ vars.STAGE }} \
               SlackToken=${{ secrets.SB_SLACK_TOKEN }} \
@@ -112,6 +135,7 @@ jobs:
               DatabasePort=${{ secrets.DATABASE_PORT }} \
               DatabaseUser=${{ secrets.DATABASE_USER }} \
               DatabasePassword=${{ secrets.DATABASE_PASSWORD }} \
+              DatabaseTlsEnabled=${{ vars.DATABASE_TLS_ENABLED }} \
               DatabaseSchema=${{ vars.QSIGNUPS_SCHEMA }}_${{ vars.STAGE }} \
               SlackToken=${{ secrets.QS_SLACK_TOKEN }} \
               SlackSigningSecret=${{ secrets.QS_SLACK_SIGNING_SECRET }} \

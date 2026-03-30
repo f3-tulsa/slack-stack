@@ -1,7 +1,7 @@
 {
   "display_information": {
     "name": "PAXMiner",
-    "description": "Slack app that assists F3 regions in collecting backblasts, managing their PAXminer DB, and sending monthly charts",
+    "description": "Manage F3 Region PAX data and send monthly charts.",
     "background_color": "#2c2d30"
   },
   "features": {

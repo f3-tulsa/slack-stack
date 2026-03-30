@@ -27,7 +27,7 @@ def send(client: WebClient, body: dict, logger: Logger, context: dict, region_re
                 send_channel = paxminer_dict.get(region.paxminer_schema)
                 if send_channel:
                     print(f"Sending message to {region.workspace_name}")
-                    client = WebClient(token=decrypt_field(region.bot_token) or region.bot_token)
+                    client = WebClient(token=decrypt_field(region.bot_token))
                     try:
                         client.chat_postMessage(channel=send_channel, text=msg.format(region=region.workspace_name))
                         print("Message sent!")

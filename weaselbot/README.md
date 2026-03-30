@@ -15,9 +15,9 @@ This app lives in the **[slack-stack](../README.md)** monorepo. It is deployed a
 
 ## Slack app manifest
 
-Create an app at [api.slack.com/apps](https://api.slack.com/apps/) from **[manifest.json](manifest.json)** (JSON), then install to your workspace and store the **bot token** securely (database + encryption as per root README). Weaselbot has no HTTP endpoints in SAM; the manifest has no request URLs. After `./deploy.sh`, a copy is written as **`manifest-{test|prod}.json`** (gitignored).
+Create an app at [api.slack.com/apps](https://api.slack.com/apps/) from **[manifest.json](manifest.json)** (JSON), then install to your workspace. Deploy passes **`WB_SLACK_TOKEN`**, **`F3_REGION_SLACK_TEAM_ID`**, **`F3_REGION_NAME`**, and **`STAGE`**; the Lambda **encrypts** the token and **upserts** into **`weaselbot.regions`** on cold start (see root README). Weaselbot has no HTTP endpoints in SAM; the manifest has no request URLs. After `./deploy.sh`, a copy is written as **`manifest-{test|prod}.json`** (gitignored).
 
-Wire achievements to a channel (e.g. `#achievements-unlocked`), configure region rows in **`weaselbot.regions`** and related PAXminer schema per your DBA/runbook.
+Wire achievements to a channel (e.g. `#achievements-unlocked`); tune **`weaselbot.regions`** (e.g. `achievement_channel`) and related PAXminer schema per your runbook.
 
 ## Local development
 

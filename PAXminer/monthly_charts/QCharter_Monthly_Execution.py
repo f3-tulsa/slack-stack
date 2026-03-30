@@ -20,6 +20,7 @@ os.chdir(dname)
 _PAX_ROOT = Path(__file__).resolve().parent.parent
 if str(_PAX_ROOT) not in sys.path:
     sys.path.insert(0, str(_PAX_ROOT))
+from common.encryption import decrypt_field
 from paxminer_db import connect_from_credentials_ini, paxminer_schema_from_ini
 
 _ini = _PAX_ROOT / "config" / "credentials.ini"
@@ -42,7 +43,7 @@ finally:
 
 for index, row in regions_df.iterrows():
     region = row['region']
-    key = row['slack_token']
+    key = decrypt_field(row['slack_token'])
     db = row['schema_name']
     firstf = row['firstf_channel']
     #firstf = 'U0187M4NWG4' # <--- Use this if sending a test msg to a specific user

@@ -67,10 +67,10 @@ Parameters:
     Type: String
     Default: "paxminer"
   DbEncryptionKey:
-    Description: Passphrase for DB field encryption (tokens, email password, Strava); maps to DB_ENCRYPTION_KEY
+    Description: Required passphrase for DB field encryption (tokens, email password, Strava); maps to DB_ENCRYPTION_KEY. Min 16 chars.
     Type: String
-    Default: ""
     NoEcho: true
+    MinLength: 16
   StravaClientID:
     Description: Strava Client ID
     Type: String

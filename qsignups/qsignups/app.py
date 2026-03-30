@@ -29,6 +29,9 @@ from slack.handlers import (
     ao as ao_handler,
 )
 from slack import actions, inputs
+from field_encryption import require_encryption_key
+
+require_encryption_key()
 
 
 def get_oauth_flow():

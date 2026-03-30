@@ -2,12 +2,13 @@
 """
 Copy backblast images from stored public URLs into IMAGE_S3_BUCKET and rewrite URLs in beatdowns.json.
 
-Target DB only (no source RDS). Uses migration/.env.migration: TARGET_*, STAGE, schema names, IMAGE_S3_BUCKET.
+Target DB only (no source RDS). Uses migration/.env.migration.<env> (see --env): TARGET_*, schema names, IMAGE_S3_BUCKET.
 
 Run after deploy creates the bucket. Idempotent (skips URLs already on the new bucket).
 """
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
@@ -28,9 +29,6 @@ from migrate_data import (  # noqa: E402
     default_schema_map,
     post_migration_s3_images,
 )
-
-_ENV_FILE = _MIG_DIR / ".env.migration"
-load_dotenv(_ENV_FILE)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -75,14 +73,29 @@ def _connect_kwargs(
 
 
 def main() -> int:
-    stage = os.environ.get("STAGE", "").strip()
-    if stage not in ("test", "prod"):
-        LOG.error("STAGE must be 'test' or 'prod' in .env.migration (got %r)", stage)
+    parser = argparse.ArgumentParser(description="Migrate backblast images to S3")
+    parser.add_argument(
+        "--env",
+        required=True,
+        choices=["test", "prod"],
+        help="Environment: loads migration/.env.migration.<env> (same idea as deploy.sh --env)",
+    )
+    args = parser.parse_args()
+
+    env_file = _MIG_DIR / f".env.migration.{args.env}"
+    if not env_file.is_file():
+        LOG.error(
+            "Missing %s — copy from .env.migration.example to .env.migration.test or .env.migration.prod.",
+            env_file,
+        )
         return 1
+    load_dotenv(env_file)
+    stage = args.env
+    os.environ["STAGE"] = stage
 
     bucket = (os.environ.get("IMAGE_S3_BUCKET") or "").strip()
     if not bucket:
-        LOG.error("Set IMAGE_S3_BUCKET in .env.migration")
+        LOG.error("Set IMAGE_S3_BUCKET in .env.migration.%s", args.env)
         return 1
 
     host = os.environ["TARGET_HOST"]

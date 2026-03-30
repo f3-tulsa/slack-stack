@@ -10,6 +10,33 @@ import json
 import logging
 import traceback
 
+import os
+
+from common.encryption import require_encryption_key
+
+require_encryption_key()
+
+
+def _try_bootstrap_weaselbot_slack_token() -> None:
+    f3 = os.environ.get("F3_REGION_NAME", "").strip()
+    st = os.environ.get("STAGE", "").strip()
+    wb_schema = os.environ.get("WEASELBOT_SCHEMA", "").strip()
+    team = os.environ.get("F3_REGION_SLACK_TEAM_ID", "").strip()
+    tok = os.environ.get("WB_SLACK_TOKEN", "").strip()
+    if not (f3 and st and wb_schema and team and tok):
+        return
+    from common.token_bootstrap import upsert_weaselbot_slack_token
+
+    upsert_weaselbot_slack_token(
+        weaselbot_schema=wb_schema,
+        team_id=team,
+        paxminer_regional_schema=f"{f3}_{st}",
+        plaintext_token=tok,
+    )
+
+
+_try_bootstrap_weaselbot_slack_token()
+
 
 def achievements_handler(event, context):
     logging.basicConfig(

@@ -31,7 +31,7 @@ Options:
   --build-only
   --confirm              prompt for SAM changeset confirmation
   --bootstrap            deploy infra/template.bootstrap.yaml (OIDC + SAM artifact bucket), then continue
-  --setup-github         create/update GitHub environment \$STAGE with vars/secrets from this env file (needs gh CLI)
+  --setup-github         create/update GitHub environment (same name as --env) with vars/secrets from this env file (needs gh CLI)
 
 Env file: .env.deploy.<env>  (copy from .env.deploy.example)
 EOF
@@ -85,6 +85,15 @@ fi
 set -a
 source "$ENV_FILE"
 set +a
+
+case "$ENV_NAME" in
+  test|prod) ;;
+  *)
+    echo "Error: --env must be test or prod (got '$ENV_NAME')" >&2
+    exit 1
+    ;;
+esac
+export STAGE="$ENV_NAME"
 
 BOOTSTRAP_STACK_NAME="${BOOTSTRAP_STACK_NAME:-slack-stack-bootstrap}"
 CREATE_OIDC_PROVIDER="${CREATE_OIDC_PROVIDER:-true}"
@@ -220,6 +229,9 @@ run_setup_github() {
   gh variable set SLACKBLAST_SCHEMA --env "$STAGE" --body "$SLACKBLAST_SCHEMA" -R "$repo"
   gh variable set QSIGNUPS_SCHEMA --env "$STAGE" --body "$QSIGNUPS_SCHEMA" -R "$repo"
   gh variable set IMAGE_S3_BUCKET --env "$STAGE" --body "$IMAGE_S3_BUCKET" -R "$repo"
+  gh variable set DATABASE_TLS_ENABLED --env "$STAGE" --body "$DATABASE_TLS_ENABLED" -R "$repo"
+  gh variable set F3_REGION_NAME --env "$STAGE" --body "$F3_REGION_NAME" -R "$repo"
+  gh variable set F3_REGION_SLACK_TEAM_ID --env "$STAGE" --body "$F3_REGION_SLACK_TEAM_ID" -R "$repo"
   echo "Set GitHub Actions variables for environment '$STAGE'."
 
   gh secret set AWS_ROLE_ARN --env "$STAGE" --body "$role_arn" -R "$repo"
@@ -228,6 +240,8 @@ run_setup_github() {
   gh secret set DATABASE_USER --env "$STAGE" --body "$DATABASE_USER" -R "$repo"
   gh secret set DATABASE_PASSWORD --env "$STAGE" --body "$DATABASE_PASSWORD" -R "$repo"
   gh secret set DB_ENCRYPTION_KEY --env "$STAGE" --body "$DB_ENCRYPTION_KEY" -R "$repo"
+  gh secret set PM_SLACK_TOKEN --env "$STAGE" --body "$PM_SLACK_TOKEN" -R "$repo"
+  gh secret set WB_SLACK_TOKEN --env "$STAGE" --body "$WB_SLACK_TOKEN" -R "$repo"
   gh secret set SB_SLACK_TOKEN --env "$STAGE" --body "$SB_SLACK_TOKEN" -R "$repo"
   gh secret set SB_SLACK_SIGNING_SECRET --env "$STAGE" --body "$SB_SLACK_SIGNING_SECRET" -R "$repo"
   gh secret set SB_SLACK_CLIENT_SECRET --env "$STAGE" --body "$SB_SLACK_CLIENT_SECRET" -R "$repo"
@@ -236,13 +250,12 @@ run_setup_github() {
   gh secret set QS_SLACK_TOKEN --env "$STAGE" --body "$QS_SLACK_TOKEN" -R "$repo"
   gh secret set QS_SLACK_SIGNING_SECRET --env "$STAGE" --body "$QS_SLACK_SIGNING_SECRET" -R "$repo"
   gh secret set QS_SLACK_CLIENT_SECRET --env "$STAGE" --body "$QS_SLACK_CLIENT_SECRET" -R "$repo"
-  gh secret set QS_GOOGLE_CLIENT_ID --env "$STAGE" --body "$QS_GOOGLE_CLIENT_ID" -R "$repo"
-  gh secret set QS_GOOGLE_CLIENT_SECRET --env "$STAGE" --body "$QS_GOOGLE_CLIENT_SECRET" -R "$repo"
+  [[ -n "${QS_GOOGLE_CLIENT_ID:-}" ]] && gh secret set QS_GOOGLE_CLIENT_ID --env "$STAGE" --body "$QS_GOOGLE_CLIENT_ID" -R "$repo"
+  [[ -n "${QS_GOOGLE_CLIENT_SECRET:-}" ]] && gh secret set QS_GOOGLE_CLIENT_SECRET --env "$STAGE" --body "$QS_GOOGLE_CLIENT_SECRET" -R "$repo"
   echo "Set GitHub Actions secrets for environment '$STAGE'."
 }
 
 : "${AWS_REGION:?Set AWS_REGION in $ENV_FILE}"
-: "${STAGE:?Set STAGE (test or prod) in $ENV_FILE}"
 
 require_cmd aws
 require_cmd sam
@@ -267,7 +280,12 @@ fi
 : "${DATABASE_PORT:?}"
 : "${DATABASE_USER:?}"
 : "${DATABASE_PASSWORD:?}"
+: "${DATABASE_TLS_ENABLED:?}"
 : "${DB_ENCRYPTION_KEY:?}"
+if [[ "${#DB_ENCRYPTION_KEY}" -lt 16 ]]; then
+  echo "ERROR: DB_ENCRYPTION_KEY must be at least 16 characters (got ${#DB_ENCRYPTION_KEY})" >&2
+  exit 1
+fi
 : "${PAXMINER_SCHEMA:?}"
 : "${WEASELBOT_SCHEMA:?}"
 : "${SLACKBLAST_SCHEMA:?}"
@@ -283,8 +301,11 @@ fi
 : "${QS_SLACK_TOKEN:?}"
 : "${QS_SLACK_SIGNING_SECRET:?}"
 : "${QS_SLACK_CLIENT_SECRET:?}"
-: "${QS_GOOGLE_CLIENT_ID:?}"
-: "${QS_GOOGLE_CLIENT_SECRET:?}"
+
+: "${F3_REGION_NAME:?}"
+: "${PM_SLACK_TOKEN:?}"
+: "${WB_SLACK_TOKEN:?}"
+: "${F3_REGION_SLACK_TEAM_ID:?}"
 
 export AWS_DEFAULT_REGION="${AWS_REGION}"
 
@@ -392,8 +413,12 @@ deploy_paxminer() {
       "DatabasePort=${DATABASE_PORT}" \
       "DatabaseUser=${DATABASE_USER}" \
       "DatabasePassword=${DATABASE_PASSWORD}" \
+      "DatabaseTlsEnabled=${DATABASE_TLS_ENABLED}" \
       "DbEncryptionKey=${DB_ENCRYPTION_KEY}" \
       "PaxminerSchema=${PAXMINER_SCHEMA}_${STAGE}" \
+      "Stage=${STAGE}" \
+      "F3RegionName=${F3_REGION_NAME}" \
+      "PmSlackToken=${PM_SLACK_TOKEN}" \
     2>&1 | tee -a "$RECEIPT_FILE"
   return "${PIPESTATUS[0]}"
 }
@@ -413,9 +438,14 @@ deploy_weaselbot() {
       "DatabasePort=${DATABASE_PORT}" \
       "DatabaseUser=${DATABASE_USER}" \
       "DatabasePassword=${DATABASE_PASSWORD}" \
+      "DatabaseTlsEnabled=${DATABASE_TLS_ENABLED}" \
       "DbEncryptionKey=${DB_ENCRYPTION_KEY}" \
       "PaxminerSchema=${PAXMINER_SCHEMA}_${STAGE}" \
       "WeaselbotSchema=${WEASELBOT_SCHEMA}_${STAGE}" \
+      "Stage=${STAGE}" \
+      "F3RegionName=${F3_REGION_NAME}" \
+      "WbSlackToken=${WB_SLACK_TOKEN}" \
+      "F3RegionSlackTeamId=${F3_REGION_SLACK_TEAM_ID}" \
     2>&1 | tee -a "$RECEIPT_FILE"
   return "${PIPESTATUS[0]}"
 }
@@ -435,6 +465,7 @@ deploy_slackblast() {
       "DatabasePort=${DATABASE_PORT}" \
       "DatabaseUser=${DATABASE_USER}" \
       "DatabasePassword=${DATABASE_PASSWORD}" \
+      "DatabaseTlsEnabled=${DATABASE_TLS_ENABLED}" \
       "DatabaseSchema=${SLACKBLAST_SCHEMA}_${STAGE}" \
       "PaxminerSchema=${PAXMINER_SCHEMA}_${STAGE}" \
       "SlackToken=${SB_SLACK_TOKEN}" \
@@ -463,6 +494,7 @@ deploy_qsignups() {
       "DatabasePort=${DATABASE_PORT}" \
       "DatabaseUser=${DATABASE_USER}" \
       "DatabasePassword=${DATABASE_PASSWORD}" \
+      "DatabaseTlsEnabled=${DATABASE_TLS_ENABLED}" \
       "DatabaseSchema=${QSIGNUPS_SCHEMA}_${STAGE}" \
       "SlackToken=${QS_SLACK_TOKEN}" \
       "SlackSigningSecret=${QS_SLACK_SIGNING_SECRET}" \

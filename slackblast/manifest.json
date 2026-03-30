@@ -1,12 +1,12 @@
 {
   "display_information": {
-    "name": "slackblast",
-    "description": "Backblast and preblast forms for Slack",
+    "name": "Slackblast",
+    "description": "F3 Backblast and Preblast forms for Slack.",
     "background_color": "#000000"
   },
   "features": {
     "bot_user": {
-      "display_name": "slackblast",
+      "display_name": "Slackblast",
       "always_online": true
     },
     "slash_commands": [

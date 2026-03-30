@@ -4,7 +4,7 @@
     "minor_version": 1
   },
   "display_information": {
-    "name": "F3 Q Signup",
+    "name": "QSignups",
     "description": "Manage your F3 Region Schedule.",
     "background_color": "#2200AA"
   },
@@ -27,7 +27,7 @@
       "messages_tab_read_only_enabled": false
     },
     "bot_user": {
-      "display_name": "Q Signup"
+      "display_name": "QSignups"
     },
     "slash_commands": [
       {

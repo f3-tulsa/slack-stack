@@ -29,6 +29,7 @@ ENV/
 .env
 .env.*
 !.env.deploy.example
+.env.migration.*
 !.env.migration.example
 .env-prod
 .env.test
@@ -40,7 +41,6 @@ credentials.json
 token.pickle
 client_secret*.json
 secrets/
-.env.migration
 *.pem
 *.key
 samconfig.toml
