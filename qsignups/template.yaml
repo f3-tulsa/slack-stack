@@ -199,9 +199,7 @@ Resources:
   QSignupsLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub
-        - "/aws/lambda/${FnName}"
-        - FnName: !GetAtt QSignupsFunction.Name
+      LogGroupName: !Sub "/aws/lambda/${QSignupsFunction}"
       RetentionInDays: 30
 
 Outputs:

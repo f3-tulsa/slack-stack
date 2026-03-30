@@ -19,7 +19,9 @@ ADMIN_DATABASE_SCHEMA = "ADMIN_DATABASE_SCHEMA"
 STRAVA_CLIENT_ID = "STRAVA_CLIENT_ID"
 STRAVA_CLIENT_SECRET = "STRAVA_CLIENT_SECRET"
 
-LOCAL_DEVELOPMENT = os.environ.get(SLACK_BOT_TOKEN, "123") != "123"
+# True only when running outside Lambda (local dev). In Lambda, AWS_LAMBDA_FUNCTION_NAME is always set.
+# Previously this checked SLACK_BOT_TOKEN != "123", which was True in Lambda -- backwards.
+LOCAL_DEVELOPMENT = not os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
 
 CONFIG_DESTINATION_AO = {"name": "The AO Channel", "value": "ao_channel"}
 CONFIG_DESTINATION_CURRENT = {"name": "Current Channel", "value": "current_channel"}

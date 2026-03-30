@@ -1,13 +1,13 @@
-# slack-stack
+# F3 Slack Stack
 
-Monorepo for four AWS Lambda / SAM applications that share a MySQL/TiDB database:
+Monorepo for four Slack applications used by F3 Regions, intended to run on AWS and share a MySQL/TiDB database:
 
 | App | Role |
 |-----|------|
-| **PAXminer** | Backblast scraping, attendance, monthly charts |
-| **Weaselbot** | Achievements and Kotter reports |
-| **slackblast** | Backblasts, preblasts, Strava, email |
-| **qsignups** | Q signups, Google Calendar |
+| **PAXminer** | Attendance and Monthly Charts |
+| **Weaselbot** | Achievements and Kotter Reports |
+| **slackblast** | Preblasts and Backblasts |
+| **qsignups** | Region Schedule |
 
 Each app has its own SAM template under its directory; deploy order is flexible (no hard dependency between stacks at deploy time).
 

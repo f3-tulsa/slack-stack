@@ -198,9 +198,7 @@ Resources:
   SlackblastLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub
-        - "/aws/lambda/${FnName}"
-        - FnName: !GetAtt SlackblastFunction.Name
+      LogGroupName: !Sub "/aws/lambda/${SlackblastFunction}"
       RetentionInDays: 30
 
 Outputs:
