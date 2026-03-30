@@ -2,6 +2,9 @@
 """
 Migrate MySQL schemas from source RDS to TiDB with schema renaming, resilience, and view recreation.
 
+Also bootstraps paxminer/slackblast/weaselbot admin schemas on the target, recreates qsignups vw_* views,
+and widens encrypted token columns before optional Fernet encryption.
+
 Read-only on source. Uses exponential backoff on connection errors.
 """
 from __future__ import annotations
@@ -275,26 +278,29 @@ def with_retry(fn, operation_name: str):
     raise last_exc
 
 
+# Source schemas the migration user can read (national RDS). paxminer/slackblast/weaselbot
+# are bootstrapped on the target at the start of this script (no source read access).
+F3STCHARLES_SOURCE = "f3stcharles"
+
+TOKEN_VARCHAR_LEN = 512
+
+
 def default_schema_map(env_suffix: str) -> dict[str, str]:
-    pm = os.environ.get("PAXMINER_SCHEMA", "paxminer")
-    wb = os.environ.get("WEASELBOT_SCHEMA", "weaselbot")
-    sb = os.environ.get("SLACKBLAST_SCHEMA", "slackblast")
     qs = os.environ.get("QSIGNUPS_SCHEMA", "qsignups")
     return {
-        "paxminer": f"{pm}_{env_suffix}",
         "f3ttown": f"f3ttown_{env_suffix}",
         "f3scissortail": f"f3scissortail_{env_suffix}",
-        "f3stcharles": f"{qs}_{env_suffix}",
-        "slackblast": f"{sb}_{env_suffix}",
-        "weaselbot": f"{wb}_{env_suffix}",
+        F3STCHARLES_SOURCE: f"{qs}_{env_suffix}",
     }
 
 
-def region_name_rewrites(env_suffix: str) -> dict[str, str]:
-    return {
-        "f3ttown": f"f3ttown_{env_suffix}",
-        "f3scissortail": f"f3scissortail_{env_suffix}",
-    }
+def target_admin_schema_names(stage: str) -> tuple[str, str, str, str]:
+    """Target DB names: paxminer, slackblast, weaselbot, qsignups (with stage suffix)."""
+    pm = os.environ.get("PAXMINER_SCHEMA", "paxminer").strip()
+    sb = os.environ.get("SLACKBLAST_SCHEMA", "slackblast").strip()
+    wb = os.environ.get("WEASELBOT_SCHEMA", "weaselbot").strip()
+    qs = os.environ.get("QSIGNUPS_SCHEMA", "qsignups").strip()
+    return f"{pm}_{stage}", f"{sb}_{stage}", f"{wb}_{stage}", f"{qs}_{stage}"
 
 
 def _row_get(row: dict, *keys: str) -> str:
@@ -421,7 +427,310 @@ def _table_exists(cur, schema: str, table: str) -> bool:
     return cur.fetchone() is not None
 
 
-def post_migration_encrypt_secrets(conn, schema_map: dict[str, str], report: dict) -> None:
+def _ddl_paxminer_regions(schema: str) -> str:
+    return f"""
+CREATE TABLE IF NOT EXISTS `{schema}`.`regions` (
+  `region` varchar(45) NOT NULL,
+  `slack_token` varchar(512) NOT NULL,
+  `schema_name` varchar(45) DEFAULT NULL,
+  `active` tinyint DEFAULT 1,
+  `firstf_channel` varchar(45) DEFAULT NULL,
+  `contact` varchar(45) DEFAULT NULL,
+  `send_pax_charts` tinyint DEFAULT 0,
+  `send_ao_leaderboard` tinyint DEFAULT 0,
+  `send_q_charts` tinyint DEFAULT 0,
+  `send_region_leaderboard` tinyint DEFAULT 0,
+  `scrape_backblasts` tinyint DEFAULT 0,
+  `comments` text,
+  PRIMARY KEY (`region`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+"""
+
+
+def _ddl_slackblast_regions(schema: str) -> str:
+    return f"""
+CREATE TABLE IF NOT EXISTS `{schema}`.`regions` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `team_id` varchar(100) NOT NULL,
+  `workspace_name` varchar(100) DEFAULT NULL,
+  `bot_token` varchar(512) DEFAULT NULL,
+  `paxminer_schema` varchar(100) DEFAULT NULL,
+  `email_enabled` tinyint(1) DEFAULT 0,
+  `email_server` varchar(100) DEFAULT NULL,
+  `email_server_port` int DEFAULT NULL,
+  `email_user` varchar(100) DEFAULT NULL,
+  `email_password` longtext,
+  `email_to` varchar(100) DEFAULT NULL,
+  `email_option_show` tinyint(1) DEFAULT 0,
+  `postie_format` tinyint(1) DEFAULT 1,
+  `editing_locked` tinyint(1) DEFAULT 0,
+  `default_destination` varchar(30) DEFAULT 'ao_channel',
+  `backblast_moleskin_template` json DEFAULT NULL,
+  `preblast_moleskin_template` json DEFAULT NULL,
+  `strava_enabled` tinyint(1) DEFAULT 1,
+  `custom_fields` json DEFAULT NULL,
+  `welcome_dm_enable` tinyint DEFAULT NULL,
+  `welcome_dm_template` json DEFAULT NULL,
+  `welcome_channel_enable` tinyint DEFAULT NULL,
+  `welcome_channel` varchar(100) DEFAULT NULL,
+  `send_achievements` tinyint(1) DEFAULT 1,
+  `send_aoq_reports` tinyint(1) DEFAULT 1,
+  `achievement_channel` varchar(100) DEFAULT NULL,
+  `default_siteq` varchar(45) DEFAULT NULL,
+  `NO_POST_THRESHOLD` int DEFAULT 2,
+  `REMINDER_WEEKS` int DEFAULT 2,
+  `HOME_AO_CAPTURE` int DEFAULT 8,
+  `NO_Q_THRESHOLD_WEEKS` int DEFAULT 4,
+  `NO_Q_THRESHOLD_POSTS` int DEFAULT 4,
+  `created` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+"""
+
+
+def _ddl_weaselbot_regions(schema: str) -> str:
+    return f"""
+CREATE TABLE IF NOT EXISTS `{schema}`.`regions` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `team_id` varchar(100) NOT NULL,
+  `workspace_name` varchar(100) DEFAULT NULL,
+  `slack_token` varchar(512) DEFAULT NULL,
+  `paxminer_schema` varchar(100) DEFAULT NULL,
+  `email_enabled` tinyint(1) DEFAULT 0,
+  `email_server` varchar(100) DEFAULT NULL,
+  `email_server_port` int DEFAULT NULL,
+  `email_user` varchar(100) DEFAULT NULL,
+  `email_password` longtext,
+  `email_to` varchar(100) DEFAULT NULL,
+  `email_option_show` tinyint(1) DEFAULT 0,
+  `postie_format` tinyint(1) DEFAULT 1,
+  `editing_locked` tinyint(1) DEFAULT 0,
+  `default_destination` varchar(30) DEFAULT 'ao_channel',
+  `backblast_moleskin_template` json DEFAULT NULL,
+  `preblast_moleskin_template` json DEFAULT NULL,
+  `strava_enabled` tinyint(1) DEFAULT 1,
+  `custom_fields` json DEFAULT NULL,
+  `welcome_dm_enable` tinyint DEFAULT NULL,
+  `welcome_dm_template` json DEFAULT NULL,
+  `welcome_channel_enable` tinyint DEFAULT NULL,
+  `welcome_channel` varchar(100) DEFAULT NULL,
+  `send_achievements` tinyint(1) DEFAULT 1,
+  `send_aoq_reports` tinyint(1) DEFAULT 1,
+  `achievement_channel` varchar(100) DEFAULT NULL,
+  `default_siteq` varchar(45) DEFAULT NULL,
+  `NO_POST_THRESHOLD` int DEFAULT 2,
+  `REMINDER_WEEKS` int DEFAULT 2,
+  `HOME_AO_CAPTURE` int DEFAULT 8,
+  `NO_Q_THRESHOLD_WEEKS` int DEFAULT 4,
+  `NO_Q_THRESHOLD_POSTS` int DEFAULT 4,
+  `created` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+"""
+
+
+def _ddl_slackblast_users(schema: str) -> str:
+    return f"""
+CREATE TABLE IF NOT EXISTS `{schema}`.`slackblast_users` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `team_id` varchar(100) DEFAULT NULL,
+  `user_id` varchar(100) DEFAULT NULL,
+  `strava_access_token` varchar(512) DEFAULT NULL,
+  `strava_refresh_token` varchar(512) DEFAULT NULL,
+  `strava_expires_at` datetime DEFAULT NULL,
+  `strava_athlete_id` int DEFAULT NULL,
+  `created` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+"""
+
+
+def pre_migration_bootstrap_schemas(conn: Any, stage: str) -> None:
+    pm_s, sb_s, wb_s, _ = target_admin_schema_names(stage)
+    f3ttown = f"f3ttown_{stage}"
+    f3sci = f"f3scissortail_{stage}"
+    with conn.cursor() as cur:
+        for db in (pm_s, sb_s, wb_s):
+            cur.execute(f"CREATE DATABASE IF NOT EXISTS `{db}`")
+        conn.commit()
+        cur.execute(_ddl_paxminer_regions(pm_s))
+        cur.execute(_ddl_slackblast_regions(sb_s))
+        cur.execute(_ddl_slackblast_users(sb_s))
+        cur.execute(_ddl_weaselbot_regions(wb_s))
+        conn.commit()
+        cur.execute(
+            f"SELECT COUNT(*) AS seed_cnt FROM `{pm_s}`.`regions` WHERE `schema_name` IN (%s, %s)",
+            (f3ttown, f3sci),
+        )
+        row = cur.fetchone()
+        n = int(_row_get(row, "seed_cnt", "SEED_CNT") or 0)
+        if n == 0:
+            cur.execute(
+                f"""
+                INSERT INTO `{pm_s}`.`regions`
+                (`region`, `slack_token`, `schema_name`, `active`)
+                VALUES
+                (%s, 'PLACEHOLDER', %s, 1),
+                (%s, 'PLACEHOLDER', %s, 1)
+                """,
+                ("f3ttown", f3ttown, "f3scissortail", f3sci),
+            )
+            LOG.info("Inserted placeholder paxminer.regions rows for %s and %s", f3ttown, f3sci)
+        else:
+            LOG.info("Skipping seed: paxminer.regions already has rows for target schemas")
+        conn.commit()
+    LOG.info("Bootstrap complete: %s, %s, %s", pm_s, sb_s, wb_s)
+
+
+def _q_signups(schema: str, name: str) -> str:
+    return f"`{schema}`.`{name}`"
+
+
+def _ddl_vw_weekly_events(schema: str) -> str:
+    w, a = _q_signups(schema, "qsignups_weekly"), _q_signups(schema, "qsignups_aos")
+    return f"""
+CREATE OR REPLACE VIEW {_q_signups(schema, "vw_weekly_events")} AS
+SELECT w.*, a.ao_display_name
+FROM {w} w
+INNER JOIN {a} a
+ON w.ao_channel_id = a.ao_channel_id AND w.team_id = a.team_id
+ORDER BY REPLACE(ao_display_name, 'The ', ''),
+  FIELD(event_day_of_week, 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'),
+  event_time
+""".strip()
+
+
+def _ddl_vw_aos_sort(schema: str) -> str:
+    t = _q_signups(schema, "qsignups_aos")
+    return f"""
+CREATE OR REPLACE VIEW {_q_signups(schema, "vw_aos_sort")} AS
+SELECT *
+FROM {t}
+ORDER BY REPLACE(ao_display_name, 'The ', '')
+""".strip()
+
+
+def _ddl_vw_master_events(schema: str) -> str:
+    m, a = _q_signups(schema, "qsignups_master"), _q_signups(schema, "qsignups_aos")
+    return f"""
+CREATE OR REPLACE VIEW {_q_signups(schema, "vw_master_events")} AS
+SELECT m.*, a.ao_display_name, a.ao_location_subtitle
+FROM {m} m
+LEFT JOIN {a} a
+ON m.team_id = a.team_id
+  AND m.ao_channel_id = a.ao_channel_id
+ORDER BY m.event_date, m.event_time
+""".strip()
+
+
+def post_migration_create_qsignups_views(conn: Any, qsignups_schema: str, report: dict[str, Any]) -> None:
+    required = ("qsignups_weekly", "qsignups_aos", "qsignups_master")
+    with conn.cursor(DictCursor) as cur:
+        if not all(_table_exists(cur, qsignups_schema, t) for t in required):
+            LOG.info(
+                "Skipping qsignups views: missing base tables on %s (need %s)",
+                qsignups_schema,
+                ", ".join(required),
+            )
+            return
+    try:
+        for view_name, ddl in (
+            ("vw_weekly_events", _ddl_vw_weekly_events(qsignups_schema)),
+            ("vw_aos_sort", _ddl_vw_aos_sort(qsignups_schema)),
+            ("vw_master_events", _ddl_vw_master_events(qsignups_schema)),
+        ):
+            LOG.info("Creating view %s.%s", qsignups_schema, view_name)
+            with conn.cursor() as c:
+                c.execute(ddl)
+            conn.commit()
+    except Exception as e:
+        report["fixups_errors"].append({"operation": "qsignups views", "error": str(e)})
+        LOG.exception("Failed to create qsignups views on %s", qsignups_schema)
+
+
+def _column_meta(cur, schema: str, table: str, column: str) -> tuple[str | None, int | None]:
+    cur.execute(
+        """
+        SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, COLUMN_TYPE
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s AND COLUMN_NAME=%s
+        """,
+        (schema, table, column),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None, None
+    dt = _row_get(row, "DATA_TYPE", "data_type")
+    maxlen = row.get("CHARACTER_MAXIMUM_LENGTH") or row.get("character_maximum_length")
+    return (str(dt).lower() if dt else None), (int(maxlen) if maxlen is not None else None)
+
+
+def _widen_varchar_column(cur, conn, schema: str, table: str, column: str) -> None:
+    if not _table_exists(cur, schema, table):
+        LOG.info("Skip widen %s.%s.%s (no table)", schema, table, column)
+        return
+    dt, maxlen = _column_meta(cur, schema, table, column)
+    if dt is None:
+        LOG.info("Skip widen %s.%s.%s (no column)", schema, table, column)
+        return
+    if dt in ("text", "mediumtext", "longtext", "blob", "mediumblob", "longblob", "json"):
+        LOG.info("Skip widen %s.%s.%s (already %s)", schema, table, column, dt)
+        return
+    if dt == "varchar" and maxlen is not None and maxlen >= TOKEN_VARCHAR_LEN:
+        LOG.info("Skip widen %s.%s.%s (already varchar(%s))", schema, table, column, maxlen)
+        return
+    sql = f"ALTER TABLE `{schema}`.`{table}` MODIFY COLUMN `{column}` VARCHAR({TOKEN_VARCHAR_LEN})"
+    LOG.info("Running: %s", sql)
+    cur.execute(sql)
+    conn.commit()
+
+
+def _widen_google_auth_column(cur, conn, schema: str, table: str, column: str) -> None:
+    if not _table_exists(cur, schema, table):
+        return
+    dt, _ = _column_meta(cur, schema, table, column)
+    if dt is None:
+        return
+    if dt in ("longtext", "mediumtext", "text"):
+        LOG.info("Skip widen %s.%s.%s (already %s)", schema, table, column, dt)
+        return
+    sql = f"ALTER TABLE `{schema}`.`{table}` MODIFY COLUMN `{column}` LONGTEXT"
+    LOG.info("Running: %s", sql)
+    cur.execute(sql)
+    conn.commit()
+
+
+def pre_encryption_widen_columns(conn: Any, stage: str, report: dict[str, Any]) -> None:
+    pm, sb, wb, qs = target_admin_schema_names(stage)
+    targets: list[tuple[str, str, str]] = [
+        (pm, "regions", "slack_token"),
+        (sb, "regions", "bot_token"),
+        (sb, "slackblast_users", "strava_access_token"),
+        (sb, "slackblast_users", "strava_refresh_token"),
+        (wb, "regions", "slack_token"),
+        (qs, "qsignups_regions", "bot_token"),
+    ]
+    cur = conn.cursor(DictCursor)
+    for schema, table, col in targets:
+        try:
+            _widen_varchar_column(cur, conn, schema, table, col)
+        except Exception as e:
+            report["fixups_errors"].append(
+                {"operation": f"widen {schema}.{table}.{col}", "error": str(e)}
+            )
+            LOG.warning("%s.%s.%s: %s", schema, table, col, e)
+    try:
+        _widen_google_auth_column(cur, conn, qs, "qsignups_regions", "google_auth_data")
+    except Exception as e:
+        report["fixups_errors"].append({"operation": "widen google_auth_data", "error": str(e)})
+        LOG.warning("google_auth_data: %s", e)
+    LOG.info("Column width fixes for encryption done.")
+
+
+def post_migration_encrypt_secrets(conn, schema_map: dict[str, str], report: dict, *, stage: str) -> None:
     key = (os.environ.get("DB_ENCRYPTION_KEY") or "").strip()
     if not key or key == "123":
         LOG.info("Post-migration encryption skipped (DB_ENCRYPTION_KEY unset or placeholder)")
@@ -468,10 +777,8 @@ def post_migration_encrypt_secrets(conn, schema_map: dict[str, str], report: dic
             enc_stats[f"{schema}.{table}.{col}"] = n
             LOG.info("Encrypted %s rows: %s.%s.%s", n, schema, table, col)
 
-    pm = schema_map.get("paxminer")
-    wb = schema_map.get("weaselbot")
-    sb = schema_map.get("slackblast")
-    qs = schema_map.get("f3stcharles")
+    pm, sb, wb, qs_from_env = target_admin_schema_names(stage)
+    qs = schema_map.get(F3STCHARLES_SOURCE) or qs_from_env
 
     if pm:
         run_enc(pm, "regions", "slack_token", "region")
@@ -648,7 +955,6 @@ def main() -> int:
         LOG.error("STAGE must be 'test' or 'prod' (got %r). Set it in .env.migration.", env_suffix)
         return 1
     schema_map = default_schema_map(env_suffix)
-    rewrites = region_name_rewrites(env_suffix)
 
     read_delay = float(os.environ.get("READ_DELAY_SECONDS", "1"))
     schema_delay = float(os.environ.get("SCHEMA_DELAY_SECONDS", "5"))
@@ -685,6 +991,12 @@ def main() -> int:
 
     def target_connect(db: str | None = None):
         return pymysql.connect(**_connect_kwargs(target_host, target_port, target_user, target_password, db, target_tls))
+
+    tgt_boot = with_retry(lambda: target_connect(), "target connect for bootstrap")
+    try:
+        pre_migration_bootstrap_schemas(tgt_boot, env_suffix)
+    finally:
+        tgt_boot.close()
 
     source_to_target = {k: v for k, v in schema_map.items()}
 
@@ -747,10 +1059,20 @@ def main() -> int:
             for r in objects:
                 tname = _row_get(r, "TABLE_NAME", "table_name")
                 ttype = _row_get(r, "TABLE_TYPE", "table_type")
+                if source_schema == F3STCHARLES_SOURCE and not tname.startswith("qsignups_"):
+                    continue
                 if ttype == "BASE TABLE":
                     tables.append(tname)
                 elif ttype == "VIEW":
                     views.append(tname)
+
+            if source_schema == F3STCHARLES_SOURCE and (tables or views):
+                LOG.info(
+                    "f3stcharles: migrating only qsignups_* base tables (%s tables); "
+                    "%s non-qsignups_* source view(s) skipped (vw_* recreated after copy)",
+                    len(tables),
+                    len(views),
+                )
 
             if not tables and not views:
                 report_append_error(
@@ -916,59 +1238,13 @@ def main() -> int:
         finalize_migration_summary(report)
         write_migration_report(report_path, report)
 
-    # Cross-reference fixups in target
-    pm = schema_map["paxminer"]
-    sb = schema_map["slackblast"]
-    wb = schema_map["weaselbot"]
-
-    tgt = with_retry(lambda: target_connect(), "target connect for fixups")
+    tgt_post = with_retry(lambda: target_connect(), "target connect for post-migration fixups")
     try:
-        with tgt.cursor() as cur:
-            for old, new in rewrites.items():
-                sql_pm = f"UPDATE `{pm}`.`regions` SET `schema_name` = %s WHERE `schema_name` = %s"
-                try:
-                    cur.execute(sql_pm, (new, old))
-                    LOG.info("Updated paxminer.regions schema_name %s -> %s (%s rows)", old, new, cur.rowcount)
-                except Exception as e:
-                    report["fixups_errors"].append(
-                        {"operation": "fixup paxminer.regions", "sql": sql_pm, "params": [new, old], "error": str(e)}
-                    )
-                    LOG.error("Fixup paxminer.regions failed: %s", e)
-                sql_sb = f"UPDATE `{sb}`.`regions` SET `paxminer_schema` = %s WHERE `paxminer_schema` = %s"
-                try:
-                    cur.execute(sql_sb, (new, old))
-                    LOG.info(
-                        "Updated slackblast.regions paxminer_schema %s -> %s (%s rows)",
-                        old,
-                        new,
-                        cur.rowcount,
-                    )
-                except Exception as e:
-                    report["fixups_errors"].append(
-                        {"operation": "fixup slackblast.regions", "sql": sql_sb, "params": [new, old], "error": str(e)}
-                    )
-                    LOG.error("Fixup slackblast.regions failed: %s", e)
-                sql_wb = f"UPDATE `{wb}`.`regions` SET `paxminer_schema` = %s WHERE `paxminer_schema` = %s"
-                try:
-                    cur.execute(sql_wb, (new, old))
-                    LOG.info(
-                        "Updated weaselbot.regions paxminer_schema %s -> %s (%s rows)",
-                        old,
-                        new,
-                        cur.rowcount,
-                    )
-                except Exception as e:
-                    report["fixups_errors"].append(
-                        {"operation": "fixup weaselbot.regions", "sql": sql_wb, "params": [new, old], "error": str(e)}
-                    )
-                    LOG.error("Fixup weaselbot.regions failed: %s", e)
-        tgt.commit()
-    finally:
-        tgt.close()
-
-    tgt_post = with_retry(lambda: target_connect(), "target connect for encryption/S3 fixups")
-    try:
-        post_migration_encrypt_secrets(tgt_post, schema_map, report)
+        qsignups_tgt = schema_map.get(F3STCHARLES_SOURCE)
+        if qsignups_tgt:
+            post_migration_create_qsignups_views(tgt_post, qsignups_tgt, report)
+        pre_encryption_widen_columns(tgt_post, env_suffix, report)
+        post_migration_encrypt_secrets(tgt_post, schema_map, report, stage=env_suffix)
         post_migration_s3_images(tgt_post, schema_map, report)
     finally:
         tgt_post.close()

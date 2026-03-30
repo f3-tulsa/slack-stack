@@ -76,13 +76,28 @@ cd PAXminer && python3.12 -m venv .venv && source .venv/bin/activate && pip inst
 
 Use this when migrating data from an existing MySQL/RDS instance to a new TiDB or MySQL host.
 
-1. Copy `migration/.env.migration.example` to `migration/.env.migration` and fill in values. Set `STAGE` to `test` or `prod`. Schema base names (`PAXMINER_SCHEMA`, etc.) should match your deploy `.env`.
+### What `migrate_data.py` does
+
+- **Target bootstrap (no source read):** creates `paxminer_{STAGE}`, `slackblast_{STAGE}`, `weaselbot_{STAGE}` with core admin tables and seeds placeholder `paxminer.regions` rows for `f3ttown_{STAGE}` / `f3scissortail_{STAGE}` (replace `PLACEHOLDER` tokens before production use).
+- **Source copy:** `f3ttown`, `f3scissortail`, and `f3stcharles` → regional schemas on the target; **`f3stcharles`** only copies base tables named `qsignups_*` (regional PAXminer objects in that schema are skipped).
+- **Qsignups views:** after copy, recreates **`vw_weekly_events`**, **`vw_aos_sort`**, and **`vw_master_events`** on `{QSIGNUPS_SCHEMA}_{STAGE}` (same definitions as `qsignups/db/views/*.sql`).
+- **Encryption prep:** widens token columns to `VARCHAR(512)` and `qsignups_regions.google_auth_data` to `LONGTEXT` where needed, then optional **`DB_ENCRYPTION_KEY`** encrypts secrets.
+- **Images (optional):** if **`IMAGE_S3_BUCKET`** is set, copies backblast images and rewrites URLs at the end of the same run; otherwise run **`migrate_images.py`** after deploy creates the bucket.
+
+### Setup
+
+1. Copy `migration/.env.migration.example` to `migration/.env.migration` and fill in values. Set `STAGE` to `test` or `prod`. Schema base names should match your deploy `.env`.
 2. Install deps: `pip install -r migration/requirements.txt` (use a venv).
-3. Run: `python migration/migrate_data.py`.
-4. Optional post-steps (set in `.env.migration`):
-   - **`DB_ENCRYPTION_KEY`** — encrypt tokens after copy.
-   - **`IMAGE_S3_BUCKET`** — copy backblast images from their stored public URLs into your S3 bucket and rewrite the URLs in `beatdowns.json`.
-5. Reports/checkpoints are written under `migration/` (gitignored). After a successful run, a **human-readable receipt** is also saved under `migration/receipts/` (same content is printed to the console).
+
+### Recommended order
+
+1. **`python migration/migrate_data.py`** — bootstrap admin schemas, copy data, create qsignups views, widen columns, optional encryption, optional in-run S3 image migration.
+2. **Deploy** (`./deploy.sh --env test|prod`) if you have not already — creates the image S3 bucket (slackblast stack).
+3. **`python migration/migrate_images.py`** — if the bucket did not exist during step 1, run this after deploy with **`IMAGE_S3_BUCKET`** set in `.env.migration` to copy images and rewrite `beatdowns.json` URLs.
+
+### Artifacts
+
+Reports/checkpoints are written under `migration/` (gitignored). After `migrate_data.py`, a **human-readable receipt** is saved under `migration/receipts/` (same content is printed to the console).
 
 ## Deploy (local)
 
