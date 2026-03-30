@@ -73,6 +73,6 @@
         "users:read.email"
       ]
     },
-    "redirect_urls": ["__HOSTNAME__/slack/auth"]
+    "redirect_urls": ["__HOSTNAME__/slack/oauth_redirect"]
   }
 }

@@ -48,7 +48,7 @@
     ]
   },
   "oauth_config": {
-    "redirect_urls": ["__HOSTNAME__/slack/install"],
+    "redirect_urls": ["__HOSTNAME__/slack/oauth_redirect"],
     "scopes": {
       "bot": [
         "channels:history",

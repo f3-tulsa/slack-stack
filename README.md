@@ -110,7 +110,7 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 Bolt resolves the workspace bot token from the **`slack_installations`** table (keyed by `client_id` + `team_id`), not from the placeholder `SLACK_BOT_TOKEN` parameter alone.
 
 1. Deploy the stack and note the API base URL from CloudFormation (same base as **`SlackblastApi`** / **`QSignupsApi`**, e.g. `https://xxxx.execute-api.us-east-1.amazonaws.com/Prod`).
-2. In each Slack app’s settings, add an **OAuth Redirect URL**: `{API_BASE}/slack/install` (Bolt’s install path).
+2. In each Slack app’s settings, add an **OAuth Redirect URL**: `{API_BASE}/slack/oauth_redirect` (Bolt’s OAuth callback path; must match API Gateway).
 3. Open **`{API_BASE}/slack/install`** in a browser while signed into Slack and complete the install for your workspace. That writes **`slack_installations`** (and related rows) in `slackblast_<stage>` / `qsignups_<stage>`.
 
 If you skip this, slash commands and modals can fail (e.g. missing auth, `expired_trigger_id` on cold starts, or `lambda:InvokeFunction` errors until the lazy listener can run with a valid client).

@@ -162,6 +162,11 @@ Resources:
           Properties:
             Path: /slack/install
             Method: get
+        SlackblastOAuthRedirect:
+          Type: Api
+          Properties:
+            Path: /slack/oauth_redirect
+            Method: get
         SlackblastKeepWarm:
           Type: ScheduleV2
           Properties:

@@ -155,6 +155,11 @@ Resources:
           Properties:
             Path: /slack/install
             Method: get
+        QSignupsOAuthRedirect:
+          Type: Api
+          Properties:
+            Path: /slack/oauth_redirect
+            Method: get
         QSignupsKeepWarm:
           Type: ScheduleV2
           Properties:
