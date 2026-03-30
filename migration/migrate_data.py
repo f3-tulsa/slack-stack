@@ -868,6 +868,13 @@ def post_migration_s3_images(conn, schema_map: dict[str, str], report: dict) -> 
     stats = {"downloaded": 0, "updated_rows": 0, "errors": []}
 
     uploaded_keys: set[str] = set()
+    targets = list(schema_map.values())
+    LOG.info(
+        "S3 image migration starting: bucket=%s, schemas=%s (%d)",
+        new_bucket,
+        targets,
+        len(targets),
+    )
 
     def process_url(url: str) -> str:
         if not isinstance(url, str) or not url.strip():
@@ -880,12 +887,20 @@ def post_migration_s3_images(conn, schema_map: dict[str, str], report: dict) -> 
         new_url = f"{new_base}/{key}"
         try:
             if key not in uploaded_keys:
+                LOG.debug("GET %s -> S3 key %s", url, key)
                 r = requests.get(url, timeout=120)
                 r.raise_for_status()
                 ct = r.headers.get("Content-Type", "application/octet-stream")
                 s3.put_object(Bucket=new_bucket, Key=key, Body=r.content, ContentType=ct)
                 uploaded_keys.add(key)
                 stats["downloaded"] += 1
+                if stats["downloaded"] % 25 == 0:
+                    LOG.info(
+                        "Progress: %s new objects uploaded to s3://%s (updated_rows=%s)",
+                        stats["downloaded"],
+                        new_bucket,
+                        stats["updated_rows"],
+                    )
             return new_url
         except Exception as e:
             stats["errors"].append({"url": url, "error": str(e)})
@@ -894,18 +909,54 @@ def post_migration_s3_images(conn, schema_map: dict[str, str], report: dict) -> 
 
     for _src, tgt in schema_map.items():
         if not _table_exists(cur, tgt, "beatdowns"):
+            LOG.info("Schema %s: no beatdowns table, skipping", tgt)
             continue
+        LOG.info("Schema %s: querying beatdowns with non-null json", tgt)
         try:
             cur.execute(
                 f"SELECT `ao_id`, `bd_date`, `q_user_id`, `json` FROM `{tgt}`.`beatdowns` WHERE `json` IS NOT NULL"
             )
         except Exception as e:
             stats["errors"].append({"schema": tgt, "error": str(e)})
+            LOG.error("Schema %s: SELECT failed: %s", tgt, e)
             continue
-        for row in cur.fetchall():
+        rows = cur.fetchall()
+        nrows = len(rows)
+        LOG.info("Schema %s: fetched %d rows with json", tgt, nrows)
+        for row_idx, row in enumerate(rows, start=1):
+            if row_idx % 100 == 0 or row_idx == nrows:
+                LOG.info(
+                    "Schema %s: scanning row %d/%d (downloaded=%s updated=%s errors=%s)",
+                    tgt,
+                    row_idx,
+                    nrows,
+                    stats["downloaded"],
+                    stats["updated_rows"],
+                    len(stats["errors"]),
+                )
             j = row["json"]
-            if not j or not isinstance(j, dict):
+            if not j:
                 continue
+            if isinstance(j, str):
+                try:
+                    j = json.loads(j)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            if not isinstance(j, dict):
+                continue
+            url_count = 0
+            for _k in ("files", "low_res_files"):
+                if _k in j and isinstance(j[_k], list):
+                    url_count += sum(1 for x in j[_k] if isinstance(x, str) and x.strip())
+            if url_count:
+                LOG.debug(
+                    "Schema %s row ao_id=%s bd_date=%s q_user_id=%s: %d URL(s) in files/low_res_files",
+                    tgt,
+                    row.get("ao_id"),
+                    row.get("bd_date"),
+                    row.get("q_user_id"),
+                    url_count,
+                )
             changed = False
             for k in ("files", "low_res_files"):
                 if k not in j or not isinstance(j[k], list):
@@ -922,6 +973,13 @@ def post_migration_s3_images(conn, schema_map: dict[str, str], report: dict) -> 
                 j[k] = new_list
             if changed:
                 try:
+                    LOG.info(
+                        "Schema %s: UPDATE beatdowns ao_id=%s bd_date=%s q_user_id=%s",
+                        tgt,
+                        row["ao_id"],
+                        row["bd_date"],
+                        row["q_user_id"],
+                    )
                     cur.execute(
                         f"UPDATE `{tgt}`.`beatdowns` SET `json`=%s "
                         f"WHERE `ao_id`=%s AND `bd_date`=%s AND `q_user_id`=%s",
@@ -938,6 +996,20 @@ def post_migration_s3_images(conn, schema_map: dict[str, str], report: dict) -> 
                             "error": str(e),
                         }
                     )
+                    LOG.error(
+                        "Schema %s: UPDATE failed ao_id=%s bd_date=%s: %s",
+                        tgt,
+                        row.get("ao_id"),
+                        row.get("bd_date"),
+                        e,
+                    )
+        LOG.info(
+            "Schema %s done: downloaded=%s updated_rows=%s error_count=%s",
+            tgt,
+            stats["downloaded"],
+            stats["updated_rows"],
+            len(stats["errors"]),
+        )
 
     conn.commit()
     report["s3_image_migration"] = stats

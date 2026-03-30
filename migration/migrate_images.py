@@ -12,6 +12,7 @@ import argparse
 import json
 import logging
 import os
+from datetime import datetime, timezone
 import ssl
 import sys
 from pathlib import Path
@@ -111,6 +112,15 @@ def main() -> int:
         post_migration_s3_images(conn, schema_map, report)
     finally:
         conn.close()
+
+    receipt_dir = _MIG_DIR / "receipts"
+    receipt_dir.mkdir(parents=True, exist_ok=True)
+    receipt_name = (
+        f"migrate-images-{stage}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.json"
+    )
+    receipt_path = receipt_dir / receipt_name
+    receipt_path.write_text(json.dumps(report, indent=2))
+    LOG.info("Receipt written to %s", receipt_path)
 
     stats = report.get("s3_image_migration") or {}
     print(json.dumps(stats, indent=2))

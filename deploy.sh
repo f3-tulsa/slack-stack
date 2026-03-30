@@ -484,6 +484,9 @@ deploy_qsignups() {
   local brc="${PIPESTATUS[0]}"
   if [[ "$brc" -ne 0 ]]; then return "$brc"; fi
   [[ "$BUILD_ONLY" == true ]] && return 0
+  local google_overrides=""
+  [[ -n "${QS_GOOGLE_CLIENT_ID:-}" ]] && google_overrides+=" GoogleClientId=${QS_GOOGLE_CLIENT_ID}"
+  [[ -n "${QS_GOOGLE_CLIENT_SECRET:-}" ]] && google_overrides+=" GoogleClientSecret=${QS_GOOGLE_CLIENT_SECRET}"
   sam deploy \
     --stack-name "qsignups-${STAGE}" \
     "${SAM_DEPLOY_EXTRA[@]}" \
@@ -500,8 +503,7 @@ deploy_qsignups() {
       "SlackSigningSecret=${QS_SLACK_SIGNING_SECRET}" \
       "SlackClientSecret=${QS_SLACK_CLIENT_SECRET}" \
       "DbEncryptionKey=${DB_ENCRYPTION_KEY}" \
-      "GoogleClientId=${QS_GOOGLE_CLIENT_ID}" \
-      "GoogleClientSecret=${QS_GOOGLE_CLIENT_SECRET}" \
+      ${google_overrides} \
     2>&1 | tee -a "$RECEIPT_FILE"
   return "${PIPESTATUS[0]}"
 }

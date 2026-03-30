@@ -123,26 +123,32 @@ jobs:
       - name: Build qsignups
         run: sam build -t qsignups/template.yaml
       - name: Deploy qsignups
+        env:
+          QS_GOOGLE_CLIENT_ID: ${{ secrets.QS_GOOGLE_CLIENT_ID }}
+          QS_GOOGLE_CLIENT_SECRET: ${{ secrets.QS_GOOGLE_CLIENT_SECRET }}
         run: |
+          set -euo pipefail
+          OVERRIDES=(
+            "Stage=${{ vars.STAGE }}"
+            "DatabaseHost=${{ secrets.DATABASE_HOST }}"
+            "DatabasePort=${{ secrets.DATABASE_PORT }}"
+            "DatabaseUser=${{ secrets.DATABASE_USER }}"
+            "DatabasePassword=${{ secrets.DATABASE_PASSWORD }}"
+            "DatabaseTlsEnabled=${{ vars.DATABASE_TLS_ENABLED }}"
+            "DatabaseSchema=${{ vars.QSIGNUPS_SCHEMA }}_${{ vars.STAGE }}"
+            "SlackToken=${{ secrets.QS_SLACK_TOKEN }}"
+            "SlackSigningSecret=${{ secrets.QS_SLACK_SIGNING_SECRET }}"
+            "SlackClientSecret=${{ secrets.QS_SLACK_CLIENT_SECRET }}"
+            "DbEncryptionKey=${{ secrets.DB_ENCRYPTION_KEY }}"
+          )
+          [[ -n "${QS_GOOGLE_CLIENT_ID:-}" ]] && OVERRIDES+=("GoogleClientId=${QS_GOOGLE_CLIENT_ID}")
+          [[ -n "${QS_GOOGLE_CLIENT_SECRET:-}" ]] && OVERRIDES+=("GoogleClientSecret=${QS_GOOGLE_CLIENT_SECRET}")
           sam deploy \
             --stack-name qsignups-${{ vars.STAGE }} \
             --no-confirm-changeset --no-fail-on-empty-changeset \
             --resolve-s3 \
             --capabilities CAPABILITY_IAM \
-            --parameter-overrides \
-              Stage=${{ vars.STAGE }} \
-              DatabaseHost=${{ secrets.DATABASE_HOST }} \
-              DatabasePort=${{ secrets.DATABASE_PORT }} \
-              DatabaseUser=${{ secrets.DATABASE_USER }} \
-              DatabasePassword=${{ secrets.DATABASE_PASSWORD }} \
-              DatabaseTlsEnabled=${{ vars.DATABASE_TLS_ENABLED }} \
-              DatabaseSchema=${{ vars.QSIGNUPS_SCHEMA }}_${{ vars.STAGE }} \
-              SlackToken=${{ secrets.QS_SLACK_TOKEN }} \
-              SlackSigningSecret=${{ secrets.QS_SLACK_SIGNING_SECRET }} \
-              SlackClientSecret=${{ secrets.QS_SLACK_CLIENT_SECRET }} \
-              DbEncryptionKey=${{ secrets.DB_ENCRYPTION_KEY }} \
-              GoogleClientId=${{ secrets.QS_GOOGLE_CLIENT_ID }} \
-              GoogleClientSecret=${{ secrets.QS_GOOGLE_CLIENT_SECRET }}
+            --parameter-overrides "${OVERRIDES[@]}"
 
       - name: Deploy summary, receipt, and stage Slack manifests
         env:
