@@ -1,5 +1,4 @@
 from datetime import timedelta, date, datetime
-import traceback
 
 import constants
 from database import DbManager
@@ -76,8 +75,7 @@ def refresh(client, user: User, logger, top_message, team_id, context):
         print(sMsg)
 
     except Exception as e:
-        traceback.print_exc()
-        logger.error(f"Error pulling user db info: {e}")
+        logger.error("Error pulling user db info: %s", e, exc_info=True)
 
     # Extend top message with upcoming qs list
     if len(upcoming_qs) > 0:
@@ -224,5 +222,4 @@ def refresh(client, user: User, logger, top_message, team_id, context):
             }
         )
     except Exception as e:
-        logger.error(f"Error publishing home tab: {e}")
-        traceback.print_exc()
+        logger.error("Error publishing home tab: %s", e, exc_info=True)

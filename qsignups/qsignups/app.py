@@ -222,7 +222,6 @@ def handle_manager_schedule_button(ack, body, client, logger, context):
             client.views_publish(user_id=user_id, view={"type": "home", "blocks": blocks})
         except Exception as e:
             logger.error(f"Error publishing home tab: {e}")
-            print(e)
     else:
         top_message = f'You must be an admin to manage the schedule. <https://slack.com/help/articles/218124397-Change-a-members-role|Request admin status from your local space admin or owner>.'
         home.refresh(client, user, logger, top_message, team_id, context)
@@ -456,7 +455,6 @@ def handle_delete_single_event_ao_select(ack, body, client, logger, context):
         client.views_publish(user_id=user_id, view={"type": "home", "blocks": blocks})
     except Exception as e:
         logger.error(f"Error publishing home tab: {e}")
-        print(e)
 
 
 @app.action("delete_single_event_button")
@@ -549,7 +547,6 @@ def handle_edit_ao_select(ack, body, client, logger, context):
             client.views_publish(user_id=user_id, view={"type": "home", "blocks": blocks})
         except Exception as e:
             logger.error(f"Error publishing home tab: {e}")
-            print(e)
 
 
 @app.action(actions.DELETE_AO_SELECT_ACTION)
@@ -578,7 +575,6 @@ def handle_delete_ao_select(ack, body, client, logger, context):
         )
     except Exception as e:
         logger.error(f"Error publishing home tab: {e}")
-        print(e)
 
 
 @app.action(actions.EDIT_SINGLE_EVENT_AO_SELECT)
@@ -651,7 +647,6 @@ def handle_edit_event_ao_select(ack, body, client, logger, context):
         client.views_publish(user_id=user_id, view={"type": "home", "blocks": blocks})
     except Exception as e:
         logger.error(f"Error publishing home tab: {e}")
-        print(e)
 
 
 @app.action(actions.EDIT_AO_ACTION)
@@ -814,7 +809,6 @@ def ao_select_slot(ack, client, body, logger, context):
         client.views_publish(user_id=user_id, view={"type": "home", "blocks": blocks})
     except Exception as e:
         logger.error(f"Error publishing home tab: {e}")
-        print(e)
 
 
 # triggered when user selects open slot
@@ -902,7 +896,7 @@ def handle_date_select_button_from_message(ack, client, body, logger, context):
             message_blocks[0]["text"]["text"] = f"Hello HIMs! Here is your Q lineup for the week.{open_msg}"
 
             # publish update
-            logging.info(f"sending blocks:\n{message_blocks}")
+            logging.info("sending blocks: %s", message_blocks)
             client.chat_update(channel=ao_channel_id, ts=message_ts, blocks=message_blocks)
 
 
@@ -974,7 +968,6 @@ def handle_taken_date_select_button(ack, client, body, logger, context):
             client.views_publish(user_id=user_id, view={"type": "home", "blocks": blocks})
         except Exception as e:
             logger.error(f"Error publishing home tab: {e}")
-            print(e)
     # Check to see if user matches selected user id OR if they are an admin
     # If so, bring up buttons:
     #   block 1: drop down to add special qualifier (VQ, Birthday Q, F3versary, Forge, etc.)
@@ -1128,7 +1121,6 @@ def handle_edit_single_event_button(ack, client, body, logger, context):
         client.views_publish(user_id=user_id, view={"type": "home", "blocks": blocks})
     except Exception as e:
         logger.error(f"Error publishing home tab: {e}")
-        print(e)
 
 
 # triggered when user hits submit on event edit
@@ -1190,8 +1182,12 @@ def handler(event, context):
     # parsed_event = json.loads(event['body'])
     # team_id = parsed_event['team_id']
     # print(f'Team ID: {team_id}')
-    slack_handler = SlackRequestHandler(app=app)
-    return slack_handler.handle(event, context)
+    try:
+        slack_handler = SlackRequestHandler(app=app)
+        return slack_handler.handle(event, context)
+    except Exception:
+        logging.exception("QSignups handler failed")
+        raise
 
 
 # # -- OAuth flow -- #

@@ -81,7 +81,7 @@ def handle_welcome_message_config_post(
         fields=fields,
     )
     update_local_region_records()
-    print(json.dumps({"event_type": "successful_config_update", "team_name": region_record.workspace_name}))
+    logger.info(json.dumps({"event_type": "successful_config_update", "team_name": region_record.workspace_name}))
 
 
 def handle_team_join(body: dict, client: WebClient, logger: Logger, context: dict, region_record: Region):

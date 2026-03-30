@@ -1,4 +1,3 @@
-import traceback
 from datetime import datetime
 
 from database import DbManager
@@ -152,8 +151,7 @@ def clear_event_q(client, user: User, team_id, logger, ao_display_name, selected
 
         return UpdateResponse(success = True, message=f"Got it, {user.name}! I have cleared the Q slot at *{ao_display_name}* on *{selected_dt.strftime('%A, %B %-d @ %H%M')}*")
     except Exception as e:
-        traceback.print_exc()
-        logger.error(f"Error updating: {e}")
+        logger.error("Error updating: %s", e, exc_info=True)
         return UpdateResponse(success = False, message = f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker {e}")
 
 def assign_event_q(client, user: User, team_id, logger, selected_dt, ao_display_name = None, ao_channel_id = None) -> UpdateResponse:

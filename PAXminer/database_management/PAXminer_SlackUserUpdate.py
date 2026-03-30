@@ -78,4 +78,4 @@ def database_management_update():
             logging.error("An error occured updating the channels for region " + region_db)
             logging.error(e)
         
-        logging.info('----------------- End of Region Update -----------------\n')
+        logging.info("----------------- End of Region Update -----------------")

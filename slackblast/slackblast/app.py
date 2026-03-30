@@ -2,7 +2,6 @@
 import json
 import logging
 import re
-import traceback
 from typing import Callable, Tuple
 
 from slack_bolt import App
@@ -48,14 +47,35 @@ def handler(event, context):
 
 def main_response(body, logger, client, ack, context):
     ack()
-    logger.info(json.dumps(body, indent=4))
     team_id = safe_get(body, "team_id") or safe_get(body, "team", "id")
-    region_record: Region = get_region_record(team_id, body, context, client, logger)
-
+    user_id = safe_get(body, "user_id") or safe_get(body, "user", "id")
     request_type, request_id = get_request_type(body)
+    logger.info(
+        "Slack request summary team_id=%s user_id=%s request_type=%s request_id=%s",
+        team_id,
+        user_id,
+        request_type,
+        request_id,
+    )
+    logger.info(json.dumps(body, default=str))
+
+    region_record: Region = get_region_record(team_id, body, context, client, logger)
+    logger.info(
+        "Region record team_id=%s workspace_name=%s",
+        getattr(region_record, "team_id", None) or team_id,
+        getattr(region_record, "workspace_name", None) or "(none)",
+    )
+
     lookup: Tuple[Callable, bool] = safe_get(safe_get(MAIN_MAPPER, request_type), request_id)
     if lookup:
         run_function, add_loading = lookup
+        fn_name = getattr(run_function, "__name__", str(run_function))
+        logger.info(
+            "Dispatching handler=%s add_loading=%s request_id=%s",
+            fn_name,
+            add_loading,
+            request_id,
+        )
         if add_loading:
             body[LOADING_ID] = add_loading_form(body=body, client=client)
         try:
@@ -66,11 +86,11 @@ def main_response(body, logger, client, ack, context):
                 context=context,
                 region_record=region_record,
             )
+            logger.info("Handler complete request_id=%s handler=%s", request_id, fn_name)
         except Exception as exc:
             logger.info("sending error response")
-            tb_str = "".join(traceback.format_exception(None, exc, exc.__traceback__))
             send_error_response(body=body, client=client, error=str(exc)[:3000])
-            logger.error(tb_str)
+            logger.error("Handler error: %s", exc, exc_info=True)
     else:
         logger.error(
             f"no handler for path: "

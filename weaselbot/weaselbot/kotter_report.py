@@ -278,7 +278,7 @@ def send_weaselbot_report(
         if sum((mia.height, lowq.height, noq.height)) > 0:
             try:
                 client.chat_postMessage(channel=siteq, text=sMessage, link_names=True)
-                logging.info(f"Sent {siteq} this message:\n\n{sMessage}\n\n")
+                logging.info("Sent kotter report to %s (%d chars)", siteq, len(sMessage))
             except Exception as e:
                 logging.error(f"Error sending message to {siteq} with {e}")
 
@@ -287,14 +287,14 @@ def send_weaselbot_report(
     try:
         if default_siteq not in siteq_df.get_column("site_q_user_id"):
             client.chat_postMessage(channel=default_siteq, text=sMessage, link_names=True)
-            logging.info(f"Sent {default_siteq} this message:\n\n{sMessage}\n\n")
+            logging.info("Sent kotter report to default_siteq %s (%d chars)", default_siteq, len(sMessage))
     except SlackApiError as e:
         if e.response.get("error") == "not_in_channel":
             try:
                 logging.info("trying to join channel")
                 client.conversations_join(channel=default_siteq)
                 client.chat_postMessage(channel=default_siteq, text=sMessage, link_names=True)
-                logging.info(f"sent this message:\n\n{sMessage}\n\n")
+                logging.info("Sent kotter report after join (%d chars)", len(sMessage))
             except Exception as e:
                 logging.error("hit exception joining channel")
         elif e.response.get("error") == "channel_not_found":
@@ -320,7 +320,7 @@ def slack_log(schema: str, engine: Engine, metadata: MetaData, client: WebClient
         paxminer_log_channel = cnxn.execute(select(ao.c.channel_id).where(ao.c.ao == "paxminer_logs")).scalar()
     try:
         client.chat_postMessage(channel=paxminer_log_channel, text="Successfully sent kotter reports")
-        logging.info(f"Sent {paxminer_log_channel} this message:\n\nSuccessfully sent kotter reports\n\n")
+        logging.info("Posted kotter success to paxminer_logs channel %s", paxminer_log_channel)
         logging.info("All done!")
     except SlackApiError as e:
         if e.response.get("error") == "not_in_channel":

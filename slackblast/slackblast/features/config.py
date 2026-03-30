@@ -125,7 +125,7 @@ def handle_config_email_post(body: dict, client: WebClient, logger: Logger, cont
         fields=fields,
     )
     update_local_region_records()
-    print(json.dumps({"event_type": "successful_config_update", "team_name": region_record.workspace_name}))
+    logger.info(json.dumps({"event_type": "successful_config_update", "team_name": region_record.workspace_name}))
 
 
 def handle_config_general_post(body: dict, client: WebClient, logger: Logger, context: dict, region_record: Region):
@@ -145,7 +145,7 @@ def handle_config_general_post(body: dict, client: WebClient, logger: Logger, co
         fields=fields,
     )
     update_local_region_records()
-    print(json.dumps({"event_type": "successful_config_update", "team_name": region_record.workspace_name}))
+    logger.info(json.dumps({"event_type": "successful_config_update", "team_name": region_record.workspace_name}))
 
 
 def build_config_paxminer_form(body: dict, client: WebClient, logger: Logger, context: dict, region_record: Region):
@@ -252,4 +252,4 @@ def handle_config_paxminer_post(body: dict, client: WebClient, logger: Logger, c
         schema=region_record.paxminer_schema,
     )
 
-    print(json.dumps({"event_type": "successful_config_update", "team_name": region_record.workspace_name}))
+    logger.info(json.dumps({"event_type": "successful_config_update", "team_name": region_record.workspace_name}))
