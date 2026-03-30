@@ -13,14 +13,16 @@ Each app has its own SAM template under its directory; deploy order is flexible 
 
 ## Prerequisites
 
+- [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 - [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
-- Python **3.12** (matches Lambda runtimes)
-- **Docker** (required to build **Weaselbot** container images)
+- Python **3.12** (matches Lambda runtimes) and **Python 3** on your PATH (used by `deploy.sh` for manifest substitution)
+- **Docker** (required to build **Weaselbot** when deploying `weaselbot` or `all`)
 - AWS account with permissions for Lambda, API Gateway, CloudFormation, IAM, S3, ECR, EventBridge
+- [GitHub CLI `gh`](https://cli.github.com/) (optional; required only for `./deploy.sh --setup-github`)
 
 ## Environment variables
 
-All configuration is driven by environment variables. Copy `.env.example` to `.env.test` (or `.env.prod`) and fill in the values. The file is sourced by `deploy.sh`.
+All deploy configuration is driven by environment variables. Copy [`.env.deploy.example`](.env.deploy.example) to **`.env.deploy.test`** or **`.env.deploy.prod`** and fill in the values. `deploy.sh` sources **`.env.deploy.<env>`** when you pass `--env test` or `--env prod`.
 
 ### Required (all stacks)
 
@@ -38,6 +40,25 @@ All configuration is driven by environment variables. Copy `.env.example` to `.e
 | `SLACKBLAST_SCHEMA` | **Bare** base name for slackblast (e.g. `slackblast`). Same auto-suffix |
 | `QSIGNUPS_SCHEMA` | **Bare** base name for qsignups (e.g. `qsignups`). Same auto-suffix |
 | `IMAGE_S3_BUCKET` | Globally unique S3 bucket name for backblast images (the slackblast stack creates this bucket) |
+
+### Bootstrap (optional; for `--bootstrap`)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BOOTSTRAP_STACK_NAME` | `slack-stack-bootstrap` | CloudFormation stack name for OIDC + SAM artifact bucket |
+| `CREATE_OIDC_PROVIDER` | `true` | Set `false` if `token.actions.githubusercontent.com` OIDC already exists in the account |
+| `DEPLOY_BUCKET_PREFIX` | `slack-stack-deploy` | Prefix for the SAM artifact bucket: `{prefix}-{account}-{region}` |
+
+### Optional
+
+| Variable | Description |
+|----------|-------------|
+| `AWS_ROLE_ARN` | OIDC deploy role ARN for `--setup-github` if not reading from the bootstrap stack outputs |
+| `DEPLOYMENT_S3_BUCKET` | SAM deploy artifact bucket (bootstrap output `DeploymentBucketName`). If unset and you did not pass `--bootstrap` in the same run, `sam deploy` uses `--resolve-s3`. |
+
+### PAXminer / Weaselbot and Slack
+
+**PAXminer** and **Weaselbot** do not take Slack app secrets in the deploy env file. They read per-region Slack tokens from the database (`paxminer.regions`, decrypted with `DB_ENCRYPTION_KEY`). Only **slackblast** (`SB_*`) and **qsignups** (`QS_*`) need Slack (and Google) app credentials here.
 
 ### Required (slackblast)
 
@@ -86,13 +107,13 @@ Use this when migrating data from an existing MySQL/RDS instance to a new TiDB o
 
 ### Setup
 
-1. Copy `migration/.env.migration.example` to `migration/.env.migration` and fill in values. Set `STAGE` to `test` or `prod`. Schema base names should match your deploy `.env`.
+1. Copy `migration/.env.migration.example` to `migration/.env.migration` and fill in values. Set `STAGE` to `test` or `prod`. Schema base names should match your deploy `.env.deploy.*` file.
 2. Install deps: `pip install -r migration/requirements.txt` (use a venv).
 
 ### Recommended order
 
 1. **`python migration/migrate_data.py`** — bootstrap admin schemas, copy data, create qsignups views, widen columns, optional encryption, optional in-run S3 image migration.
-2. **Deploy** (`./deploy.sh --env test|prod`) if you have not already — creates the image S3 bucket (slackblast stack).
+2. **Deploy** (`./deploy.sh --env test|prod`) if you have not already — creates the image S3 bucket (slackblast stack). Use `.env.deploy.test` / `.env.deploy.prod` (see **Deploy (local)** below).
 3. **`python migration/migrate_images.py`** — if the bucket did not exist during step 1, run this after deploy with **`IMAGE_S3_BUCKET`** set in `.env.migration` to copy images and rewrite `beatdowns.json` URLs.
 
 ### Artifacts
@@ -101,23 +122,29 @@ Reports/checkpoints are written under `migration/` (gitignored). After `migrate_
 
 ## Deploy (local)
 
-1. Copy `.env.example` to `.env.test` (or `.env.prod`) and fill in all values.
-2. Deploy:
+1. Copy `.env.deploy.example` to `.env.deploy.test` (or `.env.deploy.prod`) and fill in all values.
+2. **First-time AWS / GitHub Actions (optional):** from the repo root, with `origin` pointing at your GitHub repo:
+   - `./deploy.sh --env test --bootstrap` — creates/updates [`infra/template.bootstrap.yaml`](infra/template.bootstrap.yaml): GitHub OIDC provider (if needed), SAM artifact bucket, and an IAM role trusted for `repo:<owner>/<repo>:*`. When combined with a full deploy in the same command, SAM uses the bootstrap bucket for packaged artifacts.
+   - After a successful deploy: `./deploy.sh --env test --setup-github` — requires `gh auth login`; creates the GitHub **environment** named like `STAGE` (`test` or `prod`) and sets the same variables/secrets documented under **GitHub Environments** below.
+   - You can combine flags, e.g. `./deploy.sh --env test --bootstrap --setup-github`.
+3. Deploy:
 
 ```bash
 ./deploy.sh --env test                    # all four stacks
 ./deploy.sh --env test --stack paxminer   # single stack
 ./deploy.sh --env test --build-only       # build only (no deploy)
 ./deploy.sh --env prod --confirm          # prompt for SAM changeset confirmation
+./deploy.sh --env test --bootstrap        # bootstrap stack, then deploy all stacks
+./deploy.sh --env test --setup-github     # after deploy: push env to GitHub (needs gh)
 ```
 
-3. **Post-deploy (first time only):** upload Strava assets to the image bucket:
+4. **Post-deploy (first time only):** upload Strava assets to the image bucket:
 
 ```bash
 aws s3 cp slackblast/assets/ s3://YOUR_IMAGE_BUCKET/ --recursive
 ```
 
-4. After deploy, the script prints CloudFormation outputs, a **per-stack summary** (success / failure), and writes a **receipt** to `receipts/deploy-{STAGE}-{timestamp}.txt` (same output as the console; gitignored). It also generates **stage-specific Slack manifests** `manifest-{STAGE}.json` under each app directory for the stacks that deployed successfully — **slackblast** and **qsignups** manifests include the deployed API Gateway base URL (replace `__HOSTNAME__`). Use those JSON files when creating or updating Slack apps at [api.slack.com](https://api.slack.com/apps). Committed templates are the base `manifest.json` files in each app folder.
+5. After deploy, the script prints CloudFormation outputs, a **per-stack summary** (success / failure), and writes a **receipt** to `receipts/deploy-{STAGE}-{timestamp}.txt` (same output as the console; gitignored). It also generates **stage-specific Slack manifests** `manifest-{STAGE}.json` under each app directory for the stacks that deployed successfully — **slackblast** and **qsignups** manifests include the deployed API Gateway base URL (replace `__HOSTNAME__`). Use those JSON files when creating or updating Slack apps at [api.slack.com](https://api.slack.com/apps). Committed templates are the base `manifest.json` files in each app folder.
 
 ## Deploy (GitHub Actions)
 
@@ -127,7 +154,7 @@ After all stacks deploy successfully, the workflow appends a **summary** to the 
 
 ### GitHub Environments
 
-Create environments **`test`** and **`prod`** in your repo settings. Each needs:
+Create environments **`test`** and **`prod`** in your repo settings (or run `./deploy.sh --env test --setup-github` / `--env prod --setup-github` after `gh auth login` to create them and set values from your `.env.deploy.*` file). Each needs:
 
 **Secrets:**
 
@@ -164,8 +191,12 @@ Create environments **`test`** and **`prod`** in your repo settings. Each needs:
 
 ### AWS OIDC (one-time setup)
 
+**Automated:** Run `./deploy.sh --env test --bootstrap` (and/or `--env prod` with the matching `.env.deploy.prod`). That deploys the bootstrap stack in [`infra/template.bootstrap.yaml`](infra/template.bootstrap.yaml), which can create the GitHub OIDC identity provider, a SAM artifact bucket, and IAM role `slack-stack-github-deploy-<region>` trusted for `repo:<owner>/<repo>:*` (parsed from `git remote get-url origin`). Set **`CREATE_OIDC_PROVIDER=false`** in your env file if the OIDC provider already exists.
+
+**Manual (fallback):**
+
 1. In IAM, add an **OIDC identity provider** for `https://token.actions.githubusercontent.com` (audience `sts.amazonaws.com`).
-2. Create a role (e.g. `slack-stack-deploy`) trusted for `sts:AssumeRoleWithWebIdentity` with a condition limiting `sub` to this repo and branches `ref:refs/heads/test` and `ref:refs/heads/prod`.
+2. Create a role trusted for `sts:AssumeRoleWithWebIdentity` with a condition limiting `sub` to this repository (e.g. `repo:OWNER/REPO:*` or stricter branch claims).
 3. Attach policies sufficient for SAM: Lambda, API Gateway, CloudFormation, IAM (for generated roles), S3, ECR, EventBridge.
 4. Set the role ARN as secret **`AWS_ROLE_ARN`** in both GitHub environments.
 

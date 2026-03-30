@@ -33,7 +33,7 @@ def static_image_url(object_key: str) -> str:
     bucket = (os.environ.get(constants.IMAGE_S3_BUCKET) or "").strip()
     if not bucket:
         raise RuntimeError(
-            f"{constants.IMAGE_S3_BUCKET} must be set (S3 bucket name for static images; see slackblast template / .env.example)"
+            f"{constants.IMAGE_S3_BUCKET} must be set (S3 bucket name for static images; see slackblast template / .env.deploy.example)"
         )
     return f"https://{bucket}.s3.amazonaws.com/{object_key}"
 

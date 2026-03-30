@@ -1,0 +1,289 @@
+# Bootstrap stack for slack-stack: GitHub OIDC deploy role, SAM artifact bucket,
+# and IAM policy for local or GitHub Actions deploys.
+# Plain CloudFormation (no SAM Transform).
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  slack-stack bootstrap: GitHub OIDC deploy role, deployment artifact bucket,
+  and least-privilege policy for SAM deploy of PAXminer, weaselbot, slackblast, qsignups.
+
+Parameters:
+  GitHubRepository:
+    Type: String
+    Description: >
+      GitHub repository owner/repo (e.g. myorg/slack-stack). Scopes OIDC trust to this repo.
+  CreateOIDCProvider:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: >
+      Set false if OIDC provider for token.actions.githubusercontent.com already exists in this account.
+  DeploymentBucketPrefix:
+    Type: String
+    Default: slack-stack-deploy
+    Description: >
+      Prefix for SAM/CloudFormation artifact bucket name: {Prefix}-{AccountId}-{Region}.
+  AppImageBucketName:
+    Type: String
+    Default: ""
+    Description: >
+      Globally unique S3 bucket name for slackblast images (same as IMAGE_S3_BUCKET). Empty skips image-bucket S3 statement (not recommended for production).
+
+Conditions:
+  CreateOIDC: !Equals [!Ref CreateOIDCProvider, "true"]
+  HasImageBucket: !Not [!Equals [!Ref AppImageBucketName, ""]]
+
+Resources:
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOIDC
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+
+  DeploymentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${DeploymentBucketPrefix}-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 7
+
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "slack-stack-github-deploy-${AWS::Region}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubRepository}:*"
+      ManagedPolicyArns:
+        - !Ref SlackStackDeployPolicy
+        - Fn::If:
+            - HasImageBucket
+            - !Ref SlackStackDeployPolicyImageBucket
+            - !Ref AWS::NoValue
+
+  SlackStackDeployPolicyImageBucket:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: HasImageBucket
+    Properties:
+      ManagedPolicyName: !Sub "slack-stack-deploy-image-s3-${AWS::Region}"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: S3ImageBucket
+            Effect: Allow
+            Action:
+              - s3:CreateBucket
+              - s3:DeleteBucket
+              - s3:GetBucketPolicy
+              - s3:PutBucketPolicy
+              - s3:DeleteBucketPolicy
+              - s3:GetBucketPublicAccessBlock
+              - s3:PutBucketPublicAccessBlock
+              - s3:GetBucketVersioning
+              - s3:PutBucketVersioning
+              - s3:GetBucketTagging
+              - s3:PutBucketTagging
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:ListBucket
+              - s3:GetBucketLocation
+            Resource:
+              - !Sub "arn:aws:s3:::${AppImageBucketName}"
+              - !Sub "arn:aws:s3:::${AppImageBucketName}/*"
+
+  SlackStackDeployPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "slack-stack-deploy-policy-${AWS::Region}"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CloudFormation
+            Effect: Allow
+            Action:
+              - cloudformation:CreateStack
+              - cloudformation:UpdateStack
+              - cloudformation:DeleteStack
+              - cloudformation:CreateChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:ListChangeSets
+              - cloudformation:DescribeStacks
+              - cloudformation:DescribeStackEvents
+              - cloudformation:DescribeStackResources
+              - cloudformation:DescribeStackResource
+              - cloudformation:GetTemplate
+              - cloudformation:GetTemplateSummary
+              - cloudformation:ListStackResources
+              - cloudformation:ValidateTemplate
+            Resource: "*"
+          - Sid: S3DeployBucket
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:ListBucket
+              - s3:GetBucketLocation
+              - s3:AbortMultipartUpload
+              - s3:ListBucketMultipartUploads
+            Resource:
+              - !GetAtt DeploymentBucket.Arn
+              - !Sub "${DeploymentBucket.Arn}/*"
+          - Sid: IAMCreateSlackStackRoles
+            Effect: Allow
+            Action:
+              - iam:CreateRole
+              - iam:TagRole
+            Resource: "*"
+            Condition:
+              StringLike:
+                iam:RoleName:
+                  - paxminer-*
+                  - weaselbot-*
+                  - slackblast-*
+                  - qsignups-*
+          - Sid: IAMManageSlackStackRoles
+            Effect: Allow
+            Action:
+              - iam:PassRole
+              - iam:PutRolePolicy
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+              - iam:GetRole
+              - iam:GetRolePolicy
+              - iam:DeleteRolePolicy
+              - iam:DeleteRole
+              - iam:ListRolePolicies
+              - iam:ListAttachedRolePolicies
+              - iam:UpdateAssumeRolePolicy
+            Resource:
+              - !Sub "arn:aws:iam::${AWS::AccountId}:role/paxminer-*"
+              - !Sub "arn:aws:iam::${AWS::AccountId}:role/weaselbot-*"
+              - !Sub "arn:aws:iam::${AWS::AccountId}:role/slackblast-*"
+              - !Sub "arn:aws:iam::${AWS::AccountId}:role/qsignups-*"
+          - Sid: Lambda
+            Effect: Allow
+            Action:
+              - lambda:CreateFunction
+              - lambda:UpdateFunctionCode
+              - lambda:UpdateFunctionConfiguration
+              - lambda:GetFunction
+              - lambda:GetFunctionConfiguration
+              - lambda:DeleteFunction
+              - lambda:AddPermission
+              - lambda:RemovePermission
+              - lambda:PublishVersion
+              - lambda:InvokeFunction
+              - lambda:TagResource
+              - lambda:UntagResource
+              - lambda:ListTags
+            Resource:
+              - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:paxminer-*"
+              - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:weaselbot-*"
+              - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:slackblast-*"
+              - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:qsignups-*"
+          - Sid: ApiGateway
+            Effect: Allow
+            Action:
+              - apigateway:*
+            Resource: "*"
+          - Sid: Logs
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:PutRetentionPolicy
+              - logs:DescribeLogGroups
+              - logs:DeleteLogGroup
+              - logs:TagResource
+            Resource:
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/paxminer-*"
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/paxminer-*:*"
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/weaselbot-*"
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/weaselbot-*:*"
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/slackblast-*"
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/slackblast-*:*"
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/qsignups-*"
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/qsignups-*:*"
+          - Sid: Events
+            Effect: Allow
+            Action:
+              - events:PutRule
+              - events:DeleteRule
+              - events:PutTargets
+              - events:RemoveTargets
+              - events:DescribeRule
+              - events:ListTargetsByRule
+              - events:TagResource
+              - events:UntagResource
+            Resource: "*"
+          - Sid: ECR
+            Effect: Allow
+            Action:
+              - ecr:CreateRepository
+              - ecr:DeleteRepository
+              - ecr:DescribeRepositories
+              - ecr:PutImage
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:BatchCheckLayerAvailability
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:ListImages
+              - ecr:TagResource
+              - ecr:UntagResource
+              - ecr:PutLifecyclePolicy
+              - ecr:GetLifecyclePolicy
+              - ecr:SetRepositoryPolicy
+              - ecr:GetRepositoryPolicy
+              - ecr:DeleteRepositoryPolicy
+            Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/*"
+          - Sid: ECRAuth
+            Effect: Allow
+            Action:
+              - ecr:GetAuthorizationToken
+            Resource: "*"
+
+Outputs:
+  GitHubDeployRoleArn:
+    Description: ARN for GitHub Actions OIDC (set as secret AWS_ROLE_ARN in each environment).
+    Value: !GetAtt GitHubDeployRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-GitHubDeployRoleArn"
+  DeploymentBucketName:
+    Description: S3 bucket for SAM deploy artifacts (optional local use; GitHub Actions can use --resolve-s3 or this bucket).
+    Value: !Ref DeploymentBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-DeploymentBucketName"
+  BootstrapRegion:
+    Description: Region where bootstrap was deployed.
+    Value: !Ref AWS::Region
+    Export:
+      Name: !Sub "${AWS::StackName}-BootstrapRegion"

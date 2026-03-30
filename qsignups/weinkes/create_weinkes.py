@@ -2,7 +2,7 @@
 """
 Generate weekly weinke PNGs from qsignups data, upload to S3, update DB URLs.
 
-Run from repo with env vars set (see qsignups/.env or root .env.test). Requires
+Run from repo with env vars set (see qsignups/.env or root .env.deploy.test). Requires
 AWS credentials with s3:PutObject on IMAGE_S3_BUCKET (same bucket as slackblast images).
 """
 from __future__ import annotations
