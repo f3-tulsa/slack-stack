@@ -22,6 +22,10 @@ from database.orm import AO, Master, Region
 
 _LOG = logging.getLogger(__name__)
 
+# Bundled DejaVu (Lambda has no system fonts; see fonts/LICENSE.DejaVu)
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+_FONTS_DIR = os.path.join(_MODULE_DIR, "fonts")
+
 # RGB backgrounds — same hex intent as create_weinkes.py (CSS #rrggbb)
 BG_DEFAULT = (0, 0, 0)
 BG_FORGE = (196, 59, 1)  # #c43b01
@@ -75,6 +79,7 @@ def _week_bounds(today: date) -> Tuple[Tuple[date, date], Tuple[date, date]]:
 
 def _load_font() -> ImageFont.ImageFont:
     paths = [
+        os.path.join(_FONTS_DIR, "DejaVuSans.ttf"),
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/System/Library/Fonts/Supplemental/Arial.ttf",
@@ -90,6 +95,7 @@ def _load_font() -> ImageFont.ImageFont:
 
 def _load_bold_font() -> ImageFont.ImageFont:
     paths = [
+        os.path.join(_FONTS_DIR, "DejaVuSans-Bold.ttf"),
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
@@ -102,6 +108,7 @@ def _load_bold_font() -> ImageFont.ImageFont:
             continue
     # Fallback: larger regular face if no bold file found
     for p in [
+        os.path.join(_FONTS_DIR, "DejaVuSans.ttf"),
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/System/Library/Fonts/Supplemental/Arial.ttf",

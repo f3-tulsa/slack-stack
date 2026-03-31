@@ -31,6 +31,19 @@ def test_cell_color_logic() -> None:
     assert w.cell_background_color("X\n24 Hr Beatdown\n0530") == w.BG_SPECIAL_BLUE
 
 
+def test_bundled_fonts_load_not_default_bitmap() -> None:
+    """Lambda has no system fonts; bundled DejaVu must load with distinct sizes."""
+    import weinke as w
+    from PIL import ImageFont
+
+    reg = w._load_font()
+    bold = w._load_bold_font()
+    assert isinstance(reg, ImageFont.FreeTypeFont)
+    assert isinstance(bold, ImageFont.FreeTypeFont)
+    assert reg.size == w.FONT_SIZE
+    assert bold.size == w.BOLD_FONT_SIZE
+
+
 def test_grid_pivot() -> None:
     import weinke as w
 
@@ -139,6 +152,8 @@ def main() -> None:
 
     test_cell_color_logic()
     print("cell_background_color OK")
+    test_bundled_fonts_load_not_default_bitmap()
+    print("bundled fonts OK")
     test_grid_pivot()
     print("build_week_grid OK")
     test_render_produces_valid_png()
