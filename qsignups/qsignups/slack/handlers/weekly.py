@@ -1,13 +1,71 @@
-from database import DbManager
+from database import DbManager, get_session, close_session
 from database.orm import Weekly, Master, AO
 from database.orm.views import vwWeeklyEvents
 from . import UpdateResponse
 import ast
 from datetime import date, datetime, timedelta
-from sqlalchemy import func
+from sqlalchemy import and_, func
 from slack import inputs
 from utilities import safe_get
 from constants import SCHEDULE_CREATE_LENGTH_DAYS, app_timezone
+
+# Chunk size for bulk inserts (avoid oversized single transactions)
+_EXTEND_INSERT_CHUNK = 2000
+
+
+def extend_all_schedules(logger) -> None:
+    """
+    For each row in qsignups_weekly, ensure qsignups_master has recurring rows through
+    today + SCHEDULE_CREATE_LENGTH_DAYS (same horizon as weekly.insert).
+    """
+    horizon = date.today() + timedelta(days=SCHEDULE_CREATE_LENGTH_DAYS)
+    record_list = []
+    session = get_session()
+    try:
+        weeklies = session.query(Weekly).all()
+        for w in weeklies:
+            max_date = (
+                session.query(func.max(Master.event_date))
+                .filter(
+                    and_(
+                        Master.ao_channel_id == w.ao_channel_id,
+                        Master.event_day_of_week == w.event_day_of_week,
+                        Master.event_time == w.event_time,
+                        Master.team_id == w.team_id,
+                        Master.event_recurring == True,
+                    )
+                )
+                .scalar()
+            )
+            start = (max_date + timedelta(days=1)) if max_date else date.today()
+            iterate_date = start
+            while iterate_date < horizon:
+                if iterate_date.strftime("%A") == w.event_day_of_week:
+                    record_list.append(
+                        Master(
+                            ao_channel_id=w.ao_channel_id,
+                            event_date=iterate_date,
+                            event_time=w.event_time,
+                            event_end_time=w.event_end_time,
+                            event_day_of_week=w.event_day_of_week,
+                            event_type=w.event_type,
+                            event_recurring=True,
+                            team_id=w.team_id,
+                        )
+                    )
+                iterate_date += timedelta(days=1)
+    finally:
+        session.rollback()
+        close_session(session)
+
+    if not record_list:
+        logger.info("extend_all_schedules: no new master rows needed")
+        return
+
+    for i in range(0, len(record_list), _EXTEND_INSERT_CHUNK):
+        DbManager.create_records(record_list[i : i + _EXTEND_INSERT_CHUNK])
+    logger.info("extend_all_schedules: inserted %s master rows", len(record_list))
+
 
 def delete(client, user_id, team_id, logger, input_data) -> UpdateResponse:
 

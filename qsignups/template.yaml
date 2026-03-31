@@ -125,8 +125,10 @@ Mappings:
   StagesMap:
     test:
       KeepWarmName: "QSignupsKeepWarmTest"
+      ExtendScheduleName: "QSignupsExtendScheduleTest"
     prod:
       KeepWarmName: "QSignupsKeepWarmProd"
+      ExtendScheduleName: "QSignupsExtendScheduleProd"
 
 Resources:
   QSignupsFunction:
@@ -168,6 +170,15 @@ Resources:
               - StagesMap
               - Ref: Stage
               - KeepWarmName
+        QSignupsExtendSchedule:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: "rate(7 days)"
+            Name: !FindInMap
+              - StagesMap
+              - Ref: Stage
+              - ExtendScheduleName
+            Input: '{"source": "qsignups.extend-schedule"}'
         # StravaExchange:
         #   Type: Api
         #   Properties:

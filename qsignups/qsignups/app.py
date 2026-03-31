@@ -1181,6 +1181,17 @@ def handler(event, context):
     # team_id = parsed_event['team_id']
     # print(f'Team ID: {team_id}')
     try:
+        if isinstance(event, str):
+            try:
+                event = json.loads(event)
+            except json.JSONDecodeError:
+                pass
+        if isinstance(event, dict) and event.get("source") == "qsignups.extend-schedule":
+            from slack.handlers.weekly import extend_all_schedules
+
+            extend_all_schedules(logger)
+            return {"statusCode": 200, "body": "OK"}
+
         slack_handler = SlackRequestHandler(app=app)
         return slack_handler.handle(event, context)
     except Exception:
