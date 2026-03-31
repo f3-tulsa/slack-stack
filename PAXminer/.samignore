@@ -1,4 +1,4 @@
-# Exclude from SAM zip build (CodeUri: .); keep only Lambda handler dependencies.
+# Legacy: excluded paths when PAXminer used zip CodeUri. Docker image uses PAXminer/Dockerfile COPY list instead.
 backblast_scraping/
 tests/
 __pycache__/

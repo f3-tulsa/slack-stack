@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: PAXminer — Slack user/channel sync (daily) and monthly charts (scheduled Lambda).
+Description: PAXminer — Slack user/channel sync (daily) and monthly charts (container-image Lambdas).
 
 Globals:
   Function:
@@ -84,9 +84,10 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "${AWS::StackName}-paxminer-sync"
-      CodeUri: .
-      Handler: handlers.sync_handler
-      Runtime: python3.12
+      PackageType: Image
+      ImageConfig:
+        Command:
+          - handlers.sync_handler
       MemorySize: 512
       Timeout: 300
       Events:
@@ -113,9 +114,9 @@ Resources:
           F3_REGION_NAME: !Ref F3RegionName
           PM_SLACK_TOKEN: !Ref PmSlackToken
     Metadata:
-      BuildMethod: python3.12
-      BuildProperties:
-        Manifest: requirements-lambda.txt
+      DockerTag: paxminer-sync
+      DockerContext: ..
+      Dockerfile: PAXminer/Dockerfile
 
   PaxminerSyncLogGroup:
     Type: AWS::Logs::LogGroup
@@ -127,9 +128,10 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "${AWS::StackName}-paxminer-charts"
-      CodeUri: .
-      Handler: handlers.chart_handler
-      Runtime: python3.12
+      PackageType: Image
+      ImageConfig:
+        Command:
+          - handlers.chart_handler
       MemorySize: 1024
       Timeout: 900
       Events:
@@ -154,9 +156,9 @@ Resources:
           F3_REGION_NAME: !Ref F3RegionName
           PM_SLACK_TOKEN: !Ref PmSlackToken
     Metadata:
-      BuildMethod: python3.12
-      BuildProperties:
-        Manifest: requirements-lambda.txt
+      DockerTag: paxminer-charts
+      DockerContext: ..
+      Dockerfile: PAXminer/Dockerfile
 
   PaxminerChartsLogGroup:
     Type: AWS::Logs::LogGroup

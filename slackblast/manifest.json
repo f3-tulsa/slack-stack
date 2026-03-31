@@ -1,7 +1,7 @@
 {
   "display_information": {
     "name": "Slackblast",
-    "description": "F3 Backblast and Preblast forms for Slack.",
+    "description": "F3 Region settings and Pre/Backblast templates for Slack.",
     "background_color": "#000000"
   },
   "features": {
@@ -11,24 +11,14 @@
     },
     "slash_commands": [
       {
-        "command": "/slackblast",
-        "url": "__HOSTNAME__/slack/events",
-        "description": "Launch backblast template"
-      },
-      {
         "command": "/backblast",
         "url": "__HOSTNAME__/slack/events",
-        "description": "Launch backblast template"
+        "description": "Launch Backblast template"
       },
       {
         "command": "/preblast",
         "url": "__HOSTNAME__/slack/events",
-        "description": "Launch preblast template"
-      },
-      {
-        "command": "/config-welcome-message",
-        "url": "__HOSTNAME__/slack/events",
-        "description": "Configure welcome messages"
+        "description": "Launch Preblast template"
       },
       {
         "command": "/config-slackblast",
@@ -39,11 +29,6 @@
         "command": "/tag-achievement",
         "url": "__HOSTNAME__/slack/events",
         "description": "Tag achievement"
-      },
-      {
-        "command": "/send-announcement",
-        "url": "__HOSTNAME__/slack/events",
-        "description": "Send announcement"
       }
     ]
   },

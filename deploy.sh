@@ -109,7 +109,7 @@ prereq_hint() {
       echo "Install AWS SAM CLI: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html"
       ;;
     docker)
-      echo "Install Docker (required for Weaselbot image builds): https://docs.docker.com/get-docker/"
+      echo "Install Docker (required for PAXminer and Weaselbot image builds): https://docs.docker.com/get-docker/"
       ;;
     python3)
       echo "Install Python 3 (used for manifest URL substitution)."
@@ -265,7 +265,7 @@ require_cmd python3
 
 needs_docker() {
   case "$STACK" in
-    all|weaselbot) return 0 ;;
+    all|paxminer|weaselbot) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -429,6 +429,7 @@ deploy_paxminer() {
   sam deploy \
     --stack-name "paxminer-${STAGE}" \
     "${SAM_DEPLOY_EXTRA[@]}" \
+    --resolve-image-repos \
     "${SAM_S3_BUCKET_ARGS[@]}" \
     --parameter-overrides \
       "DatabaseHost=${DATABASE_HOST}" \

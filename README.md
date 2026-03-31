@@ -16,7 +16,7 @@ Each app has its own SAM template under its directory; deploy order is flexible 
 - [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 - [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
 - Python **3.12** (matches Lambda runtimes) and **Python 3** on your PATH (used by `deploy.sh` for manifest substitution)
-- **Docker** (required to build **Weaselbot** when deploying `weaselbot` or `all`)
+- **Docker** (required to build **PAXminer** and **Weaselbot** container images when deploying `paxminer`, `weaselbot`, or `all`)
 - AWS account with permissions for Lambda, API Gateway, CloudFormation, IAM, S3, ECR, EventBridge
 - [GitHub CLI `gh`](https://cli.github.com/) (optional; required only for `./deploy.sh --setup-github`)
 
@@ -172,11 +172,13 @@ With `--log-type Tail`, the CLI prints metadata to **stdout** (including base64 
 
 ## Local development
 
+**Packaging on AWS:** **PAXminer** and **Weaselbot** deploy as **container images** (Docker builds pushed to ECR). **slackblast** and **qsignups** use SAM **zip** packaging (CI uses `--use-container` on `sam build` for Linux-compatible native wheels).
+
 Use a **virtual environment per app** (dependencies differ):
 
 ```bash
 cd PAXminer && python3.12 -m venv .venv && source .venv/bin/activate && pip install -r requirements-lambda.txt
-# repeat for weaselbot, slackblast, qsignups as needed
+# repeat for weaselbot (requirements-lambda.txt), slackblast (slackblast/slackblast/requirements.txt), qsignups (qsignups/qsignups/requirements.txt) as needed
 ```
 
 ## Database migration (existing host → new host)
@@ -223,6 +225,17 @@ Reports/checkpoints are written under `migration/` (gitignored). After `migrate_
 ./deploy.sh --env test --bootstrap        # bootstrap stack, then deploy all stacks
 ./deploy.sh --env test --setup-github     # after deploy: push env to GitHub (needs gh)
 ```
+
+### PAXminer: zip to container image (one-time migration)
+
+If an older **PAXminer** stack was deployed as **zip**-packaged Lambdas and you upgrade to **Docker** images, CloudFormation may be unable to replace functions that use a fixed `FunctionName`. Delete the stack once, then redeploy:
+
+```bash
+aws cloudformation delete-stack --stack-name paxminer-<stage>
+aws cloudformation wait stack-delete-complete --stack-name paxminer-<stage>
+```
+
+Replace `<stage>` with `test` or `prod`. Then run `./deploy.sh` or push to CI. EventBridge schedules and log groups are recreated by the template.
 
 4. **Post-deploy (first time only):** upload Strava assets to the image bucket:
 

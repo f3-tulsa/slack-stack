@@ -77,14 +77,15 @@ jobs:
             exit 1
           fi
 
-      # --- PAXminer (zip packaging) ---
+      # --- PAXminer (container image) ---
       - name: Build PAXminer
-        run: sam build -t PAXminer/template.yaml --use-container --no-cached
+        run: sam build -t PAXminer/template.yaml --no-cached
       - name: Deploy PAXminer
         run: |
           sam deploy \
             --stack-name paxminer-${{ vars.STAGE }} \
             --no-confirm-changeset --no-fail-on-empty-changeset \
+            --resolve-image-repos \
             --s3-bucket ${{ env.SAM_S3_BUCKET }} \
             --capabilities CAPABILITY_IAM \
             --parameter-overrides \
@@ -101,7 +102,7 @@ jobs:
 
       # --- Weaselbot (container image) ---
       - name: Build Weaselbot
-        run: sam build -t weaselbot/template.yaml
+        run: sam build -t weaselbot/template.yaml --no-cached
       - name: Deploy Weaselbot
         run: |
           sam deploy \

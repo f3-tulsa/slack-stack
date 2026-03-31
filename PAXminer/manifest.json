@@ -1,7 +1,7 @@
 {
   "display_information": {
     "name": "PAXMiner",
-    "description": "Manage F3 Region PAX data and send monthly charts.",
+    "description": "Collect PAX data and send monthly charts to Slack.",
     "background_color": "#2c2d30"
   },
   "features": {
