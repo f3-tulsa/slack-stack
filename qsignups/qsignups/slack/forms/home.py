@@ -90,7 +90,9 @@ def refresh(client, user: User, logger, top_message, team_id, context):
         "elements": [
             {
                 "type": "mrkdwn",
-                "text": "QSignups screen no longer updates automatically. Please use the refresh button to update the screen. Last updated: " + datetime.now(tz=constants.app_timezone()).strftime("%m/%d/%Y %I:%M %p")
+                "text": "QSignups screen no longer updates automatically. Please use the refresh button to update the screen. *Last updated: "
+                + datetime.now(tz=constants.app_timezone()).strftime("%m/%d/%Y %I:%M %p")
+                + "*"
             }
         ]
     }

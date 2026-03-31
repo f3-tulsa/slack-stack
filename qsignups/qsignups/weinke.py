@@ -40,6 +40,7 @@ CELL_PAD = 8
 LINE_GAP = 4
 MIN_COL_WIDTH = 80
 AO_COL_MIN_WIDTH = 140
+IMAGE_MARGIN = 20  # Padding around the grid in the PNG
 
 
 class StyledLine(NamedTuple):
@@ -389,14 +390,14 @@ def render_table_png(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> b
             max_content_h = max(max_content_h, _styled_lines_total_height(styled))
         row_heights.append(max(max_content_h + 2 * CELL_PAD, min_line_h + 2 * CELL_PAD))
 
-    total_w = sum(col_widths) + 1
-    total_h = sum(row_heights) + 1
+    total_w = sum(col_widths) + 1 + 2 * IMAGE_MARGIN
+    total_h = sum(row_heights) + 1 + 2 * IMAGE_MARGIN
     img = Image.new("RGB", (total_w, total_h), BG_DEFAULT)
     draw = ImageDraw.Draw(img)
 
-    y = 0
+    y = IMAGE_MARGIN
     for r in range(nrows):
-        x = 0
+        x = IMAGE_MARGIN
         h = row_heights[r]
         for c in range(ncols):
             w = col_widths[c]
