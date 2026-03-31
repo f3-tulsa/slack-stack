@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -65,6 +66,25 @@ def get_oauth_flow():
     return OAuthFlow(settings=settings)
 
 
+def _parse_users_json_column(raw: Any) -> dict:
+    """Parse ``users.json`` from DB (dict, str, or bytes)."""
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", errors="replace")
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw or raw == "{}":
+            return {}
+        try:
+            return dict(json.loads(raw))
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
 def ensure_users_in_db(
     user_ids: Sequence[str],
     client: WebClient,
@@ -73,8 +93,10 @@ def ensure_users_in_db(
 ) -> None:
     """Upsert Slack users into the regional paxminer ``users`` table.
 
-    If a row exists with the same email but a different ``user_id`` (e.g. prod vs test
-    workspace), updates that row's ``user_id`` first so FK references resolve.
+    If a row exists with the same email but a different ``user_id`` (e.g. migration),
+    repoints beatdowns/attendance/achievements to the current Slack ID, deletes the
+    stale user row, and merges ``start_date``, ``app``, ``json``, and stashes old
+    ``phone`` into ``json`` when needed.
 
     Then ``INSERT ... ON DUPLICATE KEY UPDATE`` by ``user_id`` for names/phone/email.
     """
@@ -87,6 +109,10 @@ def ensure_users_in_db(
     try:
         with engine.begin() as conn:
             for uid in unique_ids:
+                old_rows: Tuple[Any, ...] = ()
+                merged_old_json: dict = {}
+                preserved_start_date = None
+                preserved_app = None
                 try:
                     info = client.users_info(user=uid)
                     user_obj = info["user"]
@@ -109,26 +135,39 @@ def ensure_users_in_db(
                             )
 
                     if email and email.lower() not in ("", "none"):
-                        try:
+                        old_rows = tuple(
                             conn.execute(
                                 text(
-                                    "UPDATE users SET user_id = :new_uid, user_name = :uname, "
-                                    "real_name = :rname, phone = :phone "
-                                    "WHERE email = :email AND user_id != :new_uid LIMIT 1"
+                                    "SELECT user_id, start_date, app, phone, json "
+                                    "FROM users WHERE email = :email AND user_id != :new_uid"
                                 ),
-                                {
-                                    "new_uid": uid,
-                                    "uname": display,
-                                    "rname": real,
-                                    "phone": phone,
-                                    "email": email,
-                                },
-                            )
-                        except Exception:
-                            logger.debug(
-                                "ensure_users_in_db: email-match UPDATE failed for %s, falling through to INSERT",
+                                {"email": email, "new_uid": uid},
+                            ).fetchall()
+                        )
+                        for old_uid, old_start, old_app, old_phone, old_json_raw in old_rows:
+                            old_json_dict = _parse_users_json_column(old_json_raw)
+                            if old_json_dict:
+                                merged_old_json.update(old_json_dict)
+                            if old_phone:
+                                merged_old_json["old_phone"] = old_phone
+                            if old_start is not None and preserved_start_date is None:
+                                preserved_start_date = old_start
+                            if old_app is not None and preserved_app is None:
+                                preserved_app = old_app
+                            for stmt in (
+                                "UPDATE beatdowns SET q_user_id = :new WHERE q_user_id = :old",
+                                "UPDATE beatdowns SET coq_user_id = :new WHERE coq_user_id = :old",
+                                "UPDATE bd_attendance SET user_id = :new WHERE user_id = :old",
+                                "UPDATE bd_attendance SET q_user_id = :new WHERE q_user_id = :old",
+                                "UPDATE achievements_awarded SET pax_id = :new WHERE pax_id = :old",
+                            ):
+                                conn.execute(text(stmt), {"new": uid, "old": old_uid})
+                            conn.execute(text("DELETE FROM users WHERE user_id = :old"), {"old": old_uid})
+                            logger.info(
+                                "ensure_users_in_db: merged user %s into %s (same email %s)",
+                                old_uid,
                                 uid,
-                                exc_info=True,
+                                email,
                             )
 
                     conn.execute(
@@ -149,6 +188,29 @@ def ensure_users_in_db(
                             "js": "{}",
                         },
                     )
+
+                    if old_rows:
+                        cur = conn.execute(
+                            text("SELECT json FROM users WHERE user_id = :uid"),
+                            {"uid": uid},
+                        ).fetchone()
+                        cur_json = _parse_users_json_column(cur[0] if cur else None)
+                        final_json = {**merged_old_json, **cur_json}
+                        conn.execute(
+                            text(
+                                "UPDATE users SET "
+                                "start_date = COALESCE(:old_start, start_date), "
+                                "app = COALESCE(:old_app, app), "
+                                "json = :merged_json "
+                                "WHERE user_id = :uid"
+                            ),
+                            {
+                                "uid": uid,
+                                "old_start": preserved_start_date,
+                                "old_app": preserved_app,
+                                "merged_json": json.dumps(final_json),
+                            },
+                        )
                 except Exception:
                     logger.warning("ensure_users_in_db: failed for user %s", uid, exc_info=True)
     finally:
