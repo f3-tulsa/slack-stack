@@ -437,7 +437,7 @@ PY
 }
 
 deploy_paxminer() {
-  sam build -t PAXminer/template.yaml "${SAM_BUILD_EXTRA[@]}" 2>&1 | tee -a "$RECEIPT_FILE"
+  sam build -t PAXminer/template.yaml ${SAM_BUILD_EXTRA[@]+"${SAM_BUILD_EXTRA[@]}"} 2>&1 | tee -a "$RECEIPT_FILE"
   local brc="${PIPESTATUS[0]}"
   if [[ "$brc" -ne 0 ]]; then return "$brc"; fi
   [[ "$BUILD_ONLY" == true ]] && return 0
@@ -462,7 +462,7 @@ deploy_paxminer() {
 }
 
 deploy_weaselbot() {
-  sam build -t weaselbot/template.yaml "${SAM_BUILD_EXTRA[@]}" 2>&1 | tee -a "$RECEIPT_FILE"
+  sam build -t weaselbot/template.yaml ${SAM_BUILD_EXTRA[@]+"${SAM_BUILD_EXTRA[@]}"} 2>&1 | tee -a "$RECEIPT_FILE"
   local brc="${PIPESTATUS[0]}"
   if [[ "$brc" -ne 0 ]]; then return "$brc"; fi
   [[ "$BUILD_ONLY" == true ]] && return 0
@@ -489,7 +489,7 @@ deploy_weaselbot() {
 }
 
 deploy_slackblast() {
-  sam build -t slackblast/template.yaml --use-container "${SAM_BUILD_EXTRA[@]}" 2>&1 | tee -a "$RECEIPT_FILE"
+  sam build -t slackblast/template.yaml --use-container ${SAM_BUILD_EXTRA[@]+"${SAM_BUILD_EXTRA[@]}"} 2>&1 | tee -a "$RECEIPT_FILE"
   local brc="${PIPESTATUS[0]}"
   if [[ "$brc" -ne 0 ]]; then return "$brc"; fi
   [[ "$BUILD_ONLY" == true ]] && return 0
@@ -526,7 +526,7 @@ deploy_slackblast() {
 }
 
 deploy_qsignups() {
-  sam build -t qsignups/template.yaml --use-container "${SAM_BUILD_EXTRA[@]}" 2>&1 | tee -a "$RECEIPT_FILE"
+  sam build -t qsignups/template.yaml --use-container ${SAM_BUILD_EXTRA[@]+"${SAM_BUILD_EXTRA[@]}"} 2>&1 | tee -a "$RECEIPT_FILE"
   local brc="${PIPESTATUS[0]}"
   if [[ "$brc" -ne 0 ]]; then return "$brc"; fi
   [[ "$BUILD_ONLY" == true ]] && return 0
