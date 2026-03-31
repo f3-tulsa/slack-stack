@@ -95,7 +95,10 @@ def test_upload_to_s3_calls_boto3() -> None:
         assert kw["Key"] == "weinkes/T1_current_week_weinke.png"
         assert kw["ContentType"] == "image/png"
         assert kw["Body"] == b"fakepng"
-        assert url == "https://my-bucket.s3.amazonaws.com/weinkes/T1_current_week_weinke.png"
+        assert url.startswith(
+            "https://my-bucket.s3.amazonaws.com/weinkes/T1_current_week_weinke.png?v="
+        )
+        assert url.split("?v=", 1)[1].isdigit()
 
 
 def test_generate_and_store_updates_db() -> None:

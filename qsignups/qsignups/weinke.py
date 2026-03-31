@@ -10,6 +10,7 @@ import io
 import logging
 import os
 import re
+import time
 from datetime import date, timedelta
 from typing import List, NamedTuple, Optional, Sequence, Tuple
 
@@ -419,7 +420,7 @@ def render_table_png(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> b
 def upload_to_s3(png_bytes: bytes, bucket: str, key: str) -> str:
     client = boto3.client("s3")
     client.put_object(Bucket=bucket, Key=key, Body=png_bytes, ContentType="image/png")
-    return f"https://{bucket}.s3.amazonaws.com/{key}"
+    return f"https://{bucket}.s3.amazonaws.com/{key}?v={int(time.time())}"
 
 
 def generate_and_store_weinke(team_id: str, logger: Optional[logging.Logger] = None) -> None:
