@@ -1,5 +1,5 @@
-Pillow>=10.0.0,<11
-cryptography>=42.0.0
+Pillow>=12.1.1,<13
+cryptography>=46.0.6
 slack_sdk>=3.27.0,<4
 slack_bolt>=1.18.0,<2
 pymysql>=1.1.1,<2
@@ -9,4 +9,4 @@ google-auth>=2.29.0,<3
 google-auth-oauthlib>=1.2.0,<2
 google-api-python-client>=2.125.0,<3
 protobuf>=4.25.0,<6
-urllib3>=2.2.0,<3
+urllib3>=2.2.2,<3

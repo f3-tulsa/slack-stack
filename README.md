@@ -207,6 +207,8 @@ cd PAXminer && python3.12 -m venv .venv && source .venv/bin/activate && pip inst
 # repeat for weaselbot (requirements-lambda.txt), slackblast (slackblast/slackblast/requirements.txt), qsignups (qsignups/qsignups/requirements.txt) as needed
 ```
 
+**slackblast** runtime deps are maintained with **Poetry** under [`slackblast/slackblast/`](slackblast/slackblast/) (`pyproject.toml`, `poetry.lock`). The committed [`requirements.txt`](slackblast/slackblast/requirements.txt) is generated for SAM (`poetry export`). Use **Python 3.12** with Poetry locally (`poetry env use python3.12`) so builds match Lambda. After editing `pyproject.toml`, run `poetry update` then `poetry export -f requirements.txt --without-hashes -o requirements.txt` (CI also auto-syncs via `requirements-sync` if the files drift).
+
 **Tests (mirrors `ci.yml`):** use a separate venv per app to avoid conflicting pins (e.g. `pymysql`). From the repo root, with `DB_ENCRYPTION_KEY` set to any string ≥16 chars for the qsignups handler import test:
 
 ```bash
@@ -293,7 +295,7 @@ aws s3 cp slackblast/assets/ s3://YOUR_IMAGE_BUCKET/ --recursive
 
 | Workflow | When it runs |
 |----------|----------------|
-| **[`.github/workflows/ci.yml`](.github/workflows/ci.yml)** | Pull requests and pushes to **`main`**, **`test`**, and **`prod`**: SAM template lint (`sam validate --lint`), Python tests (weaselbot, slackblast, qsignups), and `pip-audit` on app requirements. No AWS credentials. |
+| **[`.github/workflows/ci.yml`](.github/workflows/ci.yml)** | Pull requests and pushes to **`main`**, **`test`**, and **`prod`**: **`requirements-sync`** (regenerates `slackblast/slackblast/requirements.txt` from `poetry.lock` if drifted; auto-commit on same-repo branches), SAM lint, Python tests, and **`pip-audit`** on every app `requirements*.txt`. No AWS credentials. |
 | **[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)** | Pushes to **`test`** and **`prod`** only, plus manual *Run workflow*. **`main`** stays PR-only for merges. |
 
 Manual deploy: *Actions → Deploy Slack Stack → Run workflow*. Choose **environment** (`test` / `prod`) and optional **stack** (`all` or a single app). On **push**, path-based detection is used (the stack input is ignored).
@@ -331,7 +333,7 @@ When the workflow finishes without deploy failures, the **post-deploy** job appe
 
 ### Dependabot
 
-[`.github/dependabot.yml`](.github/dependabot.yml) opens weekly PRs to update **GitHub Actions** and **Docker** base images (`PAXminer/`, `weaselbot/`).
+[`.github/dependabot.yml`](.github/dependabot.yml) opens weekly PRs to update **GitHub Actions**, **Docker** base images (`PAXminer/`, `weaselbot/`), and **pip** requirements under each app directory (`PAXminer/`, `weaselbot/`, `slackblast/slackblast/`, `qsignups/`, `migration/`, etc.).
 
 ### GitHub Environments
 

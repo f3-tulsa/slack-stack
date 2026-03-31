@@ -12,3 +12,31 @@ updates:
     directory: /weaselbot
     schedule:
       interval: weekly
+  - package-ecosystem: pip
+    directory: /PAXminer
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /PAXminer/database_management
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /weaselbot
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /slackblast/slackblast
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /qsignups/qsignups
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /qsignups/weinkes
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /migration
+    schedule:
+      interval: weekly
