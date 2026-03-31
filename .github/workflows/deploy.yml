@@ -190,6 +190,45 @@ jobs:
             --capabilities CAPABILITY_IAM \
             --parameter-overrides "${OVERRIDES[@]}"
 
+      # Force cold start so token bootstrap runs (DB upsert) without waiting for EventBridge schedule
+      - name: Smoke-test scheduled Lambdas
+        env:
+          STAGE: ${{ vars.STAGE }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          invoke_one() {
+            local fn="$1"
+            echo "--- Invoking ${fn} ---"
+            aws lambda invoke \
+              --function-name "$fn" \
+              --invocation-type RequestResponse \
+              --cli-binary-format raw-in-base64-out \
+              --payload '{}' \
+              --log-type Tail \
+              /tmp/lambda-payload.json > /tmp/lambda-meta.json
+            if jq -e '.LogResult' /tmp/lambda-meta.json >/dev/null 2>&1; then
+              echo "--- CloudWatch tail (last invocation) ---"
+              jq -r '.LogResult' /tmp/lambda-meta.json | base64 -d 2>/dev/null || true
+              echo ""
+            fi
+            echo "--- Handler response ---"
+            cat /tmp/lambda-payload.json
+            echo ""
+            local sc
+            sc=$(jq -r '.statusCode // empty' /tmp/lambda-payload.json 2>/dev/null || echo "")
+            if [[ -z "$sc" || "$sc" == "null" ]]; then
+              echo "::error::Lambda ${fn}: response missing statusCode"
+              exit 1
+            fi
+            if [[ "$sc" != "200" ]]; then
+              echo "::error::Lambda ${fn} returned statusCode=${sc}"
+              exit 1
+            fi
+          }
+          invoke_one "paxminer-${STAGE}-paxminer-sync"
+          invoke_one "weaselbot-${STAGE}-weaselbot-achievements"
+
       - name: Deploy summary, receipt, and stage Slack manifests
         env:
           STAGE: ${{ vars.STAGE }}

@@ -41,7 +41,12 @@ def _try_bootstrap_weaselbot_slack_token() -> None:
     )
 
 
-_try_bootstrap_weaselbot_slack_token()
+try:
+    _try_bootstrap_weaselbot_slack_token()
+except Exception:
+    logging.exception(
+        "Token bootstrap failed (non-fatal); weaselbot.regions slack_token may need manual upsert"
+    )
 
 
 def achievements_handler(event, context):

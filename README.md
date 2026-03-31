@@ -123,6 +123,49 @@ Scheduled Weaselbot Lambdas read **`slack_token`** from **`weaselbot_<stage>.reg
 - The row’s **`paxminer_schema`** must match the regional schema name (e.g. `f3ttown_test` for `F3_REGION_NAME=f3ttown` and `STAGE=test`).
 - Set **`achievement_channel`** (and other Weaselbot fields) via slackblast’s Weaselbot config UI or direct SQL if achievements should post to a channel.
 
+### Manual Lambda invocation (PAXminer / Weaselbot)
+
+**PAXminer** and **Weaselbot** upsert encrypted bot tokens into the DB at **cold start** (see `common/token_bootstrap.py`). EventBridge schedules may run only daily, so after deploy the first cold start might not happen for hours.
+
+The **GitHub Actions** deploy workflow runs a **smoke-test** step that synchronously invokes:
+
+- `paxminer-<stage>-paxminer-sync`
+- `weaselbot-<stage>-weaselbot-achievements`
+
+so token bootstrap runs immediately after each deploy.
+
+To **manually trigger** the same Lambdas (replace `test` with your stage: `test` or `prod`; set `AWS_REGION` as needed):
+
+```bash
+export AWS_REGION=us-east-1   # or your stack region
+
+aws lambda invoke \
+  --function-name paxminer-test-paxminer-sync \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{}' \
+  --log-type Tail \
+  /tmp/pm-sync.json && cat /tmp/pm-sync.json
+
+aws lambda invoke \
+  --function-name weaselbot-test-weaselbot-achievements \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{}' \
+  --log-type Tail \
+  /tmp/wb-ach.json && cat /tmp/wb-ach.json
+```
+
+Optional: run the other scheduled functions (charts / Kotter):
+
+```bash
+aws lambda invoke --function-name paxminer-test-paxminer-charts \
+  --cli-binary-format raw-in-base64-out --payload '{}' /tmp/pm-charts.json && cat /tmp/pm-charts.json
+
+aws lambda invoke --function-name weaselbot-test-weaselbot-kotter \
+  --cli-binary-format raw-in-base64-out --payload '{}' /tmp/wb-kotter.json && cat /tmp/wb-kotter.json
+```
+
+With `--log-type Tail`, the CLI prints metadata to **stdout** (including base64 `LogResult`); decode with `jq -r '.LogResult' | base64 -d` if you need the tail of CloudWatch logs inline.
+
 ### Lambda lazy listeners and `lambda:InvokeFunction`
 
 **slackblast** and **qsignups** use Bolt’s **`process_before_response`** pattern on Lambda: the function must be allowed to **invoke itself** so the “lazy” handler runs after Slack gets an immediate `ack`. The SAM templates grant **`lambda:InvokeFunction`** on functions in the same stack. If this permission were missing, you would see **`AccessDeniedException`** on self-invoke and Slack would report that the app did not respond.

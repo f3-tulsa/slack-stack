@@ -70,7 +70,12 @@ def _try_bootstrap_pm_slack_token() -> None:
     )
 
 
-_try_bootstrap_pm_slack_token()
+try:
+    _try_bootstrap_pm_slack_token()
+except Exception:
+    logging.exception(
+        "Token bootstrap failed (non-fatal); paxminer.regions slack_token may need manual upsert"
+    )
 
 
 def _chart_plot_dir() -> str:
