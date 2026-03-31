@@ -135,9 +135,13 @@ def chart_handler(event, context):
         for row in regions:
             region = row.get("region")
             _tok = row.get("slack_token")
-            key = decrypt_field(_tok) if _tok else None
             schema_name = row.get("schema_name")
             firstf = row.get("firstf_channel")
+            try:
+                key = decrypt_field(_tok) if _tok else None
+            except Exception as e:
+                logging.warning("Skipping region %s: cannot decrypt token: %s", region, e)
+                continue
             if not key or not schema_name:
                 logging.warning("Skipping region missing token or schema: %s", region)
                 continue

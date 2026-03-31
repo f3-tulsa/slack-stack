@@ -62,9 +62,18 @@ def database_management_update():
     for index, row in regions_df.iterrows():
         region = row['region']
         _tok = row["slack_token"]
-        key = decrypt_field(_tok) if _tok else None
         region_db = row['schema_name']
-        
+
+        try:
+            key = decrypt_field(_tok) if _tok else None
+        except Exception as e:
+            logging.warning("Skipping region %s: cannot decrypt token: %s", region, e)
+            continue
+
+        if not key or not region_db:
+            logging.warning("Skipping region missing token or schema: %s", region)
+            continue
+
         logging.info('Executing user updates for region ' + region)
         try :
             database_slack_user_update(region_db, key, full_run, init_db(host, port, user, password, region_db))
