@@ -247,6 +247,17 @@ Resources:
               - events:TagResource
               - events:UntagResource
             Resource: "*"
+          - Sid: Scheduler
+            Effect: Allow
+            Action:
+              - scheduler:CreateSchedule
+              - scheduler:GetSchedule
+              - scheduler:UpdateSchedule
+              - scheduler:DeleteSchedule
+              - scheduler:GetScheduleGroup
+              - scheduler:TagResource
+              - scheduler:UntagResource
+            Resource: "*"
           - Sid: ECR
             Effect: Allow
             Action:
