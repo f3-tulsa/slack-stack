@@ -11,7 +11,7 @@ import logging
 import os
 import re
 from datetime import date, timedelta
-from typing import List, Optional, Sequence, Tuple
+from typing import List, NamedTuple, Optional, Sequence, Tuple
 
 import boto3
 from PIL import Image, ImageDraw, ImageFont
@@ -30,10 +30,18 @@ TEXT_COLOR = (240, 255, 255)  # #F0FFFF
 BORDER_COLOR = (240, 255, 255)
 
 FONT_SIZE = 15
+BOLD_FONT_SIZE = 18
 CELL_PAD = 8
 LINE_GAP = 4
 MIN_COL_WIDTH = 80
 AO_COL_MIN_WIDTH = 140
+
+
+class StyledLine(NamedTuple):
+    """One drawn text line with the font used for metrics and rendering."""
+
+    text: str
+    font: ImageFont.ImageFont
 
 
 def cell_background_color(label: str) -> Tuple[int, int, int]:
@@ -74,6 +82,32 @@ def _load_font() -> ImageFont.ImageFont:
     for p in paths:
         try:
             return ImageFont.truetype(p, FONT_SIZE)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def _load_bold_font() -> ImageFont.ImageFont:
+    paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/Library/Fonts/Arial Bold.ttf",
+    ]
+    for p in paths:
+        try:
+            return ImageFont.truetype(p, BOLD_FONT_SIZE)
+        except OSError:
+            continue
+    # Fallback: larger regular face if no bold file found
+    for p in [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+    ]:
+        try:
+            return ImageFont.truetype(p, BOLD_FONT_SIZE)
         except OSError:
             continue
     return ImageFont.load_default()
@@ -127,11 +161,102 @@ def _cell_lines(
 
 
 def _line_height(font: ImageFont.ImageFont) -> int:
-    # Approximate line height from a representative string
+    """Vertical advance for one line using this font."""
     img = Image.new("RGB", (10, 10), BG_DEFAULT)
     draw = ImageDraw.Draw(img)
     _, h = _text_size(draw, "Ay", font)
-    return max(h + LINE_GAP, FONT_SIZE + LINE_GAP)
+    size_hint = getattr(font, "size", None)
+    if size_hint is None:
+        size_hint = FONT_SIZE
+    return max(h + LINE_GAP, int(size_hint) + LINE_GAP)
+
+
+def _wrap_paragraph_styled(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.ImageFont,
+    max_width: int,
+) -> List[StyledLine]:
+    if not text:
+        return [StyledLine("", font)]
+    wrapped = _wrap_paragraph(draw, text, font, max_width)
+    return [StyledLine(line, font) for line in wrapped]
+
+
+def _styled_cell_lines(
+    draw: ImageDraw.ImageDraw,
+    cell_text: str,
+    font_reg: ImageFont.ImageFont,
+    font_bold: ImageFont.ImageFont,
+    max_text_width: int,
+    row: int,
+    col: int,
+) -> List[StyledLine]:
+    """
+    Wrapped lines with per-line font: bold for AO names, day/date headers, Q names;
+    regular for location subtitles and event times.
+    """
+    if not cell_text.strip():
+        return [StyledLine("", font_reg)]
+
+    out: List[StyledLine] = []
+
+    if row == 0 and col == 0:
+        # "AO" bold, "Location" regular
+        parts = cell_text.split("\n")
+        for pi, part in enumerate(parts):
+            if not part:
+                out.append(StyledLine("", font_reg))
+                continue
+            f = font_bold if pi == 0 else font_reg
+            out.extend(_wrap_paragraph_styled(draw, part, f, max_text_width))
+        return out if out else [StyledLine("", font_reg)]
+
+    if row == 0 and col > 0:
+        # Day and date: all bold
+        for part in cell_text.split("\n"):
+            if not part:
+                out.append(StyledLine("", font_bold))
+                continue
+            out.extend(_wrap_paragraph_styled(draw, part, font_bold, max_text_width))
+        return out if out else [StyledLine("", font_bold)]
+
+    if row > 0 and col == 0:
+        # AO name bold; location subtitle regular (first newline separates)
+        nl = cell_text.find("\n")
+        if nl == -1:
+            head, tail = cell_text, ""
+        else:
+            head, tail = cell_text[:nl], cell_text[nl + 1 :]
+        if head.strip():
+            out.extend(_wrap_paragraph_styled(draw, head.strip(), font_bold, max_text_width))
+        if tail.strip():
+            out.extend(_wrap_paragraph_styled(draw, tail.strip(), font_reg, max_text_width))
+        return out if out else [StyledLine("", font_reg)]
+
+    # Data cells: Q / special bold; last line if 4-digit time is regular. Supports "\n\n" merged blocks.
+    blocks = cell_text.split("\n\n")
+    for bi, block in enumerate(blocks):
+        if bi > 0:
+            out.append(StyledLine("", font_reg))
+        block = block.strip()
+        if not block:
+            continue
+        raw_lines = block.split("\n")
+        time_idx: Optional[int] = None
+        if raw_lines and re.match(r"^\d{4}$", raw_lines[-1].strip()):
+            time_idx = len(raw_lines) - 1
+        for i, line in enumerate(raw_lines):
+            if not line.strip() and i < len(raw_lines) - 1:
+                out.append(StyledLine("", font_reg))
+                continue
+            f = font_reg if time_idx is not None and i == time_idx else font_bold
+            out.extend(_wrap_paragraph_styled(draw, line, f, max_text_width))
+    return out if out else [StyledLine("", font_reg)]
+
+
+def _styled_lines_total_height(styled: List[StyledLine]) -> int:
+    return sum(_line_height(sl.font) for sl in styled)
 
 
 def build_week_grid(
@@ -212,10 +337,11 @@ def render_table_png(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> b
     """
     Draw the schedule grid; image height/width grow with row/column count and text wrapping.
     """
-    font = _load_font()
+    font_reg = _load_font()
+    font_bold = _load_bold_font()
     img = Image.new("RGB", (10, 10), BG_DEFAULT)
     draw = ImageDraw.Draw(img)
-    line_h = _line_height(font)
+    min_line_h = max(_line_height(font_reg), _line_height(font_bold))
 
     ncols = len(headers)
     nrows = len(rows) + 1  # + header
@@ -232,9 +358,11 @@ def render_table_png(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> b
             for r in range(nrows):
                 cell = grid[r][c] if c < len(grid[r]) else ""
                 inner_w = max(col_widths[c] - 2 * CELL_PAD, 40)
-                lines = _cell_lines(draw, cell, font, inner_w)
-                for line in lines:
-                    max_w = max(max_w, _text_size(draw, line, font)[0])
+                styled = _styled_cell_lines(
+                    draw, cell, font_reg, font_bold, inner_w, r, c
+                )
+                for sl in styled:
+                    max_w = max(max_w, _text_size(draw, sl.text, sl.font)[0])
             need = max_w + 2 * CELL_PAD
             if c == 0:
                 col_widths[c] = max(AO_COL_MIN_WIDTH, need)
@@ -243,13 +371,15 @@ def render_table_png(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> b
 
     row_heights: List[int] = []
     for r in range(nrows):
-        max_lines = 1
+        max_content_h = min_line_h
         for c in range(ncols):
             cell = grid[r][c] if c < len(grid[r]) else ""
             inner_w = max(col_widths[c] - 2 * CELL_PAD, 40)
-            lines = _cell_lines(draw, cell, font, inner_w)
-            max_lines = max(max_lines, len(lines))
-        row_heights.append(max(line_h * max_lines + 2 * CELL_PAD, line_h + 2 * CELL_PAD))
+            styled = _styled_cell_lines(
+                draw, cell, font_reg, font_bold, inner_w, r, c
+            )
+            max_content_h = max(max_content_h, _styled_lines_total_height(styled))
+        row_heights.append(max(max_content_h + 2 * CELL_PAD, min_line_h + 2 * CELL_PAD))
 
     total_w = sum(col_widths) + 1
     total_h = sum(row_heights) + 1
@@ -268,14 +398,16 @@ def render_table_png(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> b
                 bg = BG_DEFAULT
             draw.rectangle([x, y, x + w, y + h], fill=bg, outline=BORDER_COLOR, width=1)
             inner_w = max(w - 2 * CELL_PAD, 40)
-            lines = _cell_lines(draw, cell, font, inner_w)
-            text_h = len(lines) * line_h
+            styled = _styled_cell_lines(
+                draw, cell, font_reg, font_bold, inner_w, r, c
+            )
+            text_h = _styled_lines_total_height(styled)
             ty = y + (h - text_h) // 2
-            for line in lines:
-                tw, th = _text_size(draw, line, font)
+            for sl in styled:
+                tw, _th = _text_size(draw, sl.text, sl.font)
                 tx = x + (w - tw) // 2
-                draw.text((tx, ty), line, fill=TEXT_COLOR, font=font)
-                ty += line_h
+                draw.text((tx, ty), sl.text, fill=TEXT_COLOR, font=sl.font)
+                ty += _line_height(sl.font)
             x += w
         y += h
 
