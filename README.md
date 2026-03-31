@@ -166,6 +166,30 @@ aws lambda invoke --function-name weaselbot-test-weaselbot-kotter \
 
 With `--log-type Tail`, the CLI prints metadata to **stdout** (including base64 `LogResult`); decode with `jq -r '.LogResult' | base64 -d` if you need the tail of CloudWatch logs inline.
 
+### Manual Lambda invocation (qsignups)
+
+The **qsignups** stack runs `extend_all_schedules` after each deploy (CloudFormation custom resource) and on a **7-day** EventBridge schedule. To trigger a full calendar reconciliation manually (replace `test` with your stage):
+
+```bash
+export AWS_REGION=us-east-1   # or your stack region
+
+aws lambda invoke \
+  --function-name qsignups-test-QSignupsFunction-XXXXX \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{"source": "qsignups.extend-schedule"}' \
+  --log-type Tail \
+  /tmp/qs-extend.json && cat /tmp/qs-extend.json
+```
+
+Use the physical function name from CloudFormation (e.g. **Stack resources** → `QSignupsFunction`) or:
+
+```bash
+aws cloudformation describe-stack-resources \
+  --stack-name "qsignups-${STAGE}" \
+  --query "StackResources[?LogicalResourceId=='QSignupsFunction'].PhysicalResourceId" \
+  --output text
+```
+
 ### Lambda lazy listeners and `lambda:InvokeFunction`
 
 **slackblast** and **qsignups** use Bolt’s **`process_before_response`** pattern on Lambda: the function must be allowed to **invoke itself** so the “lazy” handler runs after Slack gets an immediate `ack`. The SAM templates grant **`lambda:InvokeFunction`** on functions in the same stack. If this permission were missing, you would see **`AccessDeniedException`** on self-invoke and Slack would report that the app did not respond.

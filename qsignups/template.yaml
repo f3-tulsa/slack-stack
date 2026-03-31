@@ -108,6 +108,12 @@ Parameters:
   SlackClientId:
     Description: Slack app OAuth Client ID (Basic Information in api.slack.com); must match your self-hosted app
     Type: String
+  ExtendScheduleDeployNonce:
+    Type: String
+    Default: "0"
+    Description: >
+      Change each deploy (e.g. unix timestamp via --parameter-overrides) so the
+      extend-schedule custom resource runs and reconciles the rolling calendar.
   # PasswordEncryptKey:
   #   Description: Hash encrypt key for decrypting email passwords
   #   Type: String
@@ -217,6 +223,70 @@ Resources:
     Properties:
       LogGroupName: !Sub "/aws/lambda/${QSignupsFunction}"
       RetentionInDays: 30
+
+  # Invokes QSignups with extend-schedule after each stack deploy (Custom Resource below).
+  QSignupsExtendScheduleInvoker:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: CloudFormation custom resource provider; invokes main Lambda with extend-schedule payload
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 400
+      MemorySize: 128
+      InlineCode: |
+        import json
+        import os
+        import urllib.request
+
+        import boto3
+
+        PHYSICAL_ID = "QSignupsExtendScheduleOnDeploy"
+
+        def send_resp(event, context, status, physical_id, reason, data=None):
+            body = json.dumps({
+                "Status": status,
+                "Reason": (reason or "")[:4096],
+                "PhysicalResourceId": physical_id,
+                "StackId": event["StackId"],
+                "RequestId": event["RequestId"],
+                "LogicalResourceId": event["LogicalResourceId"],
+                "Data": data or {},
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                event["ResponseURL"],
+                data=body,
+                method="PUT",
+                headers={"Content-Type": ""},
+            )
+            urllib.request.urlopen(req)
+
+        def handler(event, context):
+            physical_id = event.get("PhysicalResourceId") or PHYSICAL_ID
+            if event.get("RequestType") == "Delete":
+                send_resp(event, context, "SUCCESS", physical_id, "No-op on delete")
+                return
+            try:
+                boto3.client("lambda").invoke(
+                    FunctionName=os.environ["QSIGNUPS_FUNCTION_NAME"],
+                    InvocationType="RequestResponse",
+                    Payload=json.dumps({"source": "qsignups.extend-schedule"}).encode("utf-8"),
+                )
+                send_resp(event, context, "SUCCESS", physical_id, "Invoked extend-schedule")
+            except Exception as e:
+                send_resp(event, context, "FAILED", physical_id, str(e))
+                raise
+      Environment:
+        Variables:
+          QSIGNUPS_FUNCTION_NAME: !Ref QSignupsFunction
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref QSignupsFunction
+
+  QSignupsExtendScheduleOnDeploy:
+    Type: Custom::ExtendScheduleOnDeploy
+    Properties:
+      ServiceToken: !GetAtt QSignupsExtendScheduleInvoker.Arn
+      DeployNonce: !Ref ExtendScheduleDeployNonce
 
 Outputs:
   # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function

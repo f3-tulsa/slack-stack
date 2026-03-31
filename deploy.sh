@@ -531,30 +531,10 @@ deploy_qsignups() {
       "SlackClientSecret=${QS_SLACK_CLIENT_SECRET}" \
       "SlackClientId=${QS_SLACK_CLIENT_ID}" \
       "DbEncryptionKey=${DB_ENCRYPTION_KEY}" \
+      "ExtendScheduleDeployNonce=$(date +%s)" \
       ${google_overrides} \
     2>&1 | tee -a "$RECEIPT_FILE"
-  local deploy_rc="${PIPESTATUS[0]}"
-  if [[ "$deploy_rc" -eq 0 ]]; then
-    local qs_fn
-    qs_fn="$(aws cloudformation describe-stack-resources \
-      --stack-name "qsignups-${STAGE}" \
-      --region "$AWS_REGION" \
-      --query "StackResources[?LogicalResourceId=='QSignupsFunction'].PhysicalResourceId" \
-      --output text 2>/dev/null || true)"
-    if [[ -n "$qs_fn" ]]; then
-      log_receipt "Invoking QSignups extend-schedule after deploy (function: ${qs_fn})"
-      aws lambda invoke \
-        --function-name "$qs_fn" \
-        --region "$AWS_REGION" \
-        --cli-binary-format raw-in-base64-out \
-        --payload '{"source": "qsignups.extend-schedule"}' \
-        "${TMPDIR:-/tmp}/qsignups-extend-schedule-invoke.json" \
-        2>&1 | tee -a "$RECEIPT_FILE" || true
-    else
-      log_receipt "Warning: could not resolve QSignupsFunction for extend-schedule invoke"
-    fi
-  fi
-  return "$deploy_rc"
+  return "${PIPESTATUS[0]}"
 }
 
 case "$STACK" in

@@ -181,6 +181,7 @@ jobs:
             "SlackClientSecret=${{ secrets.QS_SLACK_CLIENT_SECRET }}"
             "SlackClientId=${{ vars.QS_SLACK_CLIENT_ID }}"
             "DbEncryptionKey=${{ secrets.DB_ENCRYPTION_KEY }}"
+            "ExtendScheduleDeployNonce=${{ github.sha }}"
           )
           [[ -n "${QS_GOOGLE_CLIENT_ID:-}" ]] && OVERRIDES+=("GoogleClientId=${QS_GOOGLE_CLIENT_ID}")
           [[ -n "${QS_GOOGLE_CLIENT_SECRET:-}" ]] && OVERRIDES+=("GoogleClientSecret=${QS_GOOGLE_CLIENT_SECRET}")

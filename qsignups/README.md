@@ -13,6 +13,15 @@ Use the OAuth install URL from your deployed API (CloudFormation output **`QSign
 - Home tab / slash commands for schedule and signups.
 - Google Calendar sync (OAuth tokens for `google_auth_data` are encrypted at rest; `DB_ENCRYPTION_KEY` is required at deploy/runtime — see root README).
 
+## Schedule reconciliation
+
+- **Rolling calendar:** Adding a recurring AO schedule creates `qsignups_master` rows from the chosen start date through **today + `SCHEDULE_CREATE_LENGTH_DAYS`** (SAM parameter `ScheduleCreateLengthDays`, default **365**). The same horizon is used when extending and when editing a recurring series.
+- **`extend_all_schedules`:** Fills gaps in the master calendar and removes **orphan** future recurring rows (series that no longer exist in `qsignups_weekly`, e.g. after a bad cleanup). It runs on a **7-day** EventBridge schedule (`qsignups.extend-schedule` payload) and **after each stack deploy** via a CloudFormation custom resource (pass a new `ExtendScheduleDeployNonce` each deploy — `deploy.sh` and CI set this automatically).
+- **Editing a recurring schedule:** The Slack edit flow **deletes** future recurring `qsignups_master` rows for the **old** series (after today) and **recreates** rows through the rolling horizon with the new day/time/AO. **Today’s** row is left in place. Q signups on deleted future dates are cleared (those beats are no longer valid).
+- **Deleting a recurring schedule:** Removes all future master rows for that series and the `qsignups_weekly` row (existing behavior).
+
+Local tests for extend/edit behavior: [`testing/test_extend_schedule_local.py`](testing/test_extend_schedule_local.py) (run from `qsignups/qsignups` with `PYTHONPATH=.`).
+
 ## CI/CD
 
 Workflow: [.github/workflows/deploy.yml](../.github/workflows/deploy.yml) (branches `test` / `prod`, AWS OIDC).
