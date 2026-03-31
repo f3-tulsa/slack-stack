@@ -533,6 +533,7 @@ deploy_qsignups() {
       "SlackClientId=${QS_SLACK_CLIENT_ID}" \
       "DbEncryptionKey=${DB_ENCRYPTION_KEY}" \
       "ExtendScheduleDeployNonce=$(date +%s)" \
+      "ImageBucketName=${IMAGE_S3_BUCKET}" \
       ${google_overrides} \
       "CreateOauthTables=${QS_CREATE_OAUTH_TABLES:-false}" \
     2>&1 | tee -a "$RECEIPT_FILE"

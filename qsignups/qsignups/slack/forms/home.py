@@ -15,6 +15,7 @@ from utilities import User
 def refresh(client, user: User, logger, top_message, team_id, context):
     sMsg = ""
     current_week_weinke_url = None
+    next_week_weinke_url = None
     ao_list = None
 
     upcoming_qs = []
@@ -39,8 +40,6 @@ def refresh(client, user: User, logger, top_message, team_id, context):
             vwMasterEvents.event_date <= date.today()+timedelta(days=constants.UPCOMING_DAYS),
         ])
 
-        current_week_weinke_url = None
-        
         region_record = DbManager.get_record(Region, team_id)
 
         if region_record is None:

@@ -20,7 +20,10 @@ Use the OAuth install URL from your deployed API (CloudFormation output **`QSign
 - **Editing a recurring schedule:** The Slack edit flow **deletes** future recurring `qsignups_master` rows for the **old** series (after today) and **recreates** rows through the rolling horizon with the new day/time/AO. **Today’s** row is left in place. Q signups on deleted future dates are cleared (those beats are no longer valid).
 - **Deleting a recurring schedule:** Removes all future master rows for that series and the `qsignups_weekly` row (existing behavior).
 
-Local tests for extend/edit behavior: [`testing/test_extend_schedule_local.py`](testing/test_extend_schedule_local.py) (run from `qsignups/qsignups` with `PYTHONPATH=.`).
+Local tests (run from `qsignups/qsignups` with `PYTHONPATH=.`):
+
+- Extend/edit schedule: [`testing/test_extend_schedule_local.py`](testing/test_extend_schedule_local.py)
+- Weinke rendering / S3 / grid logic: [`testing/test_weinke_local.py`](testing/test_weinke_local.py)
 
 ## CI/CD
 
@@ -50,7 +53,8 @@ Workflow: [.github/workflows/deploy.yml](../.github/workflows/deploy.yml) (branc
     "DB_ENCRYPTION_KEY": "",
     "GOOGLE_CLIENT_ID": "",
     "GOOGLE_CLIENT_SECRET": "",
-    "TIMEZONE": "US/Central"
+    "TIMEZONE": "US/Central",
+    "IMAGE_S3_BUCKET": "your-public-image-bucket"
   }
 }
 ```
@@ -64,9 +68,20 @@ sam local start-api --env-vars env.json --warm-containers EAGER
 
 Use your machine’s LAN IP for `DATABASE_HOST` if `host.docker.internal` does not work from the Lambda container.
 
-## Weekly weinke images (optional job)
+## Weekly weinke images (calendar grids)
 
-[`weinkes/create_weinkes.py`](weinkes/create_weinkes.py) builds schedule PNGs and uploads them to **`IMAGE_S3_BUCKET`** (same public bucket as slackblast), then stores the HTTPS URLs in `qsignups_regions.current_week_weinke` / `next_week_weinke`. Run on a schedule from a machine or runner with AWS credentials (`s3:PutObject` on that bucket) and DB env vars: `DATABASE_HOST`, `DATABASE_USER`, `DATABASE_PASSWORD`, `DATABASE_SCHEMA`, `DATABASE_PORT`, `DATABASE_TLS_ENABLED`, `IMAGE_S3_BUCKET`. Install deps: `pip install -r weinkes/requirements.txt`.
+Weinke PNGs power the **Home tab** `image` blocks (`current_week_weinke` / `next_week_weinke` on `qsignups_regions`). Objects are stored under **`s3://{IMAGE_S3_BUCKET}/weinkes/`** (same public bucket as slackblast).
+
+### On Refresh (Lambda)
+
+Each time a user clicks **Refresh Screen**, the QSignups Lambda (after Slack’s immediate `ack`) regenerates both week images with **Pillow**, uploads them to S3, and updates the DB URLs. Requires:
+
+- **`IMAGE_S3_BUCKET`** on the function (SAM parameter `ImageBucketName`, set from `IMAGE_S3_BUCKET` in `.env.deploy.*` via `deploy.sh` / GitHub Actions `vars.IMAGE_S3_BUCKET`).
+- IAM **`s3:PutObject`** on `arn:aws:s3:::bucket/weinkes/*` (included in `qsignups/template.yaml`).
+
+### Standalone job (optional)
+
+[`weinkes/create_weinkes.py`](weinkes/create_weinkes.py) is an alternate generator using pandas + **dataframe-image** (Chrome). Use on a schedule from a machine or runner if you want periodic refreshes without user clicks. Needs AWS credentials (`s3:PutObject`), DB env vars (`DATABASE_HOST`, `DATABASE_USER`, `DATABASE_PASSWORD`, `DATABASE_SCHEMA`, `DATABASE_PORT`, `DATABASE_TLS_ENABLED`, `IMAGE_S3_BUCKET`), and `pip install -r weinkes/requirements.txt`.
 
 ## Contributing
 

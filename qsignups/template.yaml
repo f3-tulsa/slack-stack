@@ -108,6 +108,9 @@ Parameters:
   SlackClientId:
     Description: Slack app OAuth Client ID (Basic Information in api.slack.com); must match your self-hosted app
     Type: String
+  ImageBucketName:
+    Description: S3 bucket for weinke PNGs (same public bucket as slackblast images; objects under weinkes/)
+    Type: String
   CreateOauthTables:
     Description: Set to "true" on first deploy to create OAuth tables; leave "false" for normal deploys
     Type: String
@@ -158,7 +161,12 @@ Resources:
               Effect: Allow
               Action: lambda:InvokeFunction
               Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*"
+            - Sid: WeinkeImageUpload
+              Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub "arn:aws:s3:::${ImageBucketName}/weinkes/*"
       Timeout: 400
+      MemorySize: 512
       Events:
         QSingups:
           Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
@@ -223,6 +231,7 @@ Resources:
           DEFAULT_EVENT_DURATION_MINUTES: !Ref DefaultEventDurationMinutes
           ENV_SLACK_CLIENT_ID: !Ref SlackClientId
           CREATE_OAUTH_TABLES: !Ref CreateOauthTables
+          IMAGE_S3_BUCKET: !Ref ImageBucketName
           # STRAVA_CLIENT_ID: !Ref StravaClientID
           # STRAVA_CLIENT_SECRET: !Ref StravaClientSecret
 

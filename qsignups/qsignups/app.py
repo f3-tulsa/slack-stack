@@ -29,6 +29,7 @@ from slack.handlers import (
     ao as ao_handler,
 )
 from slack import actions, inputs
+import weinke
 from field_encryption import require_encryption_key
 
 require_encryption_key()
@@ -67,15 +68,25 @@ app = App(
 schedule_create_length_days = 365
 
 
-@app.action(actions.REFRESH_ACTION)
-def handle_refresh_home_button(ack, body, client, logger, context):
+def _refresh_home_ack(ack):
     ack()
+
+
+def _refresh_home_lazy(body, client, logger, context):
+    """Weinke PNG + S3 + DB can exceed Slack's 3s ack window; run after ack via lazy listener."""
     logger.info(body)
     user_id = context["user_id"]
     team_id = context["team_id"]
     user = get_user(user_id, client)
     top_message = f"Welcome to QSignups, {user.name}!"
+    try:
+        weinke.generate_and_store_weinke(team_id, logger)
+    except Exception:
+        logger.exception("Weinke generation failed; refreshing home without new images")
     home.refresh(client, user, logger, top_message, team_id, context)
+
+
+app.action(actions.REFRESH_ACTION)(ack=_refresh_home_ack, lazy=[_refresh_home_lazy])
 
 
 def redirect_blocks(team_id: str, app_id: str):

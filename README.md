@@ -40,7 +40,7 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 | `WEASELBOT_SCHEMA` | **Bare** base name for Weaselbot (e.g. `weaselbot`). Same auto-suffix |
 | `SLACKBLAST_SCHEMA` | **Bare** base name for slackblast (e.g. `slackblast`). Same auto-suffix |
 | `QSIGNUPS_SCHEMA` | **Bare** base name for qsignups (e.g. `qsignups`). Same auto-suffix |
-| `IMAGE_S3_BUCKET` | Globally unique S3 bucket name for backblast images (the slackblast stack creates this bucket) |
+| `IMAGE_S3_BUCKET` | Globally unique S3 bucket name for slackblast backblast images and **qsignups weinke** calendar PNGs under `weinkes/` (the slackblast stack creates this bucket) |
 | `F3_REGION_NAME` | F3 region key stored in `paxminer_<stage>.regions.region` (e.g. `f3ttown`); regional DB schema is `{F3_REGION_NAME}_{STAGE}` |
 | `PM_SLACK_TOKEN` | PAXminer Slack **bot** token for that region; SAM passes to Lambdas, which **encrypt** and **upsert** into `paxminer_<stage>.regions.slack_token` on cold start |
 | `WB_SLACK_TOKEN` | Weaselbot Slack **bot** token (separate app); encrypted and upserted into `weaselbot_<stage>.regions` on cold start |
