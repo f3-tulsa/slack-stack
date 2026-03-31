@@ -1,5 +1,5 @@
 from features import backblast, config, custom_fields, preblast, strava, weaselbot, welcome
-from utilities import announcements, builders
+from utilities import builders
 from utilities.slack import actions
 
 # Required arguments for handler functions:
@@ -18,7 +18,6 @@ COMMAND_MAPPER = {
     "/config-welcome-message": (welcome.build_welcome_message_form, True),
     "/config-slackblast": (config.build_config_form, True),
     "/tag-achievement": (weaselbot.build_achievement_form, True),
-    "/send-announcement": (announcements.send, False),
 }
 
 VIEW_MAPPER = {
