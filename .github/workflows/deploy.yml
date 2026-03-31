@@ -79,7 +79,7 @@ jobs:
 
       # --- PAXminer (zip packaging) ---
       - name: Build PAXminer
-        run: sam build -t PAXminer/template.yaml
+        run: sam build -t PAXminer/template.yaml --use-container
       - name: Deploy PAXminer
         run: |
           sam deploy \
@@ -126,7 +126,7 @@ jobs:
 
       # --- slackblast ---
       - name: Build slackblast
-        run: sam build -t slackblast/template.yaml
+        run: sam build -t slackblast/template.yaml --use-container
       - name: Deploy slackblast
         env:
           SB_STRAVA_CLIENT_ID: ${{ secrets.SB_STRAVA_CLIENT_ID }}
@@ -160,7 +160,7 @@ jobs:
 
       # --- qsignups ---
       - name: Build qsignups
-        run: sam build -t qsignups/template.yaml
+        run: sam build -t qsignups/template.yaml --use-container
       - name: Deploy qsignups
         env:
           QS_GOOGLE_CLIENT_ID: ${{ secrets.QS_GOOGLE_CLIENT_ID }}
