@@ -15,6 +15,7 @@ from utilities.field_encryption import decrypt_field
 from utilities.helper_functions import (
     app_timezone,
     check_for_duplicate,
+    ensure_users_in_db,
     get_channel_id,
     get_channel_name,
     get_pax,
@@ -539,7 +540,7 @@ def handle_backblast_post(body: dict, client: WebClient, logger: Logger, context
                 blocks=blocks,
                 metadata={"event_type": "backblast", "event_payload": backblast_data},
             )
-        logger.debug("\nMessage posted to Slack! \n{}".format(post_msg))
+        logger.info("Message posted to Slack: %s", post_msg[:500])
         logger.info(json.dumps({"event_type": "successful_slack_post", "team_name": region_record.workspace_name}))
         if (email_send and email_send == "yes") or (email_send is None and region_record.email_enabled == 1):
             moleskin_msg = moleskin_text_w_names
@@ -596,7 +597,7 @@ COUNT: {count}
             blocks=blocks,
             metadata={"event_type": "backblast", "event_payload": backblast_data},
         )
-        logger.debug("\nBackblast updated in Slack! \n{}".format(post_msg))
+        logger.info("Backblast updated in Slack: %s", post_msg[:500])
         logger.info(json.dumps({"event_type": "successful_slack_edit", "team_name": region_record.workspace_name}))
 
         if message_ts:
@@ -610,12 +611,23 @@ COUNT: {count}
                 schema=region_record.paxminer_schema,
                 filters=[Attendance.timestamp == message_ts],
             )
-        logger.debug("\nBackblast deleted from database! \n{}".format(post_msg))
+        logger.info("Backblast prior DB rows deleted for message_ts=%s", message_ts)
         logger.info(json.dumps({"event_type": "successful_db_delete", "team_name": region_record.workspace_name}))
 
     res_link = client.chat_getPermalink(channel=chan or message_channel, message_ts=res["ts"])
 
+    if region_record.paxminer_schema:
+        all_user_ids = list({u for u in [the_q, *(the_coq or []), *pax] if u})
+        ensure_users_in_db(all_user_ids, client, logger, region_record.paxminer_schema)
+
     if region_record.paxminer_schema is not None:
+        logger.info(
+            "DB write starting paxminer_schema=%s team_id=%s create_or_edit=%s ts=%s",
+            region_record.paxminer_schema,
+            region_record.team_id,
+            create_or_edit,
+            message_ts or res.get("ts"),
+        )
         backblast_parsed = f"""Backblast! {title}
 Date: {the_date}
 AO: {ao_name}
@@ -643,6 +655,13 @@ COUNT: {count}
                     json=custom_fields,
                 ),
             )
+            logger.info(
+                "beatdowns row inserted ao_id=%s bd_date=%s q_user_id=%s timestamp=%s",
+                ao or chan,
+                the_date,
+                the_q,
+                message_ts or res.get("ts"),
+            )
 
             attendance_records = []
             for pax_id in list(set(pax) | set(the_coq or []) | {the_q}):
@@ -658,6 +677,11 @@ COUNT: {count}
                 )
 
             DbManager.create_records(schema=region_record.paxminer_schema, records=attendance_records)
+            logger.info(
+                "bd_attendance rows inserted count=%s timestamp=%s",
+                len(attendance_records),
+                message_ts or res.get("ts"),
+            )
             logger.info(
                 json.dumps(
                     {
@@ -676,7 +700,7 @@ COUNT: {count}
                     f"\nLink: {res_link['permalink']}",
                 )
         except Exception as e:
-            logger.error("Error saving backblast to database: {}".format(e))
+            logger.error("Error saving backblast to database: %s", e, exc_info=True)
             client.chat_postMessage(
                 channel=context["user_id"],
                 text="WARNING: The backblast you just posted was not saved to the database. There is already a "

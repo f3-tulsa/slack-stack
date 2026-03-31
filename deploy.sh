@@ -502,6 +502,7 @@ deploy_slackblast() {
       "DbEncryptionKey=${DB_ENCRYPTION_KEY}" \
       ${strava_overrides} \
       "ImageBucketName=${IMAGE_S3_BUCKET}" \
+      "CreateOauthTables=${SB_CREATE_OAUTH_TABLES:-false}" \
     2>&1 | tee -a "$RECEIPT_FILE"
   return "${PIPESTATUS[0]}"
 }
@@ -533,6 +534,7 @@ deploy_qsignups() {
       "DbEncryptionKey=${DB_ENCRYPTION_KEY}" \
       "ExtendScheduleDeployNonce=$(date +%s)" \
       ${google_overrides} \
+      "CreateOauthTables=${QS_CREATE_OAUTH_TABLES:-false}" \
     2>&1 | tee -a "$RECEIPT_FILE"
   return "${PIPESTATUS[0]}"
 }

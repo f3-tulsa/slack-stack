@@ -108,6 +108,13 @@ Parameters:
   SlackClientId:
     Description: Slack app OAuth Client ID (Basic Information in api.slack.com); must match your self-hosted app
     Type: String
+  CreateOauthTables:
+    Description: Set to "true" on first deploy to create OAuth tables; leave "false" for normal deploys
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
   ExtendScheduleDeployNonce:
     Type: String
     Default: "0"
@@ -215,6 +222,7 @@ Resources:
           DEFAULT_EVENT_END: !Ref DefaultEventEnd
           DEFAULT_EVENT_DURATION_MINUTES: !Ref DefaultEventDurationMinutes
           ENV_SLACK_CLIENT_ID: !Ref SlackClientId
+          CREATE_OAUTH_TABLES: !Ref CreateOauthTables
           # STRAVA_CLIENT_ID: !Ref StravaClientID
           # STRAVA_CLIENT_SECRET: !Ref StravaClientSecret
 

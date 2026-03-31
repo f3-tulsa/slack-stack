@@ -44,8 +44,9 @@ def get_oauth_flow():
         expiration_seconds=OAuthStateUtils.default_expiration_seconds,
         engine=engine,
     )
-    installation_store.create_tables()
-    state_store.create_tables()
+    if os.environ.get("CREATE_OAUTH_TABLES", "").strip().lower() in ("1", "true", "yes"):
+        installation_store.create_tables()
+        state_store.create_tables()
     settings = OAuthSettings(
         client_id=client_id,
         client_secret=os.environ[constants.SLACK_CLIENT_SECRET],

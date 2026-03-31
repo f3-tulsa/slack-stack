@@ -132,6 +132,7 @@ jobs:
         env:
           SB_STRAVA_CLIENT_ID: ${{ secrets.SB_STRAVA_CLIENT_ID }}
           SB_STRAVA_CLIENT_SECRET: ${{ secrets.SB_STRAVA_CLIENT_SECRET }}
+          SB_CREATE_OAUTH_TABLES: ${{ vars.SB_CREATE_OAUTH_TABLES }}
         run: |
           set -euo pipefail
           OVERRIDES=(
@@ -152,6 +153,7 @@ jobs:
           )
           [[ -n "${SB_STRAVA_CLIENT_ID:-}" ]] && OVERRIDES+=("StravaClientID=${SB_STRAVA_CLIENT_ID}")
           [[ -n "${SB_STRAVA_CLIENT_SECRET:-}" ]] && OVERRIDES+=("StravaClientSecret=${SB_STRAVA_CLIENT_SECRET}")
+          [[ -n "${SB_CREATE_OAUTH_TABLES:-}" ]] && OVERRIDES+=("CreateOauthTables=${SB_CREATE_OAUTH_TABLES}")
           sam deploy \
             --stack-name slackblast-${{ vars.STAGE }} \
             --no-confirm-changeset --no-fail-on-empty-changeset \
@@ -166,6 +168,7 @@ jobs:
         env:
           QS_GOOGLE_CLIENT_ID: ${{ secrets.QS_GOOGLE_CLIENT_ID }}
           QS_GOOGLE_CLIENT_SECRET: ${{ secrets.QS_GOOGLE_CLIENT_SECRET }}
+          QS_CREATE_OAUTH_TABLES: ${{ vars.QS_CREATE_OAUTH_TABLES }}
         run: |
           set -euo pipefail
           OVERRIDES=(
@@ -185,6 +188,7 @@ jobs:
           )
           [[ -n "${QS_GOOGLE_CLIENT_ID:-}" ]] && OVERRIDES+=("GoogleClientId=${QS_GOOGLE_CLIENT_ID}")
           [[ -n "${QS_GOOGLE_CLIENT_SECRET:-}" ]] && OVERRIDES+=("GoogleClientSecret=${QS_GOOGLE_CLIENT_SECRET}")
+          [[ -n "${QS_CREATE_OAUTH_TABLES:-}" ]] && OVERRIDES+=("CreateOauthTables=${QS_CREATE_OAUTH_TABLES}")
           sam deploy \
             --stack-name qsignups-${{ vars.STAGE }} \
             --no-confirm-changeset --no-fail-on-empty-changeset \

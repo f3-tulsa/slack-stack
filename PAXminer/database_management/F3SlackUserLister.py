@@ -120,6 +120,29 @@ def database_slack_user_update(region_db, key, firsttime_run, mydb):
                     phone_tmp = row['phone']
                     email_tmp = row['email']
                     app_tmp = row['app']
+                    # If another row has the same email but a different Slack user_id (e.g. test vs prod DB),
+                    # migrate that row to this workspace's user_id before the normal upsert.
+                    if email_tmp and str(email_tmp).strip().lower() not in ("", "none"):
+                        try:
+                            cursor.execute(
+                                "UPDATE users SET user_id = %s, user_name = %s, real_name = %s, phone = %s "
+                                "WHERE email = %s AND user_id != %s LIMIT 1",
+                                (
+                                    user_id_tmp,
+                                    user_name_tmp,
+                                    real_name_tmp,
+                                    phone_tmp,
+                                    email_tmp,
+                                    user_id_tmp,
+                                ),
+                            )
+                            mydb.commit()
+                        except Exception:
+                            logging.debug(
+                                "Email-match UPDATE failed for %s, falling through to INSERT",
+                                user_id_tmp,
+                                exc_info=True,
+                            )
                     val = (user_id_tmp, user_name_tmp, real_name_tmp, phone_tmp, email_tmp, start_date, app_tmp, js)
                     cursor.execute(sql, val)
                     mydb.commit()

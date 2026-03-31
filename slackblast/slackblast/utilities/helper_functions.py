@@ -3,9 +3,10 @@ import os
 import re
 from datetime import datetime
 from logging import Logger
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 import pytz
+from sqlalchemy import text
 
 from slack_bolt.oauth.oauth_flow import OAuthFlow
 from slack_bolt.oauth.oauth_settings import OAuthSettings
@@ -51,8 +52,9 @@ def get_oauth_flow():
         expiration_seconds=OAuthStateUtils.default_expiration_seconds,
         engine=engine,
     )
-    installation_store.create_tables()
-    state_store.create_tables()
+    if os.environ.get("CREATE_OAUTH_TABLES", "").strip().lower() in ("1", "true", "yes"):
+        installation_store.create_tables()
+        state_store.create_tables()
     settings = OAuthSettings(
         client_id=client_id,
         client_secret=os.environ[constants.SLACK_CLIENT_SECRET],
@@ -61,6 +63,88 @@ def get_oauth_flow():
         state_store=state_store,
     )
     return OAuthFlow(settings=settings)
+
+
+def ensure_users_in_db(
+    user_ids: Sequence[str],
+    client: WebClient,
+    logger: Logger,
+    schema: str,
+) -> None:
+    """Upsert Slack users into the regional paxminer ``users`` table.
+
+    If a row exists with the same email but a different ``user_id`` (e.g. prod vs test
+    workspace), updates that row's ``user_id`` first so FK references resolve.
+
+    Then ``INSERT ... ON DUPLICATE KEY UPDATE`` by ``user_id`` for names/phone/email.
+    """
+    if not schema or not user_ids:
+        return
+    unique_ids = {u for u in user_ids if u}
+    if not unique_ids:
+        return
+    engine = get_engine(schema=schema)
+    try:
+        with engine.begin() as conn:
+            for uid in unique_ids:
+                try:
+                    info = client.users_info(user=uid)
+                    user_obj = info["user"]
+                    profile = user_obj.get("profile") or {}
+                    display = profile.get("display_name") or profile.get("real_name") or ""
+                    real = profile.get("real_name") or display
+                    phone = profile.get("phone") or ""
+                    email = (profile.get("email") or "").strip()
+                    is_bot = bool(user_obj.get("is_bot"))
+                    app_val = 1 if is_bot else 0
+                    if not display and real:
+                        display = real
+
+                    if email and email.lower() not in ("", "none"):
+                        try:
+                            conn.execute(
+                                text(
+                                    "UPDATE users SET user_id = :new_uid, user_name = :uname, "
+                                    "real_name = :rname, phone = :phone "
+                                    "WHERE email = :email AND user_id != :new_uid LIMIT 1"
+                                ),
+                                {
+                                    "new_uid": uid,
+                                    "uname": display,
+                                    "rname": real,
+                                    "phone": phone,
+                                    "email": email,
+                                },
+                            )
+                        except Exception:
+                            logger.debug(
+                                "ensure_users_in_db: email-match UPDATE failed for %s, falling through to INSERT",
+                                uid,
+                                exc_info=True,
+                            )
+
+                    conn.execute(
+                        text(
+                            "INSERT INTO users (user_id, user_name, real_name, phone, email, start_date, app, json) "
+                            "VALUES (:uid, :uname, :rname, :phone, :email, NULL, :app, :js) "
+                            "ON DUPLICATE KEY UPDATE "
+                            "user_name = VALUES(user_name), real_name = VALUES(real_name), "
+                            "phone = VALUES(phone), email = VALUES(email)"
+                        ),
+                        {
+                            "uid": uid,
+                            "uname": display,
+                            "rname": real,
+                            "phone": phone,
+                            "email": email or None,
+                            "app": app_val,
+                            "js": "{}",
+                        },
+                    )
+                except Exception:
+                    logger.warning("ensure_users_in_db: failed for user %s", uid, exc_info=True)
+    finally:
+        engine.dispose()
 
 
 def safe_get(data, *keys):

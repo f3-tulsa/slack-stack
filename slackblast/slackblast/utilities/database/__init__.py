@@ -1,3 +1,4 @@
+import logging
 import os
 import ssl
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from sqlalchemy.orm import sessionmaker
 
 from utilities import constants
 from utilities.database.orm import BaseClass
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass
@@ -62,6 +65,7 @@ def get_session(echo=False, schema=None):
     if schema != GLOBAL_SCHEMA or not GLOBAL_ENGINE:
         GLOBAL_ENGINE = get_engine(echo=echo, schema=schema)
         GLOBAL_SCHEMA = schema or os.environ[constants.ADMIN_DATABASE_SCHEMA]
+        _LOG.info("Created new SQLAlchemy engine for schema=%s", GLOBAL_SCHEMA)
     return sessionmaker()(bind=GLOBAL_ENGINE)
 
 

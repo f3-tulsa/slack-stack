@@ -82,6 +82,7 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 |----------|-------------|
 | `SB_STRAVA_CLIENT_ID` | Strava API client ID (omit to disable Strava in slackblast; SAM uses template defaults) |
 | `SB_STRAVA_CLIENT_SECRET` | Strava API client secret |
+| `SB_CREATE_OAUTH_TABLES` | Set to `true` for one deploy to run OAuth `create_tables()` DDL on cold start; omit or `false` normally (see **Slack OAuth (database)**) |
 
 ### Required (qsignups)
 
@@ -98,10 +99,11 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 |----------|-------------|
 | `QS_GOOGLE_CLIENT_ID` | Google Calendar API client ID (omit if Google Calendar integration is not used) |
 | `QS_GOOGLE_CLIENT_SECRET` | Google Calendar API client secret |
+| `QS_CREATE_OAUTH_TABLES` | Set to `true` for one deploy to run OAuth `create_tables()` DDL on cold start; omit or `false` normally (see **Slack OAuth (database)**) |
 
 ## Slack OAuth (database)
 
-**slackblast** and **qsignups** store Slack app install data in the **same MySQL/TiDB schema** as the rest of each app (the suffixed schema: e.g. `slackblast_test` / `qsignups_prod`), not in S3. On first Lambda cold start after deploy, the code creates (if missing) three tables: `slack_bots`, `slack_installations`, `slack_oauth_states`. Ensure the DB user has `CREATE TABLE` on that schema (typical for app-owned schemas).
+**slackblast** and **qsignups** store Slack app install data in the **same MySQL/TiDB schema** as the rest of each app (the suffixed schema: e.g. `slackblast_test` / `qsignups_prod`), not in S3. On Lambda cold start, Bolt’s `create_tables()` runs **only** when the Lambda env var **`CREATE_OAUTH_TABLES`** is `"true"` (SAM parameter `CreateOauthTables`, default `"false"`). That creates (if missing) three tables: `slack_bots`, `slack_installations`, `slack_oauth_states`. For **first deploy** or after a migration, set **`SB_CREATE_OAUTH_TABLES=true`** and/or **`QS_CREATE_OAUTH_TABLES=true`** in `.env.deploy.*` (or GitHub environment variables of the same names), deploy once, then set back to `false` or remove. Normal deploys skip DDL to reduce cold-start latency. Ensure the DB user has `CREATE TABLE` on that schema when you opt in (typical for app-owned schemas).
 
 **`ENV_SLACK_CLIENT_ID` in Lambda** comes from `SB_SLACK_CLIENT_ID` / `QS_SLACK_CLIENT_ID` in your deploy env (SAM parameter `SlackClientId`). It must match the Slack app whose install row you store; otherwise Bolt cannot resolve the bot token from `slack_installations`.
 
@@ -318,6 +320,8 @@ Create environments **`test`** and **`prod`** in your repo settings (or run `./d
 | `F3_REGION_SLACK_TEAM_ID` | `T01234567` | Slack workspace Team ID (available to any app that needs it; Weaselbot uses it for `weaselbot.regions`) |
 | `SB_SLACK_CLIENT_ID` | `10773766677089.xxx` | Slack OAuth Client ID for slackblast (public app id; use a variable, not a secret) |
 | `QS_SLACK_CLIENT_ID` | `10773766677089.xxx` | Slack OAuth Client ID for qsignups (public app id; use a variable, not a secret) |
+| `SB_CREATE_OAUTH_TABLES` | *(omit)* | Optional; set to `true` for one deploy to create OAuth tables (see **Slack OAuth (database)**) |
+| `QS_CREATE_OAUTH_TABLES` | *(omit)* | Optional; set to `true` for one deploy to create OAuth tables (see **Slack OAuth (database)**) |
 
 ### AWS OIDC (one-time setup)
 

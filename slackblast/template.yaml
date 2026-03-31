@@ -91,6 +91,13 @@ Parameters:
   SlackClientId:
     Description: Slack app OAuth Client ID (Basic Information in api.slack.com); must match your self-hosted app
     Type: String
+  CreateOauthTables:
+    Description: Set to "true" on first deploy to create OAuth tables; leave "false" for normal deploys
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
 
 Mappings:
   StagesMap:
@@ -151,6 +158,7 @@ Resources:
               Action: lambda:InvokeFunction
               Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*"
       Timeout: 400
+      MemorySize: 512
       Events:
         Slackblast:
           Type: Api
@@ -199,6 +207,7 @@ Resources:
           ENV_SLACK_CLIENT_ID: !Ref SlackClientId
           STRAVA_CLIENT_ID: !Ref StravaClientID
           STRAVA_CLIENT_SECRET: !Ref StravaClientSecret
+          CREATE_OAUTH_TABLES: !Ref CreateOauthTables
 
   SlackblastLogGroup:
     Type: AWS::Logs::LogGroup

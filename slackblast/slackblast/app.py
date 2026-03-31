@@ -40,7 +40,26 @@ app = App(
 )
 
 
+def _lambda_invocation_kind(event: dict) -> str:
+    """Best-effort label for CloudWatch filtering (API vs scheduled vs Strava)."""
+    if not isinstance(event, dict):
+        return "non_dict_event"
+    if event.get("path") == "/exchange_token":
+        return "strava_exchange_token"
+    if event.get("source") == "aws.events" or event.get("detail-type"):
+        return "eventbridge_scheduled"
+    if event.get("requestContext") or event.get("httpMethod") or event.get("rawPath"):
+        return "api_gateway"
+    return "unknown"
+
+
 def handler(event, context):
+    logger.info(
+        "Lambda invocation kind=%s path=%s request_id=%s",
+        _lambda_invocation_kind(event),
+        event.get("path") if isinstance(event, dict) else None,
+        getattr(context, "aws_request_id", None) if context else None,
+    )
     if event.get("path") == "/exchange_token":
         return strava.strava_exchange_token(event, context)
     else:
