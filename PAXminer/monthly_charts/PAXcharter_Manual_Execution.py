@@ -5,12 +5,10 @@ This script executes the monthly PAXcharter backblast queries and data updates f
 '''
 
 import configparser
-import os
 import sys
 from pathlib import Path
 
 import pandas as pd
-import pymysql.cursors
 
 _PAX_ROOT = Path(__file__).resolve().parent.parent
 if str(_PAX_ROOT) not in sys.path:

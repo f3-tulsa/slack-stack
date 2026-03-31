@@ -16,7 +16,7 @@ from F3SlackChannelLister import database_slack_channel_update
 import logging
 
 def database_management_update():
-    logging.basicConfig(format=f'%(asctime)s %(levelname)-8s %(message)s',
+    logging.basicConfig(format='%(asctime)s %(levelname)-8s %(message)s',
                             datefmt = '%Y-%m-%d %H:%M:%S',
                             level = logging.INFO)
 

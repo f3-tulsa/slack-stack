@@ -7,6 +7,7 @@ AWS credentials with s3:PutObject on IMAGE_S3_BUCKET (same bucket as slackblast 
 """
 from __future__ import annotations
 
+import logging
 import os
 import ssl
 import sys
@@ -19,6 +20,7 @@ import pandas as pd
 import pymysql
 from dotenv import load_dotenv
 from slack_sdk import WebClient
+from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
 _WEINKES_DIR = Path(__file__).resolve().parent / "weinkes"
 _PKG = Path(__file__).resolve().parent.parent / "qsignups" / "qsignups"
@@ -28,6 +30,8 @@ from field_encryption import decrypt_field  # noqa: E402
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -109,7 +113,7 @@ def main() -> None:
 
     for _index, row in df_regions.iterrows():
         team_id = row["team_id"]
-        print(f"working on team {team_id}...")
+        logging.info("working on team %s...", team_id)
 
         sql_current = """
         SELECT m.*, a.ao_display_name, a.ao_location_subtitle
@@ -149,8 +153,8 @@ def main() -> None:
                     params=(team_id, str(next_week_start), str(next_week_end)),
                     parse_dates=["event_date"],
                 )
-        except Exception as e:
-            print(f"There was a problem pulling from the db: {e}")
+        except Exception:
+            logging.exception("There was a problem pulling from the db")
             continue
 
         df_list = [
@@ -168,7 +172,13 @@ def main() -> None:
                 df_prior = pd.read_csv(_WEINKES_DIR / f"{team_id}_{output_name}.csv")
                 df_prior["event_time"] = df_prior["event_time"].astype(str).str.zfill(4)
                 df_compare = df.compare(df_prior)
-            except Exception:
+            except Exception as csv_exc:
+                logging.debug(
+                    "Prior weinke CSV missing or not comparable for %s (assume changed): %s",
+                    output_name,
+                    csv_exc,
+                    exc_info=True,
+                )
                 df_compare = [1, 2, 3]
 
             if len(df_compare) < 1:
@@ -242,6 +252,7 @@ def main() -> None:
                 if (row["weekly_weinke_channel"] is not None) and (output_name == "current_week_weinke"):
                     token = decrypt_field(row["bot_token"])
                     slack_client = WebClient(token, ssl=ssl_context)
+                    slack_client.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=5))
                     try:
                         if row["weekly_weinke_updated"] is not None:
                             slack_client.chat_delete(
@@ -249,7 +260,10 @@ def main() -> None:
                                 ts=row["weekly_weinke_updated"],
                             )
                     except Exception:
-                        print("weinke post not found, skipping deletion...")
+                        logging.debug(
+                            "weinke chat_delete skipped (post missing or not deletable)",
+                            exc_info=True,
+                        )
                     response = slack_client.files_upload(
                         file=str(_WEINKES_DIR / f"{png_name}.png"),
                         initial_comment="This week's schedule",
@@ -257,8 +271,8 @@ def main() -> None:
                     )
                     region_upload_ts = response["file"]["shares"]["public"][row["weekly_weinke_channel"]][0]["ts"]
                     region_weinke_created = True
-            except Exception as e:
-                print(f"There was a problem updating the weinke channel: {e}")
+            except Exception:
+                logging.exception("There was a problem updating the weinke channel")
 
             if output_name not in ("current_week_weinke", "next_week_weinke"):
                 continue
@@ -278,8 +292,8 @@ def main() -> None:
                                 (img_url, team_id),
                             )
                     mydb.commit()
-            except Exception as e:
-                print(f"There was a problem updating the database: {e}")
+            except Exception:
+                logging.exception("There was a problem updating the database")
 
 
 if __name__ == "__main__":

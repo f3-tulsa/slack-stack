@@ -3,14 +3,6 @@ Transform: AWS::Serverless-2016-10-31
 Description: qsignups-build-template
 
 # More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
-Globals:
-  Function:
-    Timeout: 10
-    MemorySize: 256
-    Tracing: Active
-  Api:
-    TracingEnabled: true
-
 Parameters:
   SlackToken:
     Description: Slack token that is passed by the bot
@@ -120,10 +112,18 @@ Parameters:
       - "false"
   ExtendScheduleDeployNonce:
     Type: String
-    Default: "0"
+    Default: "no-extend"
     Description: >
-      Change each deploy (e.g. unix timestamp via --parameter-overrides) so the
-      extend-schedule custom resource runs and reconciles the rolling calendar.
+      Use a changing value (e.g. git SHA, unix time) only when you want the deploy-time
+      extend-schedule custom resource to run. Default "no-extend" skips re-invocation on
+      routine deploys; set RUN_EXTEND_SCHEDULE=true in deploy env to pass a new nonce.
+  EnableXRay:
+    Description: Enable AWS X-Ray on Lambda and API (extra cost beyond free tier); set ENABLE_XRAY=true in deploy env to turn on
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
   # PasswordEncryptKey:
   #   Description: Hash encrypt key for decrypting email passwords
   #   Type: String
@@ -136,6 +136,17 @@ Parameters:
   #   Description: Strava Client Secret
   #   Type: String
   #   Default: "123"
+
+Conditions:
+  XRayEnabled: !Equals [!Ref EnableXRay, "true"]
+
+Globals:
+  Function:
+    Timeout: 10
+    MemorySize: 256
+    Tracing: !If [XRayEnabled, Active, PassThrough]
+  Api:
+    TracingEnabled: !If [XRayEnabled, true, false]
 
 Mappings:
   StagesMap:
@@ -186,7 +197,7 @@ Resources:
         QSignupsKeepWarm:
           Type: ScheduleV2
           Properties:
-            ScheduleExpression: "rate(5 minutes)"
+            ScheduleExpression: "rate(15 minutes)"
             Name: !FindInMap
               - StagesMap
               - Ref: Stage
@@ -248,7 +259,7 @@ Resources:
       Description: CloudFormation custom resource provider; invokes main Lambda with extend-schedule payload
       Runtime: python3.12
       Handler: index.handler
-      Timeout: 400
+      Timeout: 30
       MemorySize: 128
       InlineCode: |
         import json

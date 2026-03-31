@@ -1,7 +1,6 @@
 import logging
 import os
 import ssl
-from contextlib import ContextDecorator
 from dataclasses import dataclass
 from typing import List, TypeVar
 from urllib.parse import quote_plus

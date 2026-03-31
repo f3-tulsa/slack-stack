@@ -1,5 +1,4 @@
 from sqlalchemy import *
-from database.orm import AO
 from sqlalchemy.dialects.mysql import LONGTEXT
 
 from . import BaseClass, QSignupClass, utc_now

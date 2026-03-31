@@ -5,13 +5,13 @@ from logging import Logger
 from slack_sdk.web import WebClient
 
 from utilities import constants
-from utilities.field_encryption import decrypt_field, encrypt_field
 from utilities.database import DbManager, paxminer_schema_name
 from utilities.database.orm import (
     PaxminerAO,
     PaxminerRegion,
     Region,
 )
+from utilities.field_encryption import decrypt_field, encrypt_field
 from utilities.helper_functions import (
     safe_get,
     update_local_region_records,

@@ -129,7 +129,7 @@ def upload_to_google_photos(photo_name, description):
 
     # open image bytes and upload
     img = open(image_file, "rb").read()
-    response = requests.post(upload_url, data=img, headers=headers)
+    response = requests.post(upload_url, data=img, headers=headers, timeout=(10, 120))
 
     # headers for mediaItem upload
     request_body = {
@@ -279,7 +279,11 @@ for channel in channels_list:
             for _index, file in selected_messages.iterrows():
                 _LOG.debug("processing file_id=%s", file["file_id"])
                 try:
-                    r = requests.get(file["file_url"], headers={"Authorization": f"Bearer {slack_secret}"})
+                    r = requests.get(
+                        file["file_url"],
+                        headers={"Authorization": f"Bearer {slack_secret}"},
+                        timeout=(10, 120),
+                    )
 
                     img_bytes = bytearray(r.content)
 

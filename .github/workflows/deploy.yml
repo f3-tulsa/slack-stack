@@ -21,6 +21,12 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment || github.ref_name }}
+    env:
+      # Optional speed toggles (GitHub Environment variables): unset = fast defaults below
+      SAM_NO_CACHE: ${{ vars.SAM_NO_CACHE }}
+      SKIP_SMOKE_TEST: ${{ vars.SKIP_SMOKE_TEST }}
+      RUN_EXTEND_SCHEDULE: ${{ vars.RUN_EXTEND_SCHEDULE }}
+      ENABLE_XRAY: ${{ vars.ENABLE_XRAY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -79,7 +85,11 @@ jobs:
 
       # --- PAXminer (container image) ---
       - name: Build PAXminer
-        run: sam build -t PAXminer/template.yaml --no-cached
+        run: |
+          set -euo pipefail
+          CACHE_FLAG=()
+          [[ "${SAM_NO_CACHE:-}" == "true" ]] && CACHE_FLAG=(--no-cached)
+          sam build -t PAXminer/template.yaml "${CACHE_FLAG[@]}"
       - name: Deploy PAXminer
         run: |
           sam deploy \
@@ -102,7 +112,11 @@ jobs:
 
       # --- Weaselbot (container image) ---
       - name: Build Weaselbot
-        run: sam build -t weaselbot/template.yaml --no-cached
+        run: |
+          set -euo pipefail
+          CACHE_FLAG=()
+          [[ "${SAM_NO_CACHE:-}" == "true" ]] && CACHE_FLAG=(--no-cached)
+          sam build -t weaselbot/template.yaml "${CACHE_FLAG[@]}"
       - name: Deploy Weaselbot
         run: |
           sam deploy \
@@ -127,7 +141,11 @@ jobs:
 
       # --- slackblast ---
       - name: Build slackblast
-        run: sam build -t slackblast/template.yaml --use-container --no-cached
+        run: |
+          set -euo pipefail
+          CACHE_FLAG=()
+          [[ "${SAM_NO_CACHE:-}" == "true" ]] && CACHE_FLAG=(--no-cached)
+          sam build -t slackblast/template.yaml --use-container "${CACHE_FLAG[@]}"
       - name: Deploy slackblast
         env:
           SB_STRAVA_CLIENT_ID: ${{ secrets.SB_STRAVA_CLIENT_ID }}
@@ -154,6 +172,7 @@ jobs:
           [[ -n "${SB_STRAVA_CLIENT_ID:-}" ]] && OVERRIDES+=("StravaClientID=${SB_STRAVA_CLIENT_ID}")
           [[ -n "${SB_STRAVA_CLIENT_SECRET:-}" ]] && OVERRIDES+=("StravaClientSecret=${SB_STRAVA_CLIENT_SECRET}")
           [[ -n "${SB_CREATE_OAUTH_TABLES:-}" ]] && OVERRIDES+=("CreateOauthTables=${SB_CREATE_OAUTH_TABLES}")
+          if [[ "${ENABLE_XRAY:-false}" == "true" ]]; then OVERRIDES+=("EnableXRay=true"); else OVERRIDES+=("EnableXRay=false"); fi
           sam deploy \
             --stack-name slackblast-${{ vars.STAGE }} \
             --no-confirm-changeset --no-fail-on-empty-changeset \
@@ -163,7 +182,11 @@ jobs:
 
       # --- qsignups ---
       - name: Build qsignups
-        run: sam build -t qsignups/template.yaml --use-container --no-cached
+        run: |
+          set -euo pipefail
+          CACHE_FLAG=()
+          [[ "${SAM_NO_CACHE:-}" == "true" ]] && CACHE_FLAG=(--no-cached)
+          sam build -t qsignups/template.yaml --use-container "${CACHE_FLAG[@]}"
       - name: Deploy qsignups
         env:
           QS_GOOGLE_CLIENT_ID: ${{ secrets.QS_GOOGLE_CLIENT_ID }}
@@ -171,6 +194,11 @@ jobs:
           QS_CREATE_OAUTH_TABLES: ${{ vars.QS_CREATE_OAUTH_TABLES }}
         run: |
           set -euo pipefail
+          if [[ "${RUN_EXTEND_SCHEDULE:-false}" == "true" ]]; then
+            EXTEND_NONCE="${{ github.sha }}"
+          else
+            EXTEND_NONCE="no-extend"
+          fi
           OVERRIDES=(
             "Stage=${{ vars.STAGE }}"
             "DatabaseHost=${{ secrets.DATABASE_HOST }}"
@@ -184,12 +212,13 @@ jobs:
             "SlackClientSecret=${{ secrets.QS_SLACK_CLIENT_SECRET }}"
             "SlackClientId=${{ vars.QS_SLACK_CLIENT_ID }}"
             "DbEncryptionKey=${{ secrets.DB_ENCRYPTION_KEY }}"
-            "ExtendScheduleDeployNonce=${{ github.sha }}"
+            "ExtendScheduleDeployNonce=${EXTEND_NONCE}"
             "ImageBucketName=${{ vars.IMAGE_S3_BUCKET }}"
           )
           [[ -n "${QS_GOOGLE_CLIENT_ID:-}" ]] && OVERRIDES+=("GoogleClientId=${QS_GOOGLE_CLIENT_ID}")
           [[ -n "${QS_GOOGLE_CLIENT_SECRET:-}" ]] && OVERRIDES+=("GoogleClientSecret=${QS_GOOGLE_CLIENT_SECRET}")
           [[ -n "${QS_CREATE_OAUTH_TABLES:-}" ]] && OVERRIDES+=("CreateOauthTables=${QS_CREATE_OAUTH_TABLES}")
+          if [[ "${ENABLE_XRAY:-false}" == "true" ]]; then OVERRIDES+=("EnableXRay=true"); else OVERRIDES+=("EnableXRay=false"); fi
           sam deploy \
             --stack-name qsignups-${{ vars.STAGE }} \
             --no-confirm-changeset --no-fail-on-empty-changeset \
@@ -199,6 +228,7 @@ jobs:
 
       # Force cold start so token bootstrap runs (DB upsert) without waiting for EventBridge schedule
       - name: Smoke-test scheduled Lambdas
+        if: ${{ vars.SKIP_SMOKE_TEST != 'true' }}
         env:
           STAGE: ${{ vars.STAGE }}
           AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}

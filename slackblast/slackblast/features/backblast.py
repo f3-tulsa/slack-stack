@@ -262,7 +262,11 @@ def handle_backblast_post(body: dict, client: WebClient, logger: Logger, context
     file_slack_urls = [file["permalink"] for file in files] if files else []
     for file in files or []:
         try:
-            r_full = requests.get(file["url_private_download"], headers={"Authorization": f"Bearer {client.token}"})
+            r_full = requests.get(
+                file["url_private_download"],
+                headers={"Authorization": f"Bearer {client.token}"},
+                timeout=(10, 120),
+            )
             r_full.raise_for_status()
 
             file_name = f"{file['id']}.{file['filetype']}"
@@ -279,6 +283,7 @@ def handle_backblast_post(body: dict, client: WebClient, logger: Logger, context
                 file[f"thumb_{thumb_size}"],
                 headers={"Authorization": f"Bearer {client.token}"},
                 params={"width": constants.LOW_REZ_IMAGE_SIZE, "height": constants.LOW_REZ_IMAGE_SIZE},
+                timeout=(10, 120),
             )
             file_name_low_res = f"{file['id']}_low_res.png"
             file_path_low_res = f"/tmp/{file_name_low_res}"

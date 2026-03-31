@@ -6,20 +6,20 @@ from logging import Logger
 from typing import Any, Dict, List, Sequence, Tuple
 
 import pytz
-from sqlalchemy import text
-
 from slack_bolt.oauth.oauth_flow import OAuthFlow
 from slack_bolt.oauth.oauth_settings import OAuthSettings
 from slack_sdk.oauth import OAuthStateUtils
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
+from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 from slack_sdk.web import WebClient
+from sqlalchemy import text
 
 from utilities import constants
 from utilities.constants import LOCAL_DEVELOPMENT
-from utilities.db_oauth_stores import FixedSQLAlchemyOAuthStateStore
-from utilities.field_encryption import decrypt_field, encrypt_field
 from utilities.database import DbManager, get_engine, paxminer_schema_name
 from utilities.database.orm import Attendance, Backblast, PaxminerAO, PaxminerRegion, PaxminerUser, Region
+from utilities.db_oauth_stores import FixedSQLAlchemyOAuthStateStore
+from utilities.field_encryption import decrypt_field, encrypt_field
 from utilities.slack import actions
 
 _LOG = logging.getLogger(__name__)
@@ -277,16 +277,28 @@ def get_user_ids(user_names, client, user_records: List[PaxminerUser]):
             user_name_search = re.sub(r"\s\(([\s\S]*?\))", "", user_name_search).replace(" ", "_")
             member_list[user_name_search] = user.user_id
     else:
-        members = client.users_list()["members"]
         member_list = {}
-        for member in members:
-            member_dict = member["profile"]
-            member_dict.update({"id": member["id"]})
-            if member_dict["display_name"] == "":
-                member_dict["display_name"] = member_dict["real_name"]
-            member_dict["display_name"] = member_dict["display_name"].lower()
-            member_dict["display_name"] = re.sub(r"\s\(([\s\S]*?\))", "", member_dict["display_name"]).replace(" ", "_")
-            member_list[member_dict["display_name"]] = member_dict["id"]
+        cursor = None
+        while True:
+            kwargs = {"limit": 200}
+            if cursor:
+                kwargs["cursor"] = cursor
+            resp = client.users_list(**kwargs)
+            members = resp.get("members") or []
+            for member in members:
+                member_dict = member["profile"]
+                member_dict.update({"id": member["id"]})
+                if member_dict["display_name"] == "":
+                    member_dict["display_name"] = member_dict["real_name"]
+                member_dict["display_name"] = member_dict["display_name"].lower()
+                member_dict["display_name"] = re.sub(
+                    r"\s\(([\s\S]*?\))", "", member_dict["display_name"]
+                ).replace(" ", "_")
+                member_list[member_dict["display_name"]] = member_dict["id"]
+            meta = resp.get("response_metadata") or {}
+            cursor = meta.get("next_cursor") or ""
+            if not cursor:
+                break
 
     user_ids = []
     for user_name in user_names:
@@ -360,6 +372,7 @@ def get_paxminer_schema(team_id: str, logger) -> str:
         if not tok:
             continue
         slack_client = WebClient(decrypt_field(tok))
+        slack_client.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=5))
 
         ao_index = 0
         try:
@@ -373,7 +386,15 @@ def get_paxminer_schema(team_id: str, logger) -> str:
                 try:
                     slack_response = slack_client.conversations_info(channel=ao_records[ao_index].channel_id)
                     keep_trying = False
-                except Exception:
+                except Exception as conv_exc:
+                    logger.debug(
+                        "conversations_info failed for schema=%s ao_index=%s channel_id=%s: %s",
+                        getattr(region, "schema_name", None),
+                        ao_index,
+                        ao_records[ao_index].channel_id,
+                        conv_exc,
+                        exc_info=True,
+                    )
                     ao_index += 1
 
         except Exception as exc:

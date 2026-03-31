@@ -2,7 +2,7 @@ from utilities import safe_get
 
 def get_channel_id_and_name(body, logger):
     # returns channel_iid, channel_name if it exists as an escaped parameter of slashcommand
-    user_id = body.get("user_id")
+    body.get("user_id")
     # Get "text" value which is everything after the /slash-command
     # e.g. /slackblast #our-aggregate-backblast-channel
     # then text would be "#our-aggregate-backblast-channel" if /slash command is not encoding
@@ -12,9 +12,9 @@ def get_channel_id_and_name(body, logger):
     try:
         channel_id = channel_name.split('|')[0].split('#')[1]
         channel_name = channel_name.split('|')[1].split('>')[0]
-    except IndexError as ierr:
+    except IndexError:
         logger.error('Bad user input - cannot parse channel id')
-    except Exception as error:
+    except Exception:
         logger.error('User did not pass in any input')
     return channel_id, channel_name
 

@@ -24,14 +24,13 @@ from datetime import date, timedelta
 from typing import Tuple
 
 import polars as pl
+from common.encryption import decrypt_field
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from sqlalchemy import MetaData, Subquery, Table
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.sql import Selectable, and_, case, func, literal_column, or_, select, union_all
-
-from common.encryption import decrypt_field
 
 from .utils import (
     home_region_date_tiers,

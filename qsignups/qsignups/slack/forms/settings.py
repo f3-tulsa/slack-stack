@@ -1,7 +1,6 @@
 from database import DbManager
 from database.orm import Region
 from slack import actions, forms, inputs
-import google
 # from google import calendar, authenticate
 
 def general_form(team_id, user_id, client, logger):

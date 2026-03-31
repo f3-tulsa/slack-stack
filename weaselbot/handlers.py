@@ -50,6 +50,10 @@ except Exception:
 
 
 def achievements_handler(event, context):
+    logging.info(
+        "Weaselbot achievements_handler start request_id=%s",
+        getattr(context, "aws_request_id", None) if context else None,
+    )
     try:
         from weaselbot.pax_achievements import main
 
@@ -64,6 +68,10 @@ def achievements_handler(event, context):
 
 
 def kotter_handler(event, context):
+    logging.info(
+        "Weaselbot kotter_handler start request_id=%s",
+        getattr(context, "aws_request_id", None) if context else None,
+    )
     try:
         from weaselbot.kotter_report import main
 

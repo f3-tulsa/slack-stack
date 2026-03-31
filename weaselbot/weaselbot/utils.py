@@ -36,6 +36,7 @@ import polars as pl
 from dotenv import load_dotenv
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
+from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 from sqlalchemy import create_engine, pool
 from sqlalchemy.engine import Engine
 
@@ -75,8 +76,16 @@ def sql_string_literal(value: str) -> str:
 
 
 def polars_mysql_uri_from_engine(engine: Engine) -> str:
-    """Polars read_database_uri / connectorx expect ``mysql://`` without the SQLAlchemy driver suffix."""
-    return engine.url.render_as_string(hide_password=False).replace("mysql+pymysql://", "mysql://")
+    """Polars read_database_uri / connectorx expect ``mysql://`` without the SQLAlchemy driver suffix.
+
+    The returned string contains credentials — never log it or include it in exception messages.
+    """
+    u = engine.url
+    user = quote_plus(u.username or "")
+    password = quote_plus(u.password or "")
+    host = u.host or "localhost"
+    port = int(u.port or 3306)
+    return f"mysql://{user}:{password}@{host}:{port}/"
 
 
 def mysql_connection() -> Engine:
@@ -124,7 +133,9 @@ def slack_client(token: str) -> WebClient:
     :rtype: slack_sdk.WebClient object
     """
 
-    return WebClient(token=token, ssl=ssl.create_default_context())
+    client = WebClient(token=token, ssl=ssl.create_default_context())
+    client.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=5))
+    return client
 
 
 def _check_for_new_results(schema: str, year: int, idx: int, df: pl.DataFrame, awarded: pl.DataFrame) -> pl.DataFrame:

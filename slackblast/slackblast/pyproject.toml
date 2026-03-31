@@ -1,6 +1,7 @@
 [tool.ruff]
 line-length = 120
 
+[tool.ruff.lint]
 select = [
     "E",  # pycodestyle errors (settings from FastAPI, thanks, @tiangolo!)
     "W",  # pycodestyle warnings
@@ -13,7 +14,7 @@ ignore = [
     "C901",  # too complex
 ]
 
-[tool.ruff.isort]
+[tool.ruff.lint.isort]
 order-by-type = true
 relative-imports-order = "closest-to-furthest"
 extra-standard-library = ["typing"]

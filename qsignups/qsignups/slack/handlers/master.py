@@ -4,7 +4,7 @@ from database import DbManager
 from database.orm import Master, AO, Region, helper
 # from google import calendar
 from . import UpdateResponse
-from utilities import get_user, safe_get, User
+from utilities import safe_get, User
 # from google import authenticate, calendar
 
 def delete(client, user_id, team_id, logger, input_data) -> UpdateResponse:
@@ -57,7 +57,7 @@ def insert(client, user_id, team_id, logger, input_data) -> UpdateResponse:
 
     # Attempt insert
     try:
-        master_record = DbManager.create_record(Master(
+        DbManager.create_record(Master(
             ao_channel_id = ao_channel_id,
             event_date = event_date,
             event_time = event_time,
@@ -67,7 +67,7 @@ def insert(client, user_id, team_id, logger, input_data) -> UpdateResponse:
             event_recurring = event_recurring,
             team_id = team_id
         ))
-        return UpdateResponse(success = True, message=f"Got it - I've made your updates!")
+        return UpdateResponse(success = True, message="Got it - I've made your updates!")
     except Exception as e:
         logger.error(f"Error inserting: {e}")
         return UpdateResponse(success = False, message = f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker. Errors:\n{e}")
@@ -102,7 +102,7 @@ def update_events(client, user: User, team_id, logger, input_data) -> UpdateResp
         selected_special_fmt = selected_special
 
     try:
-        region: Region = DbManager.get_record(Region, team_id)
+        DbManager.get_record(Region, team_id)
         ao: AO = helper.find_ao(team_id, ao_channel_id = ao_channel_id)
 
         records: list[Master] = DbManager.find_records(Master, filters = [
@@ -123,12 +123,12 @@ def update_events(client, user: User, team_id, logger, input_data) -> UpdateResp
             Master.event_special: selected_special_fmt
         })
         google_records = [ x for x in records if x.google_event_id ]
-        records_to_reschedules = DbManager.find_records(Master, filters = [
+        DbManager.find_records(Master, filters = [
             Master.id.in_([x.id for x in google_records])
         ])
         # for event in records_to_reschedules:
         #     calendar.schedule_event(team_id, user, region, event, ao)
-        return UpdateResponse(success = True, message=f"Got it - I've made your updates!")
+        return UpdateResponse(success = True, message="Got it - I've made your updates!")
     except Exception as e:
         logger.error(f"Error inserting: {e}")
         return UpdateResponse(success = False, message = f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker. Errors:\n{e}")
@@ -138,7 +138,7 @@ def clear_event_q(client, user: User, team_id, logger, ao_display_name, selected
     # gather and format selected date and time
     result: helper.MasterEventAndAO = helper.find_master_event(team_id, selected_dt, ao_display_name = ao_display_name)
     if not result:
-        return UpdateResponse(success = False, message = f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker")
+        return UpdateResponse(success = False, message = "Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker")
 
     try:
         DbManager.update_record(Master, result.event.id, {
@@ -146,7 +146,7 @@ def clear_event_q(client, user: User, team_id, logger, ao_display_name, selected
             Master.q_pax_name: None
         })
         if result.event.google_event_id:
-            region: Region = DbManager.get_record(Region, team_id)
+            DbManager.get_record(Region, team_id)
             # calendar.schedule_event(team_id, None, region, result.event, result.ao)
 
         return UpdateResponse(success = True, message=f"Got it, {user.name}! I have cleared the Q slot at *{ao_display_name}* on *{selected_dt.strftime('%A, %B %-d @ %H%M')}*")
@@ -159,7 +159,7 @@ def assign_event_q(client, user: User, team_id, logger, selected_dt, ao_display_
     result: helper.MasterEventAndAO = helper.find_master_event(team_id, selected_dt, ao_display_name = ao_display_name, ao_channel_id = ao_channel_id)
 
     if not result:
-        return UpdateResponse(success = False, message = f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker.")
+        return UpdateResponse(success = False, message = "Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker.")
     DbManager.update_record(Master, result.event.id, {
         Master.q_pax_id: user.id,
         Master.q_pax_name: user.name
@@ -173,4 +173,4 @@ def assign_event_q(client, user: User, team_id, logger, selected_dt, ao_display_
     #             Master.google_event_id: event['id'],
     #         })
 
-    return UpdateResponse(success = True, message=f"Got it - I've made your updates!")
+    return UpdateResponse(success = True, message="Got it - I've made your updates!")

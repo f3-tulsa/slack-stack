@@ -10,50 +10,85 @@ Usage: F3SlackChannelLister.py [db_name] [slack_token]
 
 import pandas as pd
 from slack_sdk import WebClient
+from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 import logging
+
 
 def database_slack_channel_update(region_db, key, mydb):
     logging.info("Database_slack_user_update")
 
-    # Configure AWS credentials
     slack = WebClient(token=key)
-    # Get channel list
-    channels_response = slack.conversations_list(limit=999)
-    channels = channels_response.data['channels']
-    channels_df = pd.json_normalize(channels)
-    channels_df = channels_df[['id', 'name', 'created', 'is_archived']]
-    channels_df = channels_df.rename(columns={'id' : 'channel_id', 'name' : 'ao', 'created' : 'channel_created', 'is_archived' : 'archived'})
+    slack.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=5))
 
-    # Now connect to the AWS database and insert some rows!
-    logging.info('Updating Slack channel list / AOs for region...' + region_db)
+    cursor_slack = ""
+    all_channels = []
+    while True:
+        kwargs = {"limit": 999, "types": "public_channel,private_channel"}
+        if cursor_slack:
+            kwargs["cursor"] = cursor_slack
+        channels_response = slack.conversations_list(**kwargs)
+        batch = channels_response.data.get("channels") or []
+        all_channels.extend(batch)
+        cursor_slack = (channels_response.get("response_metadata") or {}).get("next_cursor") or ""
+        if not cursor_slack:
+            break
+
+    channels_df = pd.json_normalize(all_channels)
+    channels_df = channels_df[["id", "name", "created", "is_archived"]]
+    channels_df = channels_df.rename(
+        columns={
+            "id": "channel_id",
+            "name": "ao",
+            "created": "channel_created",
+            "is_archived": "archived",
+        }
+    )
+
+    logging.info("Updating Slack channel list / AOs for region..." + region_db)
+    inserted = 0
+    updated = 0
     try:
         with mydb.cursor() as cursor:
-            for index, row in channels_df.iterrows():
-                sql = "INSERT INTO aos (ao, channel_id, channel_created, archived) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE ao=%s, archived=%s"
-                channel_name_tmp = row['ao']
-                channel_id_tmp = row['channel_id']
-                channel_created_tmp = row['channel_created']
-                archived_tmp = row['archived']
-                val = (channel_name_tmp, channel_id_tmp, channel_created_tmp, archived_tmp, channel_name_tmp, archived_tmp)
-        
+            for _index, row in channels_df.iterrows():
+                sql = (
+                    "INSERT INTO aos (ao, channel_id, channel_created, archived) VALUES (%s, %s, %s, %s) "
+                    "ON DUPLICATE KEY UPDATE ao=%s, archived=%s"
+                )
+                channel_name_tmp = row["ao"]
+                channel_id_tmp = row["channel_id"]
+                channel_created_tmp = row["channel_created"]
+                archived_tmp = row["archived"]
+                val = (
+                    channel_name_tmp,
+                    channel_id_tmp,
+                    channel_created_tmp,
+                    archived_tmp,
+                    channel_name_tmp,
+                    archived_tmp,
+                )
+
                 cursor.execute(sql, val)
-                mydb.commit()
-                if cursor.rowcount == 1:
-                    logging.info(channel_name_tmp +  "record inserted.")
-                    try:
-                        slack.chat_postMessage(channel='paxminer_logs', text=" - Slack channel created for " + channel_name_tmp)
-                    except Exception as log_exc:
-                        logging.debug("paxminer_logs notify (channel insert) failed: %s", log_exc)
-                elif cursor.rowcount == 2:
+                rc = cursor.rowcount
+                if rc == 1:
+                    logging.info(channel_name_tmp + " record inserted.")
+                    inserted += 1
+                elif rc == 2:
                     logging.info(channel_name_tmp + " record updated.")
-                    try:
-                        slack.chat_postMessage(channel='paxminer_logs', text=" - Slack channel updated for " + channel_name_tmp)
-                    except Exception as log_exc:
-                        logging.debug("paxminer_logs notify (channel update) failed: %s", log_exc)
+                    updated += 1
+        mydb.commit()
         with mydb.cursor() as cursor3:
             sql3 = "UPDATE aos SET backblast = 0 where backblast IS NULL"
             cursor3.execute(sql3)
-            mydb.commit()
-            
+        mydb.commit()
+
     finally:
         mydb.close()
+
+    if inserted or updated:
+        try:
+            slack.chat_postMessage(
+                channel="paxminer_logs",
+                text=f" - Channel sync ({region_db}): {inserted} created, {updated} updated",
+            )
+        except Exception as log_exc:
+            logging.debug("paxminer_logs channel summary failed: %s", log_exc, exc_info=True)

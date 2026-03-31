@@ -275,6 +275,8 @@ aws s3 cp slackblast/assets/ s3://YOUR_IMAGE_BUCKET/ --recursive
 
 Pushes to branches **`test`** and **`prod`** run `.github/workflows/deploy.yml`. **`main`** is for PRs only. Manual runs are also supported via *Actions → Deploy Slack Stack → Run workflow*.
 
+**Faster / lighter deploys (optional GitHub Environment variables, same names in `.env.deploy.*` for `deploy.sh`):** `SAM_NO_CACHE=true` forces a full uncached `sam build`. **`SKIP_SMOKE_TEST=true`** skips post-deploy invokes of PAXminer sync and Weaselbot achievements (skip when tokens did not change). **`RUN_EXTEND_SCHEDULE=true`** runs the QSignups extend-schedule custom resource on that deploy (passes a changing nonce); leave unset for routine deploys. **`ENABLE_XRAY=true`** turns on X-Ray for slackblast and qsignups (default off).
+
 After all stacks deploy successfully, the workflow appends a **summary** to the job log and `$GITHUB_STEP_SUMMARY`, writes a receipt under `receipts/`, generates the same **stage-specific `manifest-{STAGE}.json`** files, and uploads receipts + manifests as a workflow **artifact**.
 
 ### GitHub Environments
@@ -322,6 +324,10 @@ Create environments **`test`** and **`prod`** in your repo settings (or run `./d
 | `QS_SLACK_CLIENT_ID` | `10773766677089.xxx` | Slack OAuth Client ID for qsignups (public app id; use a variable, not a secret) |
 | `SB_CREATE_OAUTH_TABLES` | *(omit)* | Optional; set to `true` for one deploy to create OAuth tables (see **Slack OAuth (database)**) |
 | `QS_CREATE_OAUTH_TABLES` | *(omit)* | Optional; set to `true` for one deploy to create OAuth tables (see **Slack OAuth (database)**) |
+| `SAM_NO_CACHE` | *(omit)* | Optional; `true` = `sam build --no-cached` (slower, clean rebuild) |
+| `SKIP_SMOKE_TEST` | *(omit)* | Optional; `true` = skip post-deploy Lambda smoke test (PAXminer sync + Weaselbot achievements) |
+| `RUN_EXTEND_SCHEDULE` | *(omit)* | Optional; `true` = run QSignups extend-schedule on deploy via new `ExtendScheduleDeployNonce` |
+| `ENABLE_XRAY` | *(omit)* | Optional; `true` = enable AWS X-Ray on slackblast + qsignups |
 
 ### AWS OIDC (one-time setup)
 

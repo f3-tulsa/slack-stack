@@ -1,5 +1,8 @@
 #!/usr/bin/env python
+import logging
 import os, sys, subprocess, time, signal
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 def file_filter(name):
   return (not name.startswith(".")) and (not name.endswith(".swp"))
@@ -50,8 +53,9 @@ try:
       process.kill()
       process = subprocess.Popen(command, shell=True)
     time.sleep(wait)
-except:
-  pass
+except Exception:
+  logging.exception("reload watcher loop failed")
+  raise
 finally:
   if process:
     process.kill()

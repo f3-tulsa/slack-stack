@@ -2,14 +2,6 @@ AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: slackblast-build-template
 
-Globals:
-  Function:
-    Timeout: 10
-    MemorySize: 256
-    Tracing: Active
-  Api:
-    TracingEnabled: true
-
 Parameters:
   SlackToken:
     Description: Slack token that is passed by the bot
@@ -98,6 +90,24 @@ Parameters:
     AllowedValues:
       - "true"
       - "false"
+  EnableXRay:
+    Description: Enable AWS X-Ray on Lambda and API (extra cost beyond free tier); set ENABLE_XRAY=true in deploy env to turn on
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+Conditions:
+  XRayEnabled: !Equals [!Ref EnableXRay, "true"]
+
+Globals:
+  Function:
+    Timeout: 10
+    MemorySize: 256
+    Tracing: !If [XRayEnabled, Active, PassThrough]
+  Api:
+    TracingEnabled: !If [XRayEnabled, true, false]
 
 Mappings:
   StagesMap:
@@ -178,7 +188,7 @@ Resources:
         SlackblastKeepWarm:
           Type: ScheduleV2
           Properties:
-            ScheduleExpression: "rate(5 minutes)"
+            ScheduleExpression: "rate(15 minutes)"
             Name: !FindInMap
               - StagesMap
               - Ref: Stage

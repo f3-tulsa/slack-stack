@@ -95,20 +95,31 @@ def extend_all_schedules(logger) -> None:
                 )
                 logger.info("extend_all_schedules: removed orphan recurring series %s", t)
 
-        for w in weeklies:
-            max_date = (
-                session.query(func.max(Master.event_date))
-                .filter(
-                    and_(
-                        Master.ao_channel_id == w.ao_channel_id,
-                        Master.event_day_of_week == w.event_day_of_week,
-                        Master.event_time == w.event_time,
-                        Master.team_id == w.team_id,
-                        Master.event_recurring == True,
-                    )
-                )
-                .scalar()
+        max_rows = (
+            session.query(
+                Master.ao_channel_id,
+                Master.event_day_of_week,
+                Master.event_time,
+                Master.team_id,
+                func.max(Master.event_date).label("max_d"),
             )
+            .filter(Master.event_recurring == True)
+            .group_by(
+                Master.ao_channel_id,
+                Master.event_day_of_week,
+                Master.event_time,
+                Master.team_id,
+            )
+            .all()
+        )
+        max_map = {
+            (r.ao_channel_id, r.event_day_of_week, r.event_time, r.team_id): r.max_d
+            for r in max_rows
+        }
+
+        for w in weeklies:
+            key = (w.ao_channel_id, w.event_day_of_week, w.event_time, w.team_id)
+            max_date = max_map.get(key)
             start = (max_date + timedelta(days=1)) if max_date else date.today()
             record_list.extend(
                 _build_recurring_master_rows(
@@ -219,7 +230,7 @@ def edit(client, user_id, team_id, logger, body) -> UpdateResponse:
         if new_rows:
             DbManager.create_records(new_rows)
 
-        return UpdateResponse(success = True, message=f"Got it - I've made your updates!")
+        return UpdateResponse(success = True, message="Got it - I've made your updates!")
     except Exception as e:
         logger.error(f"Error updating: {e}")
         return UpdateResponse(success = False, message = f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker. Errors:\n{e}")
@@ -270,7 +281,7 @@ def insert(client, user_id, team_id, logger, input_data) -> UpdateResponse:
         )
 
         DbManager.create_records(record_list)
-        return UpdateResponse(success = True, message=f"Got it - I've made your updates!")
+        return UpdateResponse(success = True, message="Got it - I've made your updates!")
     except Exception as e:
         logger.error(f"Error updating: {e}")
         return UpdateResponse(success = False, message = f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker. Errors:\n{e}")

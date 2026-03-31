@@ -7,8 +7,8 @@ Workaround for slack_sdk SQLAlchemyOAuthStateStore passing ``metadata`` twice to
 from __future__ import annotations
 
 import sqlalchemy
-from sqlalchemy import Column, DateTime, Integer, MetaData, String
 from slack_sdk.oauth.state_store.sqlalchemy import SQLAlchemyOAuthStateStore
+from sqlalchemy import Column, DateTime, Integer, MetaData, String
 
 
 class FixedSQLAlchemyOAuthStateStore(SQLAlchemyOAuthStateStore):

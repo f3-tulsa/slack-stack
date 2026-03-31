@@ -4,11 +4,12 @@ This script was written by Beaker from F3STL. Questions? @srschaecher on twitter
 This script ensures all AO and FirstF channels are joined by PAXminer and it also ensures that the required log and plot directories exist.
 '''
 
+import logging
 from pathlib import Path
 
 from slack_sdk import WebClient
+from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 import pandas as pd
-import pymysql.cursors
 import matplotlib
 matplotlib.use('Agg')
 import os
@@ -22,19 +23,22 @@ if str(_PAX_ROOT) not in sys.path:
     sys.path.insert(0, str(_PAX_ROOT))
 from paxminer_db import connect_from_credentials_ini
 
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
 # Set Slack token
 key = sys.argv[2]
 slack = WebClient(token=key)
+slack.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=5))
 firstf = sys.argv[4] #designated 1st-f channel for the region
 
 mydb = connect_from_credentials_ini(db)
-print("Setting up PAXminer environment for region " + region)
-print("Joining FirstF channel")
+logging.info("Setting up PAXminer environment for region %s", region)
+logging.info("Joining FirstF channel")
 try:
     slack.conversations_join(channel=firstf)
-    print('Joined FirstF channel ' + firstf)
-except:
-    print('Could not join firstf')
+    logging.info("Joined FirstF channel %s", firstf)
+except Exception:
+    logging.exception("Could not join firstf channel %s", firstf)
 
 try:
     with mydb.cursor() as cursor:
@@ -43,18 +47,18 @@ try:
         aos = cursor.fetchall()
         aos_df = pd.DataFrame(aos, columns=["channel_id", "ao"])
 finally:
-    print('Pulling all AO channels... Stand by...')
+    logging.info("Pulling all AO channels... Stand by...")
 
 # Join each AO channel
-print("Ensuring PAXminer is a member of all AO channels...")
+logging.info("Ensuring PAXminer is a member of all AO channels...")
 for index, row in aos_df.iterrows():
     ao = row['ao']
     channel_id = row['channel_id']
-    print('Joining AO ' + ao)
+    logging.info("Joining AO %s", ao)
     try:
         slack.conversations_join(channel=channel_id)
-    except:
-        print('An Error Occurred in Joining ' + ao + " " + channel_id)
+    except Exception:
+        logging.exception("Error joining AO %s channel_id=%s", ao, channel_id)
 
 #Make sure log and plot directories are created
 plotdir ='plots/' + db
@@ -68,16 +72,16 @@ plotpath = os.path.join(parent_dir, plotdir)
 logpath = os.path.join(parent_dir, logdir)
 
 # Create the directories
-print("Creating required log and plot directories for region " + region)
+logging.info("Creating required log and plot directories for region %s", region)
 try:
     os.mkdir(plotpath)
-    print("Directory '%s' created" % plotpath)
+    logging.info("Directory '%s' created", plotpath)
 except OSError as ploterror:
-    print(ploterror)
+    logging.warning("%s", ploterror)
 try:
     os.mkdir(logpath)
-    print("Directory '%s' created" % logpath)
+    logging.info("Directory '%s' created", logpath)
 except OSError as logerror:
-    print(logerror)
+    logging.warning("%s", logerror)
 
-print('End of preparations')
+logging.info("End of preparations")

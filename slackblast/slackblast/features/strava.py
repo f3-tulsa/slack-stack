@@ -204,6 +204,7 @@ def strava_exchange_token(event, context) -> dict:
             "code": code,
             "grant_type": "authorization_code",
         },
+        timeout=(10, 30),
     )
     response.raise_for_status()
 
@@ -260,6 +261,7 @@ def check_and_refresh_strava_token(user_record: User) -> str:
                 "refresh_token": refresh_plain,
                 "grant_type": "refresh_token",
             },
+            timeout=(10, 30),
         )
         res.raise_for_status()
         data = res.json()
@@ -286,7 +288,12 @@ def get_strava_activities(user_record: User) -> List[Dict]:
 
     access_token = check_and_refresh_strava_token(user_record)
     request_url = "https://www.strava.com/api/v3/athlete/activities"
-    res = requests.get(request_url, headers={"Authorization": f"Bearer {access_token}"}, params={"per_page": 10})
+    res = requests.get(
+        request_url,
+        headers={"Authorization": f"Bearer {access_token}"},
+        params={"per_page": 10},
+        timeout=(10, 30),
+    )
     res.raise_for_status()
     data = res.json()
     return data
@@ -323,10 +330,7 @@ def update_strava_activity(
             "name": backblast_title,
             "description": backblast_moleskine,
         },
-        # data={
-        #     "name": backblast_title,
-        #     "description": backblast_moleskine,
-        # },
+        timeout=(10, 30),
     )
     res.raise_for_status()
     data = res.json()
@@ -355,6 +359,7 @@ def get_strava_activity(
     res = requests.get(
         request_url,
         headers={"Authorization": f"Bearer {access_token}"},
+        timeout=(10, 30),
     )
     res.raise_for_status()
     data = res.json()

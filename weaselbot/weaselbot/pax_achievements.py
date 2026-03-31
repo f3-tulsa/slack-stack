@@ -3,13 +3,12 @@ from datetime import date
 from typing import Tuple
 
 import polars as pl
+from common.encryption import decrypt_field
 from sqlalchemy import MetaData, Selectable, Subquery, Table, text
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import NoSuchTableError, SQLAlchemyError
 from sqlalchemy.sql import and_, case, func, literal_column, or_, select, union_all
-
-from common.encryption import decrypt_field
 
 from .utils import (
     home_region_date_tiers,

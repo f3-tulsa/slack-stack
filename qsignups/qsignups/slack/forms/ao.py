@@ -87,7 +87,7 @@ def edit_form(team_id, user_id, client, logger):
 
     # list of AOs for dropdown
     aos: list[vwAOsSort] = DbManager.find_records(vwAOsSort, [vwAOsSort.team_id == team_id])
-    ao_list = [ao.ao_display_name for ao in aos]
+    [ao.ao_display_name for ao in aos]
 
     ao_options = []
     for ao in aos:

@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-import pymysql.cursors
 
 # Set the working directory to the directory of the script
 abspath = os.path.abspath(__file__)

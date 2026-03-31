@@ -1,19 +1,20 @@
-import pytest
-import polars as pl
 from datetime import date, datetime
 from unittest.mock import MagicMock
-from sqlalchemy import MetaData, Table, Column, String, Integer, DateTime, select
-from sqlalchemy.sql import text
+
+import polars as pl
+import pytest
+from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table
 
 from ..weaselbot.pax_achievements import (
-    home_region_sub_query,
-    the_priest,
-    the_monk,
-    leader_of_men,
-    six_pack,
     hdtf,
-    load_to_database
+    home_region_sub_query,
+    leader_of_men,
+    load_to_database,
+    six_pack,
+    the_monk,
+    the_priest,
 )
+
 
 @pytest.fixture
 def mock_engine():
@@ -78,9 +79,9 @@ def test_home_region_sub_query(mock_tables):
     """Test home region subquery generation"""
     u, a, b, ao = mock_tables
     date_range = 30
-    
+
     query = home_region_sub_query(u, a, b, ao, date_range)
-    
+
     assert "SELECT" in str(query)
     assert "count" in str(query)
     assert "WHERE" in str(query)
@@ -91,9 +92,9 @@ def test_the_priest_achievement(sample_data):
     """Test The Priest achievement calculation"""
     bb_filter = pl.col('backblast').str.contains('Q Source')
     ao_filter = pl.col('ao').str.contains('QSource')
-    
+
     result = the_priest(sample_data, bb_filter, ao_filter)
-    
+
     assert isinstance(result, pl.DataFrame)
     assert 'email' in result.columns
     assert 'region' in result.columns
@@ -103,9 +104,9 @@ def test_the_monk_achievement(sample_data):
     """Test The Monk achievement calculation"""
     bb_filter = pl.col('backblast').str.contains('Q Source')
     ao_filter = pl.col('ao').str.contains('QSource')
-    
+
     result = the_monk(sample_data, bb_filter, ao_filter)
-    
+
     assert isinstance(result, pl.DataFrame)
     assert 'month' in result.columns
     assert 'email' in result.columns
@@ -115,9 +116,9 @@ def test_leader_of_men_achievement(sample_data):
     """Test Leader of Men achievement calculation"""
     bb_filter = ~pl.col('backblast').str.contains('Q Source')
     ao_filter = ~pl.col('ao').str.contains('QSource')
-    
+
     result = leader_of_men(sample_data, bb_filter, ao_filter)
-    
+
     assert isinstance(result, pl.DataFrame)
     assert 'month' in result.columns
     assert 'email' in result.columns
@@ -127,9 +128,9 @@ def test_six_pack_achievement(sample_data):
     """Test Six Pack achievement calculation"""
     bb_filter = ~pl.col('backblast').str.contains('Q Source')
     ao_filter = ~pl.col('ao').str.contains('QSource|ruck')
-    
+
     result = six_pack(sample_data, bb_filter, ao_filter)
-    
+
     assert isinstance(result, pl.DataFrame)
     assert 'week' in result.columns
     assert 'email' in result.columns
@@ -139,9 +140,9 @@ def test_hdtf_achievement(sample_data):
     """Test HDTF achievement calculation"""
     bb_filter = ~pl.col('backblast').str.contains('Q Source')
     ao_filter = ~pl.col('ao').str.contains('QSource|ruck')
-    
+
     result = hdtf(sample_data, bb_filter, ao_filter)
-    
+
     assert isinstance(result, pl.DataFrame)
     assert 'year' in result.columns
     assert 'email' in result.columns
@@ -155,19 +156,19 @@ def test_load_to_database(mock_engine, mock_metadata):
         'pax_id': ['USER1'],
         'date_awarded': [datetime.now()]
     })
-    
+
     # Mock table
-    achievement_table = Table(
+    Table(
         'achievements_awarded', mock_metadata,
         Column('achievement_id', Integer),
         Column('pax_id', String),
         Column('date_awarded', DateTime),
         schema=schema
     )
-    
+
     # Test load_to_database function
     load_to_database(schema, mock_engine, mock_metadata, data_to_load)
-    
+
     # Verify execution
     mock_engine.begin.assert_called_once()
     mock_engine.begin().__enter__().execute.assert_called_once()
@@ -178,15 +179,15 @@ def test_home_region_date_ranges(mock_tables, date_range):
     """Test home region queries with different date ranges"""
     u, a, b, ao = mock_tables
     query = home_region_sub_query(u, a, b, ao, date_range)
-    
+
     # Compile query once with literals for inspection
     compiled_str = str(query.compile(compile_kwargs={"literal_binds": True}))
-    
+
     # Verify query structure and date range usage
     assert "SELECT" in compiled_str
     assert "FROM" in compiled_str
     assert "WHERE" in compiled_str
     assert "GROUP BY" in compiled_str
-    
+
     # Verify date range appears in DATEDIFF context
     assert f"datediff(curdate(), test_schema.beatdowns.bd_date) < {date_range}" in compiled_str.lower()

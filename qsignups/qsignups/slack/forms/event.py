@@ -7,7 +7,6 @@ from slack import actions, forms, inputs
 
 from utilities import list_to_dict
 
-from sqlalchemy import func
 
 def add_single_form(team_id, user_id, client, logger):
 

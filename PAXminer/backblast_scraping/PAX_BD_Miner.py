@@ -14,7 +14,6 @@ import pandas as pd
 import pytz
 import re
 import os
-import pymysql.cursors
 import sys
 from pathlib import Path
 
@@ -24,7 +23,6 @@ if str(_PAX_ROOT) not in sys.path:
 from paxminer_db import connect_from_credentials_ini
 import logging
 import math
-import warnings
 from BD_Update_Utils import determine_db_action, find_match, retrievePreviousBackblasts, DbAction
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -129,19 +127,22 @@ for id in channels_df['channel_id']:
     data = ''
     pages = 1
     while True:
+        next_cursor = None
         try:
             #print("Checking channel " + id) # <-- Use this if debugging any slack channels throwing errors
             response = slack.conversations_history(channel=id, cursor=data)
             response_metadata = response.get('response_metadata', {})
-            try:
-                next_cursor = response_metadata.get('next_cursor')
-            except:
-                pass
+            next_cursor = response_metadata.get('next_cursor')
             messages = response.data['messages']
             temp_df = pd.json_normalize(messages)
             try:
                 temp_df = temp_df[['user', 'type', 'text', 'ts', 'edited.ts']]
-            except:
+            except KeyError:
+                logging.debug(
+                    "PAX_BD_Miner: channel %s missing edited.ts column; using NA",
+                    id,
+                    exc_info=True,
+                )
                 temp_df = temp_df[['user', 'type', 'text', 'ts']]
                 temp_df['edited.ts'] = "NA"
             finally:
@@ -149,11 +150,15 @@ for id in channels_df['channel_id']:
                 temp_df = temp_df.rename(columns={'user' : 'user_id', 'type' : 'message_type', 'ts' : 'timestamp', 'edited.ts' : 'ts_edited'})
                 temp_df["channel_id"] = id
                 messages_df = messages_df.append(temp_df, ignore_index=True)
-        except:
-            print("Error: Unable to access Slack channel:", id, "in region:",db)
-            logging.warning("Error: Unable to access Slack channel %s in region %s", id, db)
+        except Exception:
+            logging.exception(
+                "Error: Unable to access Slack channel %s in region %s",
+                id,
+                db,
+            )
             pm_log_text += "Error: Unable to access Slack channel " + id + " in region " + db + "\n"
-        if next_cursor != "None":
+            next_cursor = None
+        if next_cursor and next_cursor != "None":
             # Keep going from next offset.
             data = next_cursor
             if pages == 1: ## Total number of pages to query from Slack
@@ -271,6 +276,7 @@ def retrieve_ao_line(backblast):
         else:
             return False, 'Unknown'
     except Exception:
+        logging.warning("retrieve_ao_line: parse failed for backblast snippet", exc_info=True)
         return False, 'Unknown'
     
     

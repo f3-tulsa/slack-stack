@@ -12,6 +12,7 @@ from features import strava
 from utilities.builders import add_loading_form, send_error_response
 from utilities.constants import LOCAL_DEVELOPMENT
 from utilities.database.orm import Region
+from utilities.field_encryption import require_encryption_key
 from utilities.helper_functions import (
     get_oauth_flow,
     get_region_record,
@@ -21,7 +22,6 @@ from utilities.helper_functions import (
 )
 from utilities.routing import MAIN_MAPPER
 from utilities.slack.actions import LOADING_ID
-from utilities.field_encryption import require_encryption_key
 
 require_encryption_key()
 
@@ -79,7 +79,8 @@ def main_response(body, logger, client, ack, context):
         request_type,
         request_id,
     )
-    logger.info(json.dumps(body, default=str))
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("Slack request body=%s", json.dumps(body, default=str))
 
     region_record: Region = get_region_record(team_id, body, context, client, logger)
     logger.info(

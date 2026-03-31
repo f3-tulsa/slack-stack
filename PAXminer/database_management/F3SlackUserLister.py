@@ -14,6 +14,7 @@ import ssl
 import pandas as pd
 import pymysql.cursors
 from slack_sdk import WebClient
+from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 import time
 import logging
 import json
@@ -64,6 +65,9 @@ def database_slack_user_update(region_db, key, firsttime_run, mydb):
 
     # Set Slack token
     slack = WebClient(token=key)
+    slack.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=5))
+    new_count = 0
+    updated_count = 0
 
     #Define AWS Database connection criteria
     logging.info('Looking for any new or updated F3 Slack Users. Stand by...')
@@ -145,21 +149,15 @@ def database_slack_user_update(region_db, key, firsttime_run, mydb):
                             )
                     val = (user_id_tmp, user_name_tmp, real_name_tmp, phone_tmp, email_tmp, start_date, app_tmp, js)
                     cursor.execute(sql, val)
-                    mydb.commit()
                     result = cursor.rowcount
                     if result == 1:
                         logging.info("Record inserted for user: " + user_name_tmp)
-                        try:
-                            slack.chat_postMessage(channel='paxminer_logs', text=" - New PAX record created for " + user_name_tmp)
-                        except Exception as log_exc:
-                            logging.debug("paxminer_logs notify (insert) failed: %s", log_exc)
+                        new_count += 1
                     elif result == 2:
                         logging.info("Record updated for user: " + user_name_tmp)
-                        try:
-                            slack.chat_postMessage(channel='paxminer_logs', text=" - PAX record updated for " + user_name_tmp)
-                        except Exception as log_exc:
-                            logging.debug("paxminer_logs notify (update) failed: %s", log_exc)
+                        updated_count += 1
 
+            mydb.commit()
         finally:
             pass
         if next_cursor:
@@ -170,4 +168,12 @@ def database_slack_user_update(region_db, key, firsttime_run, mydb):
             #logging.info('End of Loop')# All done!
             mydb.close()
             break
+    if new_count or updated_count:
+        try:
+            slack.chat_postMessage(
+                channel="paxminer_logs",
+                text=f" - User sync ({region_db}): {new_count} new PAX records, {updated_count} updated",
+            )
+        except Exception as log_exc:
+            logging.debug("paxminer_logs summary notify failed: %s", log_exc, exc_info=True)
     logging.info('Finished - users are up to date.')

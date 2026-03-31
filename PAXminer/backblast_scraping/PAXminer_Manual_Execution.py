@@ -11,7 +11,6 @@ import warnings
 from pathlib import Path
 
 import pandas as pd
-import pymysql.cursors
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 

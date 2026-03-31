@@ -21,6 +21,13 @@ BUILD_ONLY=false
 CONFIRM=false
 DO_BOOTSTRAP=false
 DO_SETUP_GITHUB=false
+DO_SKIP_SMOKE_TEST=false
+
+# SAM build: pass --no-cached only when SAM_NO_CACHE=true (from .env.deploy.*)
+SAM_BUILD_EXTRA=()
+if [[ "${SAM_NO_CACHE:-}" == "true" ]]; then
+  SAM_BUILD_EXTRA+=(--no-cached)
+fi
 
 usage() {
   cat <<EOF
@@ -32,6 +39,7 @@ Options:
   --confirm              prompt for SAM changeset confirmation
   --bootstrap            deploy infra/template.bootstrap.yaml (OIDC + SAM artifact bucket), then continue
   --setup-github         create/update GitHub environment (same name as --env) with vars/secrets from this env file (needs gh CLI)
+  --skip-smoke-test      do not invoke PAXminer sync / Weaselbot achievements after deploy (token DB upsert waits for schedule)
 
 Env file: .env.deploy.<env>  (copy from .env.deploy.example)
 EOF
@@ -64,6 +72,10 @@ while [[ $# -gt 0 ]]; do
       DO_SETUP_GITHUB=true
       shift
       ;;
+    --skip-smoke-test)
+      DO_SKIP_SMOKE_TEST=true
+      shift
+      ;;
     -h|--help)
       usage
       ;;
@@ -85,6 +97,8 @@ fi
 set -a
 source "$ENV_FILE"
 set +a
+
+[[ "${SKIP_SMOKE_TEST:-}" == "true" ]] && DO_SKIP_SMOKE_TEST=true
 
 case "$ENV_NAME" in
   test|prod) ;;
@@ -364,6 +378,7 @@ log_receipt() {
   echo "Build only: ${BUILD_ONLY}"
   echo "Bootstrap: ${DO_BOOTSTRAP}"
   echo "Setup GitHub: ${DO_SETUP_GITHUB}"
+  echo "Skip smoke test: ${DO_SKIP_SMOKE_TEST}"
   echo ""
 } | tee "$RECEIPT_FILE"
 
@@ -422,7 +437,7 @@ PY
 }
 
 deploy_paxminer() {
-  sam build -t PAXminer/template.yaml 2>&1 | tee -a "$RECEIPT_FILE"
+  sam build -t PAXminer/template.yaml "${SAM_BUILD_EXTRA[@]}" 2>&1 | tee -a "$RECEIPT_FILE"
   local brc="${PIPESTATUS[0]}"
   if [[ "$brc" -ne 0 ]]; then return "$brc"; fi
   [[ "$BUILD_ONLY" == true ]] && return 0
@@ -447,7 +462,7 @@ deploy_paxminer() {
 }
 
 deploy_weaselbot() {
-  sam build -t weaselbot/template.yaml 2>&1 | tee -a "$RECEIPT_FILE"
+  sam build -t weaselbot/template.yaml "${SAM_BUILD_EXTRA[@]}" 2>&1 | tee -a "$RECEIPT_FILE"
   local brc="${PIPESTATUS[0]}"
   if [[ "$brc" -ne 0 ]]; then return "$brc"; fi
   [[ "$BUILD_ONLY" == true ]] && return 0
@@ -474,7 +489,7 @@ deploy_weaselbot() {
 }
 
 deploy_slackblast() {
-  sam build -t slackblast/template.yaml 2>&1 | tee -a "$RECEIPT_FILE"
+  sam build -t slackblast/template.yaml --use-container "${SAM_BUILD_EXTRA[@]}" 2>&1 | tee -a "$RECEIPT_FILE"
   local brc="${PIPESTATUS[0]}"
   if [[ "$brc" -ne 0 ]]; then return "$brc"; fi
   [[ "$BUILD_ONLY" == true ]] && return 0
@@ -482,6 +497,8 @@ deploy_slackblast() {
   local strava_overrides=""
   [[ -n "${SB_STRAVA_CLIENT_ID:-}" ]] && strava_overrides+=" StravaClientID=${SB_STRAVA_CLIENT_ID}"
   [[ -n "${SB_STRAVA_CLIENT_SECRET:-}" ]] && strava_overrides+=" StravaClientSecret=${SB_STRAVA_CLIENT_SECRET}"
+  local xray_override="EnableXRay=false"
+  [[ "${ENABLE_XRAY:-false}" == "true" ]] && xray_override="EnableXRay=true"
   sam deploy \
     --stack-name "slackblast-${STAGE}" \
     "${SAM_DEPLOY_EXTRA[@]}" \
@@ -503,18 +520,25 @@ deploy_slackblast() {
       ${strava_overrides} \
       "ImageBucketName=${IMAGE_S3_BUCKET}" \
       "CreateOauthTables=${SB_CREATE_OAUTH_TABLES:-false}" \
+      "${xray_override}" \
     2>&1 | tee -a "$RECEIPT_FILE"
   return "${PIPESTATUS[0]}"
 }
 
 deploy_qsignups() {
-  sam build -t qsignups/template.yaml 2>&1 | tee -a "$RECEIPT_FILE"
+  sam build -t qsignups/template.yaml --use-container "${SAM_BUILD_EXTRA[@]}" 2>&1 | tee -a "$RECEIPT_FILE"
   local brc="${PIPESTATUS[0]}"
   if [[ "$brc" -ne 0 ]]; then return "$brc"; fi
   [[ "$BUILD_ONLY" == true ]] && return 0
   local google_overrides=""
   [[ -n "${QS_GOOGLE_CLIENT_ID:-}" ]] && google_overrides+=" GoogleClientId=${QS_GOOGLE_CLIENT_ID}"
   [[ -n "${QS_GOOGLE_CLIENT_SECRET:-}" ]] && google_overrides+=" GoogleClientSecret=${QS_GOOGLE_CLIENT_SECRET}"
+  local qs_extend_nonce="no-extend"
+  if [[ "${RUN_EXTEND_SCHEDULE:-false}" == "true" ]]; then
+    qs_extend_nonce="$(date +%s)"
+  fi
+  local xray_override="EnableXRay=false"
+  [[ "${ENABLE_XRAY:-false}" == "true" ]] && xray_override="EnableXRay=true"
   sam deploy \
     --stack-name "qsignups-${STAGE}" \
     "${SAM_DEPLOY_EXTRA[@]}" \
@@ -532,10 +556,11 @@ deploy_qsignups() {
       "SlackClientSecret=${QS_SLACK_CLIENT_SECRET}" \
       "SlackClientId=${QS_SLACK_CLIENT_ID}" \
       "DbEncryptionKey=${DB_ENCRYPTION_KEY}" \
-      "ExtendScheduleDeployNonce=$(date +%s)" \
+      "ExtendScheduleDeployNonce=${qs_extend_nonce}" \
       "ImageBucketName=${IMAGE_S3_BUCKET}" \
       ${google_overrides} \
       "CreateOauthTables=${QS_CREATE_OAUTH_TABLES:-false}" \
+      "${xray_override}" \
     2>&1 | tee -a "$RECEIPT_FILE"
   return "${PIPESTATUS[0]}"
 }
@@ -645,6 +670,66 @@ done
 
 if [[ "$ANY_FAIL" -eq 1 ]]; then
   log_receipt "Done with failures."
+  exit 1
+fi
+
+run_smoke_test_lambdas() {
+  [[ "$BUILD_ONLY" == true ]] && return 0
+  [[ "$DO_SKIP_SMOKE_TEST" == true ]] && {
+    echo "Skipping post-deploy Lambda smoke test (SKIP_SMOKE_TEST or --skip-smoke-test)."
+    return 0
+  }
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "WARN: jq not found; skipping smoke test (install jq or use CI)."
+    return 0
+  fi
+  echo ""
+  echo "=== Smoke-test scheduled Lambdas (token bootstrap DB upsert) ==="
+  invoke_one() {
+    local fn="$1"
+    echo "--- Invoking ${fn} ---"
+    aws lambda invoke \
+      --function-name "$fn" \
+      --invocation-type RequestResponse \
+      --cli-binary-format raw-in-base64-out \
+      --payload '{}' \
+      --log-type Tail \
+      /tmp/lambda-payload-deploy-sh.json > /tmp/lambda-meta-deploy-sh.json \
+      --region "$AWS_REGION" || return 1
+    if jq -e '.LogResult' /tmp/lambda-meta-deploy-sh.json >/dev/null 2>&1; then
+      echo "--- CloudWatch tail ---"
+      jq -r '.LogResult' /tmp/lambda-meta-deploy-sh.json | base64 -d 2>/dev/null || true
+      echo ""
+    fi
+    local sc
+    sc=$(jq -r '.statusCode // empty' /tmp/lambda-payload-deploy-sh.json 2>/dev/null || echo "")
+    if [[ -z "$sc" || "$sc" == "null" ]]; then
+      echo "ERROR: Lambda ${fn}: response missing statusCode"
+      return 1
+    fi
+    if [[ "$sc" != "200" ]]; then
+      echo "ERROR: Lambda ${fn} returned statusCode=${sc}"
+      return 1
+    fi
+    echo "OK ${fn} statusCode=200"
+    return 0
+  }
+  local smoke_rc=0
+  if [[ "$PAX_RC" -eq 0 ]]; then
+    invoke_one "paxminer-${STAGE}-paxminer-sync" || smoke_rc=1
+  fi
+  if [[ "$WEASEL_RC" -eq 0 ]]; then
+    invoke_one "weaselbot-${STAGE}-weaselbot-achievements" || smoke_rc=1
+  fi
+  return "$smoke_rc"
+}
+
+set +o pipefail
+run_smoke_test_lambdas 2>&1 | tee -a "$RECEIPT_FILE"
+SMOKE_RC="${PIPESTATUS[0]}"
+set -o pipefail
+if [[ "$SMOKE_RC" -ne 0 ]]; then
+  log_receipt "Smoke test failed."
   exit 1
 fi
 

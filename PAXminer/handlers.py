@@ -94,6 +94,10 @@ def _load_charter_module(module_file_stem: str):
 
 def sync_handler(event, context):
     """Daily user + channel sync for all active regions (Slackblast / TiDB env names)."""
+    logging.info(
+        "PAXminer sync_handler start request_id=%s",
+        getattr(context, "aws_request_id", None) if context else None,
+    )
     os.environ.setdefault("host", os.environ.get("DATABASE_HOST", ""))
     os.environ.setdefault("user", os.environ.get("DATABASE_USER", ""))
     os.environ.setdefault("password", os.environ.get("DATABASE_PASSWORD", ""))
@@ -112,6 +116,10 @@ def sync_handler(event, context):
 
 def chart_handler(event, context):
     """Monthly charts: PAX, Q, region leaderboard, AO leaderboard per `regions` flags."""
+    logging.info(
+        "PAXminer chart_handler start request_id=%s",
+        getattr(context, "aws_request_id", None) if context else None,
+    )
     from paxminer_db import connect_from_env
 
     pm = _pm_schema()
@@ -181,7 +189,7 @@ def chart_handler(event, context):
                     try:
                         regional.close()
                     except Exception:
-                        pass
+                        logging.debug("regional.close() failed (non-fatal)", exc_info=True)
 
         return {"statusCode": 200, "body": json.dumps({"ok": True, "results": results})}
     except Exception:
@@ -195,4 +203,4 @@ def chart_handler(event, context):
             try:
                 registry.close()
             except Exception:
-                pass
+                logging.debug("registry.close() failed (non-fatal)", exc_info=True)

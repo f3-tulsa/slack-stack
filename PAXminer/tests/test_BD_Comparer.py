@@ -1,10 +1,9 @@
 import unittest
 
-from os import sys, path
+from os import sys
 sys.path.append('../')
 
 from BD_Update_Utils import determine_db_action, find_match, retrievePreviousBackblasts, DbAction
-import pandas as pd
 import pymysql.cursors
 import configparser
 import time

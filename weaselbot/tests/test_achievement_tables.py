@@ -1,22 +1,23 @@
+from unittest.mock import MagicMock, call, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, call
-from sqlalchemy import MetaData, Table, Column
+from sqlalchemy import Column, MetaData, Table
 from sqlalchemy.dialects.mysql import VARCHAR
 from sqlalchemy.sql import text
 
-
 from ..weaselbot.achievement_tables import (
-    create_table,
-    achievements_list_columns,
-    achievements_awarded_columns,
-    insert_vals,
-    schema,
-    MYSQL_ENGINE,
     MYSQL_CHARSET,
     MYSQL_COLLATE,
+    MYSQL_ENGINE,
     VARCHAR_CHARSET,
-    VARCHAR_LENGTH
+    VARCHAR_LENGTH,
+    achievements_awarded_columns,
+    achievements_list_columns,
+    create_table,
+    insert_vals,
+    schema,
 )
+
 
 @pytest.fixture
 def mock_engine():
@@ -35,7 +36,7 @@ def test_create_table(metadata):
     """Test table creation with correct parameters"""
     test_columns = [Column("name", VARCHAR(charset=VARCHAR_CHARSET, length=VARCHAR_LENGTH), nullable=False)]
     table = create_table("test_table", test_columns, metadata, schema)
-    
+
     assert isinstance(table, Table)
     assert table.name == "test_table"
     assert table.schema == schema
@@ -48,7 +49,7 @@ def test_achievements_list_columns_structure():
     assert len(achievements_list_columns) == 5
     column_names = [col.name for col in achievements_list_columns]
     assert set(column_names) == {"id", "name", "description", "verb", "code"}
-    
+
     # Test VARCHAR columns have correct configuration
     varchar_columns = [col for col in achievements_list_columns if col.name != "id"]
     for col in varchar_columns:
@@ -61,14 +62,14 @@ def test_achievements_awarded_columns_structure():
     assert len(achievements_awarded_columns) == 6
     column_names = [col.name for col in achievements_awarded_columns]
     assert set(column_names) == {
-        "id", "achievement_id", "pax_id", "date_awarded", 
+        "id", "achievement_id", "pax_id", "date_awarded",
         "created", "updated"
     }
 
 def test_insert_vals_structure():
     """Test structure of insert values"""
     required_keys = {"name", "description", "verb", "code"}
-    
+
     assert len(insert_vals) > 0
     for val in insert_vals:
         assert isinstance(val, dict)
@@ -81,12 +82,12 @@ def test_database_operations(mock_engine):
     # Set up mock connection and returns
     connection = mock_engine.begin().__enter__()
     connection.execute.return_value = MagicMock()
-    
+
     # Execute multiple database operations
     with mock_engine.begin() as conn:
         conn.execute(text(f"ALTER TABLE {schema}.aos ADD site_q_user_id VARCHAR(45) NULL"))
         conn.execute(text("SELECT 1"))
-    
+
     # Verify all executions in order using str() comparison
     assert connection.execute.call_count == 2
     expected_calls = [
@@ -94,7 +95,7 @@ def test_database_operations(mock_engine):
         call(text("SELECT 1"))
     ]
     actual_calls = connection.execute.call_args_list
-    
+
     assert len(actual_calls) == len(expected_calls)
     for actual, expected in zip(actual_calls, expected_calls):
         assert str(actual.args[0]) == str(expected.args[0])
@@ -128,7 +129,7 @@ def test_error_handling(mock_engine):
     """Test error handling for database operations"""
     connection = mock_engine.begin().__enter__()
     connection.execute.side_effect = Exception("Test error")
-    
+
     with pytest.raises(Exception):
         with mock_engine.begin() as conn:
             conn.execute(text("SELECT 1"))
