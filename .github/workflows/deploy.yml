@@ -12,29 +12,111 @@ on:
         options:
           - test
           - prod
+      stack:
+        description: Deploy only this stack (push events ignore this and use path detection)
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - paxminer
+          - weaselbot
+          - slackblast
+          - qsignups
 
 permissions:
   id-token: write
   contents: read
 
+concurrency:
+  group: deploy-${{ github.event.inputs.environment || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
-  deploy:
+  detect-changes:
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment || github.ref_name }}
-    env:
-      # Optional speed toggles (GitHub Environment variables): unset = fast defaults below
-      SAM_NO_CACHE: ${{ vars.SAM_NO_CACHE }}
-      SKIP_SMOKE_TEST: ${{ vars.SKIP_SMOKE_TEST }}
-      RUN_EXTEND_SCHEDULE: ${{ vars.RUN_EXTEND_SCHEDULE }}
-      ENABLE_XRAY: ${{ vars.ENABLE_XRAY }}
+    outputs:
+      run_paxminer: ${{ steps.pick.outputs.run_paxminer }}
+      run_weaselbot: ${{ steps.pick.outputs.run_weaselbot }}
+      run_slackblast: ${{ steps.pick.outputs.run_slackblast }}
+      run_qsignups: ${{ steps.pick.outputs.run_qsignups }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'push'
+        with:
+          filters: |
+            paxminer:
+              - 'PAXminer/**'
+            weaselbot:
+              - 'weaselbot/**'
+              - 'common/**'
+            slackblast:
+              - 'slackblast/**'
+            qsignups:
+              - 'qsignups/**'
+            infra:
+              - '.github/workflows/**'
+              - 'infra/**'
+
+      - id: pick
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            STACK="${{ github.event.inputs.stack }}"
+            [[ -z "$STACK" ]] && STACK="all"
+            PM=false WB=false SB=false QS=false
+            if [[ "$STACK" == "all" ]]; then
+              PM=true WB=true SB=true QS=true
+            else
+              case "$STACK" in
+                paxminer) PM=true ;;
+                weaselbot) WB=true ;;
+                slackblast) SB=true ;;
+                qsignups) QS=true ;;
+              esac
+            fi
+            echo "run_paxminer=$PM" >> "$GITHUB_OUTPUT"
+            echo "run_weaselbot=$WB" >> "$GITHUB_OUTPUT"
+            echo "run_slackblast=$SB" >> "$GITHUB_OUTPUT"
+            echo "run_qsignups=$QS" >> "$GITHUB_OUTPUT"
+          else
+            INFRA="${{ steps.filter.outputs.infra }}"
+            if [[ "$INFRA" == "true" ]]; then
+              echo "run_paxminer=true" >> "$GITHUB_OUTPUT"
+              echo "run_weaselbot=true" >> "$GITHUB_OUTPUT"
+              echo "run_slackblast=true" >> "$GITHUB_OUTPUT"
+              echo "run_qsignups=true" >> "$GITHUB_OUTPUT"
+            else
+              pm="${{ steps.filter.outputs.paxminer }}"
+              wb="${{ steps.filter.outputs.weaselbot }}"
+              sb="${{ steps.filter.outputs.slackblast }}"
+              qs="${{ steps.filter.outputs.qsignups }}"
+              [[ "$pm" == "true" ]] && echo "run_paxminer=true" >> "$GITHUB_OUTPUT" || echo "run_paxminer=false" >> "$GITHUB_OUTPUT"
+              [[ "$wb" == "true" ]] && echo "run_weaselbot=true" >> "$GITHUB_OUTPUT" || echo "run_weaselbot=false" >> "$GITHUB_OUTPUT"
+              [[ "$sb" == "true" ]] && echo "run_slackblast=true" >> "$GITHUB_OUTPUT" || echo "run_slackblast=false" >> "$GITHUB_OUTPUT"
+              [[ "$qs" == "true" ]] && echo "run_qsignups=true" >> "$GITHUB_OUTPUT" || echo "run_qsignups=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+  setup:
+    runs-on: ubuntu-latest
+    needs: [detect-changes]
+    environment: ${{ github.event.inputs.environment || github.ref_name }}
+    outputs:
+      sam_s3_bucket: ${{ steps.resolve_bucket.outputs.sam_s3_bucket }}
+    steps:
+      - uses: actions/checkout@v6
 
       - uses: aws-actions/setup-sam@v2
         with:
           use-installer: true
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -43,6 +125,7 @@ jobs:
       # by SlackStackDeployPolicy (S3DeployBucket). Do not switch to --resolve-s3 here without
       # widening IAM — SAM's default aws-sam-cli-managed-default-samclisourcebucket-* is not covered.
       - name: Resolve deployment bucket
+        id: resolve_bucket
         run: |
           BUCKET=$(aws cloudformation describe-stacks \
             --stack-name slack-stack-bootstrap \
@@ -53,6 +136,7 @@ jobs:
             echo "::error::Could not resolve DeploymentBucketName from slack-stack-bootstrap stack"
             exit 1
           fi
+          echo "sam_s3_bucket=$BUCKET" >> "$GITHUB_OUTPUT"
           echo "SAM_S3_BUCKET=$BUCKET" >> "$GITHUB_ENV"
           echo "Using deployment bucket: $BUCKET"
 
@@ -83,7 +167,32 @@ jobs:
             exit 1
           fi
 
-      # --- PAXminer (container image) ---
+      - name: SAM validate (lint all templates)
+        run: |
+          set -euo pipefail
+          sam validate -t PAXminer/template.yaml --lint
+          sam validate -t weaselbot/template.yaml --lint
+          sam validate -t slackblast/template.yaml --lint
+          sam validate -t qsignups/template.yaml --lint
+          sam validate -t infra/template.bootstrap.yaml --lint
+
+  deploy-paxminer:
+    runs-on: ubuntu-latest
+    needs: [detect-changes, setup]
+    if: needs.detect-changes.outputs.run_paxminer == 'true'
+    environment: ${{ github.event.inputs.environment || github.ref_name }}
+    env:
+      SAM_NO_CACHE: ${{ vars.SAM_NO_CACHE }}
+      SAM_S3_BUCKET: ${{ needs.setup.outputs.sam_s3_bucket }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
       - name: Build PAXminer
         run: |
           set -euo pipefail
@@ -110,7 +219,23 @@ jobs:
               F3RegionName=${{ vars.F3_REGION_NAME }} \
               PmSlackToken=${{ secrets.PM_SLACK_TOKEN }}
 
-      # --- Weaselbot (container image) ---
+  deploy-weaselbot:
+    runs-on: ubuntu-latest
+    needs: [detect-changes, setup]
+    if: needs.detect-changes.outputs.run_weaselbot == 'true'
+    environment: ${{ github.event.inputs.environment || github.ref_name }}
+    env:
+      SAM_NO_CACHE: ${{ vars.SAM_NO_CACHE }}
+      SAM_S3_BUCKET: ${{ needs.setup.outputs.sam_s3_bucket }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
       - name: Build Weaselbot
         run: |
           set -euo pipefail
@@ -139,7 +264,24 @@ jobs:
               WbSlackToken=${{ secrets.WB_SLACK_TOKEN }} \
               F3RegionSlackTeamId=${{ vars.F3_REGION_SLACK_TEAM_ID }}
 
-      # --- slackblast ---
+  deploy-slackblast:
+    runs-on: ubuntu-latest
+    needs: [detect-changes, setup]
+    if: needs.detect-changes.outputs.run_slackblast == 'true'
+    environment: ${{ github.event.inputs.environment || github.ref_name }}
+    env:
+      SAM_NO_CACHE: ${{ vars.SAM_NO_CACHE }}
+      ENABLE_XRAY: ${{ vars.ENABLE_XRAY }}
+      SAM_S3_BUCKET: ${{ needs.setup.outputs.sam_s3_bucket }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
       - name: Build slackblast
         run: |
           set -euo pipefail
@@ -180,7 +322,25 @@ jobs:
             --capabilities CAPABILITY_IAM \
             --parameter-overrides "${OVERRIDES[@]}"
 
-      # --- qsignups ---
+  deploy-qsignups:
+    runs-on: ubuntu-latest
+    needs: [detect-changes, setup]
+    if: needs.detect-changes.outputs.run_qsignups == 'true'
+    environment: ${{ github.event.inputs.environment || github.ref_name }}
+    env:
+      SAM_NO_CACHE: ${{ vars.SAM_NO_CACHE }}
+      RUN_EXTEND_SCHEDULE: ${{ vars.RUN_EXTEND_SCHEDULE }}
+      ENABLE_XRAY: ${{ vars.ENABLE_XRAY }}
+      SAM_S3_BUCKET: ${{ needs.setup.outputs.sam_s3_bucket }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
       - name: Build qsignups
         run: |
           set -euo pipefail
@@ -226,12 +386,34 @@ jobs:
             --capabilities CAPABILITY_IAM \
             --parameter-overrides "${OVERRIDES[@]}"
 
-      # Force cold start so token bootstrap runs (DB upsert) without waiting for EventBridge schedule
+  post-deploy:
+    runs-on: ubuntu-latest
+    needs: [detect-changes, setup, deploy-paxminer, deploy-weaselbot, deploy-slackblast, deploy-qsignups]
+    if: >-
+      always() && !cancelled() &&
+      needs.setup.result == 'success' &&
+      needs.deploy-paxminer.result != 'failure' &&
+      needs.deploy-weaselbot.result != 'failure' &&
+      needs.deploy-slackblast.result != 'failure' &&
+      needs.deploy-qsignups.result != 'failure'
+    environment: ${{ github.event.inputs.environment || github.ref_name }}
+    env:
+      SKIP_SMOKE_TEST: ${{ vars.SKIP_SMOKE_TEST }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
       - name: Smoke-test scheduled Lambdas
         if: ${{ vars.SKIP_SMOKE_TEST != 'true' }}
         env:
           STAGE: ${{ vars.STAGE }}
           AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+          RUN_PM: ${{ needs.detect-changes.outputs.run_paxminer }}
+          RUN_WB: ${{ needs.detect-changes.outputs.run_weaselbot }}
         run: |
           set -euo pipefail
           invoke_one() {
@@ -263,8 +445,16 @@ jobs:
               exit 1
             fi
           }
-          invoke_one "paxminer-${STAGE}-paxminer-sync"
-          invoke_one "weaselbot-${STAGE}-weaselbot-achievements"
+          if [[ "${RUN_PM}" == "true" ]]; then
+            invoke_one "paxminer-${STAGE}-paxminer-sync"
+          else
+            echo "Skipping PAXminer smoke test (stack not deployed this run)"
+          fi
+          if [[ "${RUN_WB}" == "true" ]]; then
+            invoke_one "weaselbot-${STAGE}-weaselbot-achievements"
+          else
+            echo "Skipping Weaselbot smoke test (stack not deployed this run)"
+          fi
 
       - name: Deploy summary, receipt, and stage Slack manifests
         env:
@@ -339,7 +529,7 @@ jobs:
           echo "Receipt: ${RECEIPT}"
 
       - name: Upload deploy receipt and manifests
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: success()
         with:
           name: deploy-receipt-manifests-${{ vars.STAGE }}-${{ github.run_id }}

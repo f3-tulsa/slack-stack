@@ -33,7 +33,9 @@ Operations:
     - Create or replace a view 'achievements_view' that joins users, achievements_awarded, and achievements_list tables.
 
 Usage:
-    This module is intended to be executed as a script to set up the achievements tables and initial data in the database.
+    Run ``python -m weaselbot.weaselbot.achievement_tables`` (from the weaselbot package directory with env set)
+    to execute DDL: bootstrap achievements tables, seed rows, and create ``achievements_view``.
+    Importing this module only loads schema definitions (no DB I/O).
 """
 
 import logging
@@ -185,38 +187,47 @@ insert_vals = [
     },
 ]
 
-engine = mysql_connection()
 
-t = metadata.tables[f"{schema}.achievements_list"]
-sql = insert(t).values(insert_vals)
+def main() -> None:
+    """One-off DDL: drop/create tables, seed achievements_list, alter aos, create achievements_view."""
+    engine = mysql_connection()
 
-with engine.begin() as cnxn:
-    metadata.drop_all(cnxn)
-    metadata.create_all(cnxn)
-    cnxn.execute(sql)
-    try:
-        cnxn.execute(text(f"ALTER TABLE `{schema}`.aos ADD site_q_user_id VARCHAR(45) NULL;"))
-    except ProgrammingError as e:
-        logging.getLogger(__name__).warning(
-            "ALTER TABLE aos ADD site_q_user_id skipped or failed (expected if column exists): %s", e
-        )
+    t = metadata.tables[f"{schema}.achievements_list"]
+    seed_sql = insert(t).values(insert_vals)
+
+    with engine.begin() as cnxn:
+        metadata.drop_all(cnxn)
+        metadata.create_all(cnxn)
+        cnxn.execute(seed_sql)
+        try:
+            cnxn.execute(text(f"ALTER TABLE `{schema}`.aos ADD site_q_user_id VARCHAR(45) NULL;"))
+        except ProgrammingError as e:
+            logging.getLogger(__name__).warning(
+                "ALTER TABLE aos ADD site_q_user_id skipped or failed (expected if column exists): %s", e
+            )
+
+    u = Table("users", metadata, autoload_with=engine, schema=schema)
+    aa = metadata.tables[f"{schema}.achievements_awarded"]
+    al = metadata.tables[f"{schema}.achievements_list"]
+
+    view_select = select(
+        u.c.user_name.label("pax"),
+        u.c.user_id.label("pax_id"),
+        al.c.name,
+        al.c.description,
+        aa.c.date_awarded,
+    ).select_from(u.join(aa, u.c.user_id == aa.c.pax_id).join(al, aa.c.achievement_id == al.c.id))
+
+    view = (
+        f"CREATE OR REPLACE ALGORITHM = UNDEFINED VIEW {schema}.achievements_view AS "
+        f"{view_select.compile(engine).__str__()};"
+    )
+
+    with engine.begin() as cnxn:
+        cnxn.execute(text(view))
+
+    engine.dispose()
 
 
-u = Table("users", metadata, autoload_with=engine, schema=schema)
-aa = metadata.tables[f"{schema}.achievements_awarded"]
-al = metadata.tables[f"{schema}.achievements_list"]
-
-sql = select(
-    u.c.user_name.label("pax"),
-    u.c.user_id.label("pax_id"),
-    al.c.name,
-    al.c.description,
-    aa.c.date_awarded,
-).select_from(u.join(aa, u.c.user_id == aa.c.pax_id).join(al, aa.c.achievement_id == al.c.id))
-
-view = f"CREATE OR REPLACE ALGORITHM = UNDEFINED VIEW {schema}.achievements_view AS {sql.compile(engine).__str__()};"
-
-with engine.begin() as cnxn:
-    cnxn.execute(text(view))
-
-engine.dispose()
+if __name__ == "__main__":
+    main()

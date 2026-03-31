@@ -1,3 +1,15 @@
+"""Live-DB integration tests; skipped in CI (class body connects at import time)."""
+
+import os
+
+if os.environ.get("CI") == "true":
+    import pytest
+
+    pytest.skip(
+        "TestComparer requires config/credentials_test.ini and a live database; run locally only",
+        allow_module_level=True,
+    )
+
 import unittest
 
 from os import sys

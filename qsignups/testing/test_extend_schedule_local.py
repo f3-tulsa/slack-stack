@@ -35,14 +35,15 @@ def test_handler_routes_extend_schedule() -> None:
     import sys as sys_mod
     from unittest.mock import patch
 
-    with patch("slack_bolt.app.app.App._init_middleware_list", lambda *args, **kwargs: None):
-        with patch("slack.handlers.weekly.extend_all_schedules") as ext:
-            sys_mod.modules.pop("app", None)
-            import app as app_mod
+    with patch.dict(os.environ, {"DB_ENCRYPTION_KEY": "ci-test-encryption-key-32chars!"}, clear=False):
+        with patch("slack_bolt.app.app.App._init_middleware_list", lambda *args, **kwargs: None):
+            with patch("slack.handlers.weekly.extend_all_schedules") as ext:
+                sys_mod.modules.pop("app", None)
+                import app as app_mod
 
-            out = app_mod.handler({"source": "qsignups.extend-schedule"}, None)
-            ext.assert_called_once()
-            assert out.get("statusCode") == 200
+                out = app_mod.handler({"source": "qsignups.extend-schedule"}, None)
+                ext.assert_called_once()
+                assert out.get("statusCode") == 200
 
 
 def test_build_recurring_master_rows() -> None:
@@ -94,7 +95,8 @@ def test_extend_orphan_cleanup_calls_delete() -> None:
 
     max_q = MagicMock()
     max_q.filter.return_value = max_q
-    max_q.scalar.return_value = None
+    max_q.group_by.return_value = max_q
+    max_q.all.return_value = []
 
     call = [0]
 
@@ -148,7 +150,14 @@ def test_extend_gap_fill_inserts_from_day_after_max() -> None:
 
     max_q = MagicMock()
     max_q.filter.return_value = max_q
-    max_q.scalar.return_value = fixed_today + timedelta(days=30)
+    max_q.group_by.return_value = max_q
+    max_row = MagicMock()
+    max_row.ao_channel_id = "C1"
+    max_row.event_day_of_week = "Monday"
+    max_row.event_time = "0530"
+    max_row.team_id = "T1"
+    max_row.max_d = fixed_today + timedelta(days=30)
+    max_q.all.return_value = [max_row]
 
     call = [0]
 

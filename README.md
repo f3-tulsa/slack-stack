@@ -207,6 +207,21 @@ cd PAXminer && python3.12 -m venv .venv && source .venv/bin/activate && pip inst
 # repeat for weaselbot (requirements-lambda.txt), slackblast (slackblast/slackblast/requirements.txt), qsignups (qsignups/qsignups/requirements.txt) as needed
 ```
 
+**Tests (mirrors `ci.yml`):** use a separate venv per app to avoid conflicting pins (e.g. `pymysql`). From the repo root, with `DB_ENCRYPTION_KEY` set to any string ≥16 chars for the qsignups handler import test:
+
+```bash
+python3.12 -m venv .venv-wb && . .venv-wb/bin/activate && pip install pytest -r weaselbot/requirements-lambda.txt
+(cd weaselbot && pytest -q tests/)
+
+python3.12 -m venv .venv-sb && . .venv-sb/bin/activate && pip install pytest -r slackblast/slackblast/requirements.txt
+pytest -q slackblast/test/
+
+python3.12 -m venv .venv-qs && . .venv-qs/bin/activate && pip install pytest boto3 -r qsignups/qsignups/requirements.txt
+DB_ENCRYPTION_KEY='your-test-key-at-least-16' pytest -q qsignups/testing/
+```
+
+`PAXminer/tests/test_BD_Comparer.py` requires `config/credentials_test.ini` and a live database; it is **skipped** when `CI=true` (e.g. in GitHub Actions). Run it only locally with a configured test DB.
+
 ## Database migration (existing host → new host)
 
 Use this when migrating data from an existing MySQL/RDS instance to a new TiDB or MySQL host.
@@ -274,11 +289,49 @@ aws s3 cp slackblast/assets/ s3://YOUR_IMAGE_BUCKET/ --recursive
 
 ## Deploy (GitHub Actions)
 
-Pushes to branches **`test`** and **`prod`** run `.github/workflows/deploy.yml`. **`main`** is for PRs only. Manual runs are also supported via *Actions → Deploy Slack Stack → Run workflow*.
+### Workflows
 
-**Faster / lighter deploys (optional GitHub Environment variables, same names in `.env.deploy.*` for `deploy.sh`):** `SAM_NO_CACHE=true` forces a full uncached `sam build`. **`SKIP_SMOKE_TEST=true`** skips post-deploy invokes of PAXminer sync and Weaselbot achievements (skip when tokens did not change). **`RUN_EXTEND_SCHEDULE=true`** runs the QSignups extend-schedule custom resource on that deploy (passes a changing nonce); leave unset for routine deploys. **`ENABLE_XRAY=true`** turns on X-Ray for slackblast and qsignups (default off).
+| Workflow | When it runs |
+|----------|----------------|
+| **[`.github/workflows/ci.yml`](.github/workflows/ci.yml)** | Pull requests and pushes to **`main`**, **`test`**, and **`prod`**: SAM template lint (`sam validate --lint`), Python tests (weaselbot, slackblast, qsignups), and `pip-audit` on app requirements. No AWS credentials. |
+| **[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)** | Pushes to **`test`** and **`prod`** only, plus manual *Run workflow*. **`main`** stays PR-only for merges. |
 
-After all stacks deploy successfully, the workflow appends a **summary** to the job log and `$GITHUB_STEP_SUMMARY`, writes a receipt under `receipts/`, generates the same **stage-specific `manifest-{STAGE}.json`** files, and uploads receipts + manifests as a workflow **artifact**.
+Manual deploy: *Actions → Deploy Slack Stack → Run workflow*. Choose **environment** (`test` / `prod`) and optional **stack** (`all` or a single app). On **push**, path-based detection is used (the stack input is ignored).
+
+### Selective deploys (push only)
+
+On **push** to `test` or `prod`, only apps whose paths changed are built and deployed (jobs run **in parallel**):
+
+| Deploy job | Paths that trigger it (or always when “infra” changed) |
+|------------|--------------------------------------------------------|
+| PAXminer | `PAXminer/**` |
+| Weaselbot | `weaselbot/**`, `common/**` |
+| slackblast | `slackblast/**` |
+| qsignups | `qsignups/**` |
+| **All four** | `.github/workflows/**`, `infra/**` |
+
+Bootstrap stack deployment is **not** automated in Actions; run `./deploy.sh --env <env> --bootstrap` locally when needed. CI still **lints** `infra/template.bootstrap.yaml` in the deploy **setup** job and in **`ci.yml`**.
+
+### Concurrency
+
+Overlapping pushes to the same branch (`test` or `prod`) **cancel** the older deploy run so two full deploys do not race the same stacks.
+
+### Optional GitHub Environment variables
+
+Same names as in `.env.deploy.*` for `deploy.sh`:
+
+- **`SAM_NO_CACHE=true`** — full uncached `sam build` for each app job that runs.
+- **`SKIP_SMOKE_TEST=true`** — skip post-deploy Lambda invokes. When a stack was **not** deployed in that run, its smoke invoke is skipped automatically.
+- **`RUN_EXTEND_SCHEDULE=true`** — QSignups extend-schedule nonce (only affects **qsignups** when that job runs).
+- **`ENABLE_XRAY=true`** — X-Ray on slackblast and qsignups (when those jobs run).
+
+### After deploy
+
+When the workflow finishes without deploy failures, the **post-deploy** job appends a **summary** to the job log and `$GITHUB_STEP_SUMMARY`, writes a receipt under `receipts/`, generates **stage-specific `manifest-{STAGE}.json`** files (from current CloudFormation outputs), and uploads receipts + manifests as a workflow **artifact**.
+
+### Dependabot
+
+[`.github/dependabot.yml`](.github/dependabot.yml) opens weekly PRs to update **GitHub Actions** and **Docker** base images (`PAXminer/`, `weaselbot/`).
 
 ### GitHub Environments
 
