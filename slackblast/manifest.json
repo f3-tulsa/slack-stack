@@ -48,6 +48,7 @@
         "im:write",
         "team:read",
         "users:read",
+        "users:read.email",
         "files:write"
       ]
     }

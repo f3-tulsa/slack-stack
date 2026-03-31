@@ -100,6 +100,14 @@ def ensure_users_in_db(
                     if not display and real:
                         display = real
 
+                    if not email or email.lower() in ("", "none"):
+                        if not is_bot:
+                            logger.warning(
+                                "ensure_users_in_db: no email from Slack API for user %s; "
+                                "email-based user merge is skipped (ensure bot has users:read.email scope)",
+                                uid,
+                            )
+
                     if email and email.lower() not in ("", "none"):
                         try:
                             conn.execute(
