@@ -87,9 +87,10 @@ def database_slack_user_update(region_db, key, firsttime_run, mydb):
         users_df = users_df[['id', 'profile.display_name', 'profile.real_name', 'profile.phone', 'profile.email', 'is_bot', 'updated', 'is_admin', 'is_owner', 'profile.start_date']]
         users_df = users_df.rename(columns={'id' : 'user_id', 'profile.display_name' : 'user_name', 'profile.real_name' : 'real_name', 'profile.phone' : 'phone', 'profile.email' : 'email', 'is_bot': 'app'})
         # Update any null user_names with the real_name values
-        users_df['email'].fillna("None", inplace=True)
-        users_df['is_owner'].fillna(False, inplace=True)
-        users_df['is_admin'].fillna(False, inplace=True)
+        users_df["email"] = users_df["email"].fillna("None")
+        users_df["phone"] = users_df["phone"].fillna("")
+        users_df["is_owner"] = users_df["is_owner"].fillna(False)
+        users_df["is_admin"] = users_df["is_admin"].fillna(False)
 
         # Now connect to the AWS database and insert some rows!
         try:

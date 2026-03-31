@@ -76,6 +76,7 @@ def new_migration_report(
         "target": {"host": target_host, "port": target_port},
         "schemas": {},
         "fixups_errors": [],
+        "column_widens": [],
         "summary": {
             "schemas_completed": 0,
             "schemas_failed": 0,
@@ -283,6 +284,33 @@ F3STCHARLES_SOURCE = "f3stcharles"
 TOKEN_VARCHAR_LEN = 512
 
 
+def parse_qsignups_team_ids() -> list[str] | None:
+    """Comma-separated Slack team IDs for filtering f3stcharles qsignups_* copy. None = no filter."""
+    raw = (os.environ.get("QSIGNUPS_TEAM_IDS") or "").strip()
+    if not raw:
+        return None
+    out = [p.strip() for p in raw.split(",") if p.strip()]
+    return out or None
+
+
+def build_qsignups_copy_filter(
+    source_schema: str,
+    table: str,
+    team_ids: list[str],
+) -> tuple[str, tuple[Any, ...]]:
+    """Return (WHERE clause with leading WHERE, bind tuple) for qsignups table copy."""
+    placeholders = ", ".join(["%s"] * len(team_ids))
+    params: tuple[Any, ...] = tuple(team_ids)
+    if table == "qsignups_features":
+        clause = (
+            f"WHERE region_id IN (SELECT id FROM `{source_schema}`.`qsignups_regions` "
+            f"WHERE team_id IN ({placeholders}))"
+        )
+        return clause, params
+    clause = f"WHERE team_id IN ({placeholders})"
+    return clause, params
+
+
 def default_schema_map(env_suffix: str) -> dict[str, str]:
     qs = os.environ.get("QSIGNUPS_SCHEMA", "qsignups")
     return {
@@ -370,15 +398,28 @@ def migrate_table(
     table: str,
     batch_size: int,
     read_delay: float,
+    where_clause: str | None = None,
+    where_params: tuple[Any, ...] | None = None,
 ) -> int:
+    wp = where_params or ()
+
     def count_rows():
         with source_conn.cursor() as cur:
-            cur.execute(f"SELECT COUNT(*) AS c FROM `{source_schema}`.`{table}`")
+            sql = f"SELECT COUNT(*) AS c FROM `{source_schema}`.`{table}`"
+            if where_clause:
+                sql += f" {where_clause}"
+            cur.execute(sql, wp)
             row = cur.fetchone()
             return _row_get(row, "c", "C")
 
     total = with_retry(count_rows, f"COUNT {source_schema}.{table}")
-    LOG.info("Table %s.%s: %s rows", source_schema, table, total)
+    LOG.info(
+        "Table %s.%s: %s rows to copy%s",
+        source_schema,
+        table,
+        total,
+        f" (filtered)" if where_clause else "",
+    )
     if total == 0:
         return 0
 
@@ -389,7 +430,11 @@ def migrate_table(
 
         def fetch_batch():
             with source_conn.cursor() as cur:
-                cur.execute(f"SELECT * FROM `{source_schema}`.`{table}` LIMIT %s OFFSET %s", (batch_size, offset))
+                sql = f"SELECT * FROM `{source_schema}`.`{table}`"
+                if where_clause:
+                    sql += f" {where_clause}"
+                sql += " LIMIT %s OFFSET %s"
+                cur.execute(sql, wp + (batch_size, offset))
                 return cur.fetchall()
 
         rows = with_retry(lambda: fetch_batch(), f"SELECT {source_schema}.{table}")
@@ -546,6 +591,52 @@ CREATE TABLE IF NOT EXISTS `{schema}`.`slackblast_users` (
 """
 
 
+def _seed_slackblast_weaselbot_regions(cur, conn: Any, sb_s: str, wb_s: str, stage: str) -> None:
+    """Optional rows in slackblast/weaselbot regions (team_id + paxminer_schema)."""
+    tt_tid = (os.environ.get("MIGRATION_SEED_TEAM_F3TTOWN") or "").strip()
+    sci_tid = (os.environ.get("MIGRATION_SEED_TEAM_F3SCISSORTAIL") or "").strip()
+    if not tt_tid and not sci_tid:
+        LOG.info(
+            "Skipping slackblast/weaselbot regions seed (set MIGRATION_SEED_TEAM_F3TTOWN and/or MIGRATION_SEED_TEAM_F3SCISSORTAIL)"
+        )
+        return
+    f3ttown = f"f3ttown_{stage}"
+    f3sci = f"f3scissortail_{stage}"
+    pairs: list[tuple[str, str]] = []
+    if tt_tid:
+        pairs.append((tt_tid, f3ttown))
+    if sci_tid:
+        pairs.append((sci_tid, f3sci))
+    for team_id, pax_schema in pairs:
+        for admin_schema in (sb_s, wb_s):
+            cur.execute(
+                f"SELECT COUNT(*) AS c FROM `{admin_schema}`.`regions` "
+                "WHERE `team_id`=%s AND `paxminer_schema`=%s",
+                (team_id, pax_schema),
+            )
+            row = cur.fetchone()
+            n = int(_row_get(row, "c", "C") or 0)
+            if n > 0:
+                LOG.info(
+                    "Skip seed %s.regions (team_id=%s paxminer_schema=%s already present)",
+                    admin_schema,
+                    team_id,
+                    pax_schema,
+                )
+                continue
+            cur.execute(
+                f"INSERT INTO `{admin_schema}`.`regions` (`team_id`, `paxminer_schema`) VALUES (%s, %s)",
+                (team_id, pax_schema),
+            )
+            LOG.info(
+                "Seeded %s.regions team_id=%s paxminer_schema=%s",
+                admin_schema,
+                team_id,
+                pax_schema,
+            )
+    conn.commit()
+
+
 def pre_migration_bootstrap_schemas(conn: Any, stage: str) -> None:
     pm_s, sb_s, wb_s, _ = target_admin_schema_names(stage)
     f3ttown = f"f3ttown_{stage}"
@@ -580,6 +671,7 @@ def pre_migration_bootstrap_schemas(conn: Any, stage: str) -> None:
         else:
             LOG.info("Skipping seed: paxminer.regions already has rows for target schemas")
         conn.commit()
+        _seed_slackblast_weaselbot_regions(cur, conn, sb_s, wb_s, stage)
     LOG.info("Bootstrap complete: %s, %s, %s", pm_s, sb_s, wb_s)
 
 
@@ -666,42 +758,53 @@ def _column_meta(cur, schema: str, table: str, column: str) -> tuple[str | None,
     return (str(dt).lower() if dt else None), (int(maxlen) if maxlen is not None else None)
 
 
-def _widen_varchar_column(cur, conn, schema: str, table: str, column: str) -> None:
+def _widen_varchar_column(cur, conn, schema: str, table: str, column: str) -> str:
+    """Widen VARCHAR for encrypted token storage. Returns status string for audit."""
     if not _table_exists(cur, schema, table):
         LOG.info("Skip widen %s.%s.%s (no table)", schema, table, column)
-        return
+        return "skipped_no_table"
     dt, maxlen = _column_meta(cur, schema, table, column)
     if dt is None:
         LOG.info("Skip widen %s.%s.%s (no column)", schema, table, column)
-        return
+        return "skipped_no_column"
     if dt in ("text", "mediumtext", "longtext", "blob", "mediumblob", "longblob", "json"):
         LOG.info("Skip widen %s.%s.%s (already %s)", schema, table, column, dt)
-        return
+        return f"skipped_unbounded_{dt}"
     if dt == "varchar" and maxlen is not None and maxlen >= TOKEN_VARCHAR_LEN:
         LOG.info("Skip widen %s.%s.%s (already varchar(%s))", schema, table, column, maxlen)
-        return
+        return "already_wide"
     sql = f"ALTER TABLE `{schema}`.`{table}` MODIFY COLUMN `{column}` VARCHAR({TOKEN_VARCHAR_LEN})"
     LOG.info("Running: %s", sql)
     cur.execute(sql)
     conn.commit()
+    dt_after, maxlen_after = _column_meta(cur, schema, table, column)
+    if maxlen_after is not None and maxlen_after < TOKEN_VARCHAR_LEN:
+        raise RuntimeError(
+            f"ALTER TABLE did not take effect: {schema}.{table}.{column} "
+            f"still {dt_after}({maxlen_after}) after ALTER to VARCHAR({TOKEN_VARCHAR_LEN})"
+        )
+    LOG.info("Widened %s.%s.%s to VARCHAR(%s)", schema, table, column, TOKEN_VARCHAR_LEN)
+    return "widened"
 
 
-def _widen_google_auth_column(cur, conn, schema: str, table: str, column: str) -> None:
+def _widen_google_auth_column(cur, conn, schema: str, table: str, column: str) -> str:
     if not _table_exists(cur, schema, table):
-        return
+        return "skipped_no_table"
     dt, _ = _column_meta(cur, schema, table, column)
     if dt is None:
-        return
+        return "skipped_no_column"
     if dt in ("longtext", "mediumtext", "text"):
         LOG.info("Skip widen %s.%s.%s (already %s)", schema, table, column, dt)
-        return
+        return "already_longtext"
     sql = f"ALTER TABLE `{schema}`.`{table}` MODIFY COLUMN `{column}` LONGTEXT"
     LOG.info("Running: %s", sql)
     cur.execute(sql)
     conn.commit()
+    return "widened_to_longtext"
 
 
 def pre_encryption_widen_columns(conn: Any, stage: str, report: dict[str, Any]) -> None:
+    report.setdefault("column_widens", [])
     pm, sb, wb, qs = target_admin_schema_names(stage)
     targets: list[tuple[str, str, str]] = [
         (pm, "regions", "slack_token"),
@@ -713,18 +816,30 @@ def pre_encryption_widen_columns(conn: Any, stage: str, report: dict[str, Any]) 
     ]
     cur = conn.cursor(DictCursor)
     for schema, table, col in targets:
+        entry: dict[str, Any] = {"schema": schema, "table": table, "column": col}
         try:
-            _widen_varchar_column(cur, conn, schema, table, col)
+            entry["result"] = _widen_varchar_column(cur, conn, schema, table, col)
         except Exception as e:
+            entry["result"] = "error"
+            entry["error"] = str(e)
             report["fixups_errors"].append(
                 {"operation": f"widen {schema}.{table}.{col}", "error": str(e)}
             )
             LOG.warning("%s.%s.%s: %s", schema, table, col, e)
+        report["column_widens"].append(entry)
+    gentry: dict[str, Any] = {
+        "schema": qs,
+        "table": "qsignups_regions",
+        "column": "google_auth_data",
+    }
     try:
-        _widen_google_auth_column(cur, conn, qs, "qsignups_regions", "google_auth_data")
+        gentry["result"] = _widen_google_auth_column(cur, conn, qs, "qsignups_regions", "google_auth_data")
     except Exception as e:
+        gentry["result"] = "error"
+        gentry["error"] = str(e)
         report["fixups_errors"].append({"operation": "widen google_auth_data", "error": str(e)})
         LOG.warning("google_auth_data: %s", e)
+    report["column_widens"].append(gentry)
     LOG.info("Column width fixes for encryption done.")
 
 
@@ -1343,6 +1458,7 @@ def main() -> int:
     env_suffix = args.env
     os.environ["STAGE"] = env_suffix
     schema_map = default_schema_map(env_suffix)
+    qsignups_team_ids = parse_qsignups_team_ids()
 
     read_delay = float(os.environ.get("READ_DELAY_SECONDS", "1"))
     schema_delay = float(os.environ.get("SCHEMA_DELAY_SECONDS", "5"))
@@ -1454,12 +1570,27 @@ def main() -> int:
                 elif ttype == "VIEW":
                     views.append(tname)
 
-            if source_schema == F3STCHARLES_SOURCE and (tables or views):
+            if source_schema == F3STCHARLES_SOURCE:
+                skipped_non_qs = sum(
+                    1
+                    for r in objects
+                    if not str(_row_get(r, "TABLE_NAME", "table_name") or "").startswith("qsignups_")
+                )
+                report["qsignups_filter"] = {
+                    "enabled": bool(qsignups_team_ids),
+                    "team_ids": list(qsignups_team_ids) if qsignups_team_ids else [],
+                    "warning": None
+                    if qsignups_team_ids
+                    else "QSIGNUPS_TEAM_IDS unset — all qsignups rows from source are copied (security risk)",
+                    "f3stcharles_objects_skipped_non_qsignups": skipped_non_qs,
+                    "qsignups_base_tables_to_migrate": len(tables),
+                }
+                write_migration_report(report_path, report)
                 LOG.info(
-                    "f3stcharles: migrating only qsignups_* base tables (%s tables); "
-                    "%s non-qsignups_* source view(s) skipped (vw_* recreated after copy)",
+                    "f3stcharles: migrating %s qsignups_* base tables; %s source objects skipped "
+                    "(non-qsignups_*); qsignups vw_* views recreated on target after copy",
                     len(tables),
-                    len(views),
+                    skipped_non_qs,
                 )
 
             if not tables and not views:
@@ -1513,11 +1644,59 @@ def main() -> int:
 
                     with_retry(create_t, f"CREATE TABLE {target_schema}.{table}")
 
-                    rows_migrated = migrate_table(src, tgt, source_schema, target_schema, table, batch_size, read_delay)
+                    where_clause: str | None = None
+                    where_params: tuple[Any, ...] | None = None
+                    source_unfiltered_count: int | None = None
+                    if source_schema == F3STCHARLES_SOURCE:
+                        if qsignups_team_ids:
+                            where_clause, where_params = build_qsignups_copy_filter(
+                                source_schema, table, qsignups_team_ids
+                            )
+
+                            def count_unfiltered():
+                                with src.cursor() as cur2:
+                                    cur2.execute(
+                                        f"SELECT COUNT(*) AS c FROM `{source_schema}`.`{table}`"
+                                    )
+                                    r2 = cur2.fetchone()
+                                    return int(_row_get(r2, "c", "C") or 0)
+
+                            source_unfiltered_count = with_retry(
+                                count_unfiltered,
+                                f"COUNT unfiltered {source_schema}.{table}",
+                            )
+                        else:
+                            LOG.warning(
+                                "QSIGNUPS_TEAM_IDS unset: copying all rows from %s.%s — "
+                                "other regions' secrets may be copied",
+                                source_schema,
+                                table,
+                            )
+
+                    rows_migrated = migrate_table(
+                        src,
+                        tgt,
+                        source_schema,
+                        target_schema,
+                        table,
+                        batch_size,
+                        read_delay,
+                        where_clause=where_clause,
+                        where_params=where_params,
+                    )
 
                     done.add(key)
                     save_checkpoint(checkpoint_path, done)
-                    se["tables"].append({"name": table, "rows_migrated": rows_migrated, "status": "ok"})
+                    tbl_entry: dict[str, Any] = {
+                        "name": table,
+                        "rows_migrated": rows_migrated,
+                        "status": "ok",
+                    }
+                    if source_schema == F3STCHARLES_SOURCE:
+                        tbl_entry["qsignups_team_filter_applied"] = bool(qsignups_team_ids)
+                        if source_unfiltered_count is not None:
+                            tbl_entry["source_row_count_unfiltered"] = source_unfiltered_count
+                    se["tables"].append(tbl_entry)
                 except Exception as e:
                     report_append_error(
                         se,

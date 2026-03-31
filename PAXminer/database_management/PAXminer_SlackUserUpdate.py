@@ -78,13 +78,13 @@ def database_management_update():
         try :
             database_slack_user_update(region_db, key, full_run, init_db(host, port, user, password, region_db))
         except Exception as e:
-            logging.error("An error occured updating the users for region " + region_db)
+            logging.error("An error occurred updating the users for region %s (schema %s)", region, region_db)
             logging.error(e)
 
         try :
             database_slack_channel_update(region_db, key, init_db(host, port, user, password, region_db))
         except Exception as e:
-            logging.error("An error occured updating the channels for region " + region_db)
+            logging.error("An error occurred updating the channels for region %s (schema %s)", region, region_db)
             logging.error(e)
         
         logging.info("----------------- End of Region Update -----------------")
