@@ -25,6 +25,14 @@ from utilities.helper_functions import (
 from utilities.routing import MAIN_MAPPER
 from utilities.slack.actions import LOADING_ID
 
+try:
+    from snapshot_restore_py import register_after_restore
+except ImportError:
+
+    def register_after_restore(func):
+        return func
+
+
 require_encryption_key()
 
 # Avoid duplicate CloudWatch lines: Lambda already attaches a root handler; Bolt can add more.
@@ -64,6 +72,18 @@ def _warmup(log: logging.Logger) -> None:
         log.info("Keep-warm: region records loaded (%d)", len(REGION_RECORDS))
     except Exception:
         log.warning("Keep-warm: region records load failed", exc_info=True)
+
+
+@register_after_restore
+def _on_snapstart_restore() -> None:
+    """Dispose stale DB pool from snapshot and re-warm connections."""
+    from utilities.database import get_engine
+
+    try:
+        get_engine().dispose()
+    except Exception:
+        pass
+    _warmup(logger)
 
 
 def _lambda_invocation_kind(event: dict) -> str:

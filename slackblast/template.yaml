@@ -146,6 +146,9 @@ Resources:
   SlackblastFunction:
     Type: AWS::Serverless::Function
     Properties:
+      AutoPublishAlias: live
+      SnapStart:
+        ApplyOn: PublishedVersions
       CodeUri: slackblast/
       Handler: app.handler
       Runtime: python3.12
@@ -188,7 +191,7 @@ Resources:
         SlackblastKeepWarm:
           Type: ScheduleV2
           Properties:
-            ScheduleExpression: "rate(15 minutes)"
+            ScheduleExpression: "rate(5 minutes)"
             Name: !FindInMap
               - StagesMap
               - Ref: Stage

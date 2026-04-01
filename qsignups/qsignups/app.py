@@ -31,6 +31,14 @@ from slack.handlers import (
 from slack import actions, inputs
 from field_encryption import require_encryption_key
 
+try:
+    from snapshot_restore_py import register_after_restore
+except ImportError:
+
+    def register_after_restore(func):
+        return func
+
+
 require_encryption_key()
 
 
@@ -1205,6 +1213,18 @@ def _warmup(log: logging.Logger) -> None:
         log.info("Keep-warm: Fernet key derived")
     except Exception:
         log.warning("Keep-warm: Fernet derivation failed", exc_info=True)
+
+
+@register_after_restore
+def _on_snapstart_restore() -> None:
+    """Dispose stale DB pool from snapshot and re-warm connections."""
+    from database import get_engine
+
+    try:
+        get_engine().dispose()
+    except Exception:
+        pass
+    _warmup(logger)
 
 
 def handler(event, context):
