@@ -116,9 +116,11 @@ def ensure_users_in_db(
                 info = client.users_info(user=uid)
                 user_obj = info["user"]
                 profile = user_obj.get("profile") or {}
-                display = profile.get("display_name") or profile.get("real_name") or ""
-                real = profile.get("real_name") or display
-                phone = profile.get("phone") or ""
+                display = (
+                    profile.get("display_name") or profile.get("real_name") or ""
+                )[:45]
+                real = (profile.get("real_name") or display)[:45]
+                phone = (profile.get("phone") or "")[:45]
                 email = (profile.get("email") or "").strip()
                 is_bot = bool(user_obj.get("is_bot"))
                 app_val = 1 if is_bot else 0
