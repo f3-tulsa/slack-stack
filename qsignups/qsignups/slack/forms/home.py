@@ -98,7 +98,7 @@ def refresh(client, user: User, logger, top_message, team_id, context):
         "elements": [
             {
                 "type": "mrkdwn",
-                "text": "QSignups screen no longer updates automatically. Please use the refresh button to update the screen. *Last updated: "
+                "text": "*Last updated: "
                 + datetime.now(tz=constants.app_timezone()).strftime("%m/%d/%Y %I:%M %p")
                 + "*"
             }
@@ -147,33 +147,22 @@ def refresh(client, user: User, logger, top_message, team_id, context):
     if (current_week_weinke_url != None) and (next_week_weinke_url != None):
         weinke_blocks = [
             {
+                "type": "mrkdwn",
+                "text": "This week's schedule:"
+            },
+            {
                 "type": "image",
-                "title": {
-                    "type": "plain_text",
-                    "text": "This week's schedule",
-                    "emoji": True
-                },
                 "image_url": current_week_weinke_url,
                 "alt_text": "This week's schedule"
             },
             {
-                "type": "image",
-                "title": {
-                    "type": "plain_text",
-                    "text": "Next week's schedule",
-                    "emoji": True
-                },
-                "image_url": next_week_weinke_url,
-                "alt_text": "Next week's schedule"
+                "type": "mrkdwn",
+                "text": "Next week's schedule:"
             },
             {
-                "type": "context",
-                "elements": [
-                    {
-                        "type": "mrkdwn",
-                        "text": "Weekly schedules updated hourly, and may not reflect the latest changes"
-                    }
-                ]
+                "type": "image",
+                "image_url": next_week_weinke_url,
+                "alt_text": "Next week's schedule"
             },
             {
                 "type": "divider"
@@ -182,16 +171,6 @@ def refresh(client, user: User, logger, top_message, team_id, context):
 
         for block in weinke_blocks:
             blocks.append(block)
-    
-    # blocks.append({
-    #     "type": "context",
-    #     "elements": [
-    #         {
-    #             "type": "mrkdwn",
-    #             "text": "Looking for the calendar view? Slack broke something and it's not working right now. We're working on it!"
-    #         }
-    #     ]
-    # })
 
     # add upcoming schedule text block
     if sMsg:
