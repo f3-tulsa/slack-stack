@@ -20,6 +20,7 @@
         "chat:write",
         "chat:write.public",
         "files:write",
+        "groups:read",
         "im:write",
         "incoming-webhook",
         "users.profile:read",
