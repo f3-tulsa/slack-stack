@@ -151,6 +151,7 @@ def refresh(client, user: User, logger, top_message, team_id, context):
     if (current_week_weinke_url != None) and (next_week_weinke_url != None):
         weinke_blocks = [
             {
+                "type": "section",
                 "text": {
                     "type": "mrkdwn",
                     "text": "This week's schedule"
@@ -162,6 +163,7 @@ def refresh(client, user: User, logger, top_message, team_id, context):
                 "alt_text": "This week's schedule",
             },
             {
+                "type": "section",
                 "text": {
                     "type": "mrkdwn",
                     "text": "Next week's schedule"
