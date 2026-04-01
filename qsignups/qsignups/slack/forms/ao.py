@@ -64,7 +64,26 @@ def add_form(team_id, user_id, client, logger):
                 "type": "plain_text",
                 "text": "Location (township, park, etc.)"
             }
-        }
+        },
+        {
+            "type": "input",
+            "block_id": "site_q_user_id",
+            "optional": True,
+            "element": {
+                "type": "users_select",
+                "action_id": "site_q_user_id",
+                "placeholder": {
+                    "type": "plain_text",
+                    "text": "Select AOQ",
+                    "emoji": True,
+                },
+            },
+            "label": {
+                "type": "plain_text",
+                "text": "AOQ",
+                "emoji": True,
+            },
+        },
     ]
 
     blocks.append(forms.make_action_button_row([

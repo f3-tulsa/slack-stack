@@ -368,6 +368,7 @@ jobs:
             "DatabasePassword=${{ secrets.DATABASE_PASSWORD }}"
             "DatabaseTlsEnabled=${{ vars.DATABASE_TLS_ENABLED }}"
             "DatabaseSchema=${{ vars.QSIGNUPS_SCHEMA }}_${{ vars.STAGE }}"
+            "PaxminerRegionalSchema=${{ vars.WEASELBOT_PAXMINER_REGIONAL_SCHEMAS }}"
             "SlackToken=${{ secrets.QS_SLACK_TOKEN }}"
             "SlackSigningSecret=${{ secrets.QS_SLACK_SIGNING_SECRET }}"
             "SlackClientSecret=${{ secrets.QS_SLACK_CLIENT_SECRET }}"

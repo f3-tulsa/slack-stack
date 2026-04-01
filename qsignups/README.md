@@ -24,6 +24,7 @@ Local tests (run from `qsignups/qsignups` with `PYTHONPATH=.`):
 
 - Extend/edit schedule: [`testing/test_extend_schedule_local.py`](testing/test_extend_schedule_local.py)
 - Weinke rendering / S3 / grid logic: [`testing/test_weinke_local.py`](testing/test_weinke_local.py)
+- AO insert/edit (including PAXminer regional `aos.site_q_user_id`): [`testing/test_ao_handler_local.py`](testing/test_ao_handler_local.py)
 
 ## CI/CD
 

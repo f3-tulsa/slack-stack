@@ -552,6 +552,7 @@ deploy_qsignups() {
       "DatabasePassword=${DATABASE_PASSWORD}" \
       "DatabaseTlsEnabled=${DATABASE_TLS_ENABLED}" \
       "DatabaseSchema=${QSIGNUPS_SCHEMA}_${STAGE}" \
+      "PaxminerRegionalSchema=${WEASELBOT_PAXMINER_REGIONAL_SCHEMAS:-}" \
       "SlackToken=${QS_SLACK_TOKEN}" \
       "SlackSigningSecret=${QS_SLACK_SIGNING_SECRET}" \
       "SlackClientSecret=${QS_SLACK_CLIENT_SECRET}" \

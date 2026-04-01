@@ -519,6 +519,7 @@ def handle_edit_ao_select(ack, body, client, logger, context):
         ao_index = [ao.ao_channel_id for ao in aos].index(selected_channel)
         ao_display_name = aos[ao_index].ao_display_name or ""
         ao_location_subtitle = aos[ao_index].ao_location_subtitle or ""
+        site_q_user_id = ao_handler.get_site_q(selected_channel)
 
         # rebuild blocks
         ao_options = []
@@ -557,6 +558,22 @@ def handle_edit_ao_select(ack, body, client, logger, context):
                     "initial_value": ao_location_subtitle,
                 },
                 "label": {"type": "plain_text", "text": "Location (township, park, etc.)"},
+            },
+            {
+                "type": "input",
+                "block_id": "site_q_user_id",
+                "optional": True,
+                "element": {
+                    "type": "users_select",
+                    "action_id": "site_q_user_id",
+                    "placeholder": {
+                        "type": "plain_text",
+                        "text": "Select AOQ",
+                        "emoji": True,
+                    },
+                    **({"initial_user": site_q_user_id} if site_q_user_id else {}),
+                },
+                "label": {"type": "plain_text", "text": "AOQ", "emoji": True},
             },
         ]
         blocks.append(

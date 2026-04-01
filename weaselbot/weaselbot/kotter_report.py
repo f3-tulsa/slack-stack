@@ -210,10 +210,10 @@ def build_kotter_report(df_posts: pl.DataFrame, df_qs: pl.DataFrame, df_noqs: pl
     try:
         siteq = f"@{siteq}" if siteq[0].upper() == "U" else "!channel"
     except (IndexError, TypeError):
-        logging.error("No Site Q in the table. Proceeding with @channel")
+        logging.error("No AOQ in the table. Proceeding with @channel")
         siteq = "!channel"
     sMessage = [
-        f"Howdy, <{siteq}>! This is your weekly WeaselBot Site Q report. According to my records...",
+        f"Howdy, <{siteq}>! This is your weekly WeaselBot AOQ report. According to my records...",
     ]
 
     if df_posts.height > 0:
