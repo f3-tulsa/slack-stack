@@ -32,11 +32,19 @@ def refresh(client, user: User, logger, top_message, team_id, context):
             vwMasterEvents.q_pax_id == user.id,
             vwMasterEvents.event_date > datetime.now(tz=tz)
         ])
+        upcoming_qs.sort(key=lambda e: (e.event_date, e.event_time or ""))
         upcoming_events = DbManager.find_records(vwMasterEvents, [
             vwMasterEvents.team_id == team_id,
             vwMasterEvents.event_date > datetime.now(tz=tz),
             vwMasterEvents.event_date <= date.today()+timedelta(days=constants.UPCOMING_DAYS),
         ])
+        upcoming_events.sort(
+            key=lambda e: (
+                e.event_date,
+                e.ao_display_name.replace("The ", "", 1) if e.ao_display_name else "",
+                e.event_time or "",
+            )
+        )
 
         region_record = DbManager.get_record(Region, team_id)
 

@@ -423,6 +423,7 @@ def handle_delete_single_event_ao_select(ack, body, client, logger, context):
             vwMasterEvents.event_date <= date.today() + timedelta(weeks=constants.EVENT_PICKER_WEEKS),
         ],
     )
+    events.sort(key=lambda e: (e.event_date, e.event_time or ""))
 
     # Construct view
     # Top of view
@@ -604,6 +605,7 @@ def handle_edit_event_ao_select(ack, body, client, logger, context):
             vwMasterEvents.event_date <= date.today() + timedelta(weeks=constants.EVENT_PICKER_WEEKS),
         ],
     )
+    events.sort(key=lambda e: (e.event_date, e.event_time or ""))
 
     # Construct view
     # Top of view
@@ -761,6 +763,7 @@ def ao_select_slot(ack, client, body, logger, context):
             Master.event_date <= date.today() + timedelta(weeks=constants.EVENT_PICKER_WEEKS),
         ],
     )
+    events.sort(key=lambda e: (e.event_date, e.event_time or ""))
 
     # Construct view
     # Top of view
