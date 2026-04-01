@@ -97,8 +97,8 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 
 | Variable | Description |
 |----------|-------------|
-| `QS_GOOGLE_CLIENT_ID` | Google Calendar API client ID (omit if Google Calendar integration is not used) |
-| `QS_GOOGLE_CLIENT_SECRET` | Google Calendar API client secret |
+| `QS_GOOGLE_CLIENT_ID` | Google Calendar API client ID (optional; Calendar integration is **not** active in the deployed QSignups app until code and `requirements.txt` Google deps are restored — see [qsignups/README.md](qsignups/README.md)) |
+| `QS_GOOGLE_CLIENT_SECRET` | Google Calendar API client secret (same as above) |
 | `QS_CREATE_OAUTH_TABLES` | Set to `true` for one deploy to run OAuth `create_tables()` DDL on cold start; omit or `false` normally (see **Slack OAuth (database)**) |
 
 ## Slack OAuth (database)

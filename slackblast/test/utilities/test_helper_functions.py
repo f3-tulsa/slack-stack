@@ -49,7 +49,6 @@ def _mock_engine_with_execute(side_effect_fn):
     cm.__enter__.return_value = mock_conn
     cm.__exit__.return_value = None
     mock_engine.begin.return_value = cm
-    mock_engine.dispose = MagicMock()
     return mock_engine, mock_conn
 
 
@@ -132,7 +131,6 @@ def test_ensure_users_in_db_no_merge_needed(mock_ge):
     assert "INSERT INTO users" in calls[1][0]
     assert calls[1][1]["uid"] == "U_NEW"
     logger.warning.assert_not_called()
-    mock_ge.return_value.dispose.assert_called_once()
 
 
 @patch("utilities.helper_functions.get_engine")
@@ -190,7 +188,6 @@ def test_ensure_users_in_db_merge_old_row_only(mock_ge):
 
     delete_calls = [c for c in calls if "DELETE FROM users" in c[0]]
     assert len(delete_calls) == 1
-    mock_ge.return_value.dispose.assert_called_once()
 
 
 @patch("utilities.helper_functions.get_engine")
@@ -247,7 +244,6 @@ def test_ensure_users_in_db_merge_when_canonical_row_exists(mock_ge):
     ensure_users_in_db(["U_NEW"], client, logger, "region_schema")
 
     assert any("DELETE FROM users" in c[0] for c in calls)
-    mock_ge.return_value.dispose.assert_called_once()
 
 
 @patch("utilities.helper_functions.get_engine")
@@ -274,4 +270,3 @@ def test_ensure_users_in_db_no_email_logs_warning(mock_ge):
     assert len(calls) == 1
     logger.warning.assert_called_once()
     assert "users:read.email" in logger.warning.call_args[0][0]
-    mock_ge.return_value.dispose.assert_called_once()

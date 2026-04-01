@@ -1,6 +1,6 @@
 # QSignups
 
-Slack app for **Q signups**, schedule management, and **Google Calendar** integration.
+Slack app for **Q signups** and schedule management. **Google Calendar** integration exists in the `google/` package but is **not currently wired** in the deployed app (handlers and slash commands are commented out in `app.py`).
 
 Part of **[slack-stack](../README.md)**. Deploy with `qsignups/template.yaml`, `./deploy.sh`, or GitHub Actions — see the root README for `DB_ENCRYPTION_KEY`, Google OAuth secrets, and database schema variables.
 
@@ -11,7 +11,7 @@ Use the OAuth install URL from your deployed API (CloudFormation output **`QSign
 ## Features
 
 - Home tab / slash commands for schedule and signups.
-- Google Calendar sync (OAuth tokens for `google_auth_data` are encrypted at rest; `DB_ENCRYPTION_KEY` is required at deploy/runtime — see root README).
+- Google Calendar sync is **disabled** in production builds (no Google client packages in Lambda `requirements.txt`). Schema fields such as `google_auth_data` remain for a future re-enable; when restoring, add the Google deps back and uncomment the handlers in `app.py`.
 
 ## Schedule reconciliation
 

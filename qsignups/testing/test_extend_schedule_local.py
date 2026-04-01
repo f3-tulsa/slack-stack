@@ -46,6 +46,27 @@ def test_handler_routes_extend_schedule() -> None:
                 assert out.get("statusCode") == 200
 
 
+def test_handler_keep_warm_short_circuit() -> None:
+    """EventBridge keep-warm must not invoke extend_all_schedules or Slack Bolt."""
+    import sys as sys_mod
+    from unittest.mock import MagicMock, patch
+
+    with patch.dict(os.environ, {"DB_ENCRYPTION_KEY": "ci-test-encryption-key-32chars!"}, clear=False):
+        with patch("slack_bolt.app.app.App._init_middleware_list", lambda *args, **kwargs: None):
+            with patch("slack.handlers.weekly.extend_all_schedules") as ext:
+                sys_mod.modules.pop("app", None)
+                import app as app_mod
+
+                with patch.object(app_mod, "_warmup", MagicMock()) as warm:
+                    out = app_mod.handler(
+                        {"source": "aws.events", "detail-type": "Scheduled Event"},
+                        None,
+                    )
+                ext.assert_not_called()
+                warm.assert_called_once()
+                assert out == {"statusCode": 200, "body": "warm"}
+
+
 def test_build_recurring_master_rows() -> None:
     from slack.handlers.weekly import _build_recurring_master_rows
 
@@ -262,6 +283,8 @@ def main() -> None:
     print("extend_all_schedules (empty weeklies, mocked session) OK")
     test_handler_routes_extend_schedule()
     print("handler extend-schedule routing OK")
+    test_handler_keep_warm_short_circuit()
+    print("handler keep-warm short-circuit OK")
     test_build_recurring_master_rows()
     print("_build_recurring_master_rows OK")
     test_extend_orphan_cleanup_calls_delete()

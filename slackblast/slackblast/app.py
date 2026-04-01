@@ -7,6 +7,7 @@ from typing import Callable, Tuple
 
 from slack_bolt import App
 from slack_bolt.adapter.aws_lambda import SlackRequestHandler
+from sqlalchemy import text
 
 from features import strava
 from utilities.builders import add_loading_form, send_error_response
@@ -14,6 +15,7 @@ from utilities.constants import LOCAL_DEVELOPMENT
 from utilities.database.orm import Region
 from utilities.field_encryption import require_encryption_key
 from utilities.helper_functions import (
+    REGION_RECORDS,
     get_oauth_flow,
     get_region_record,
     get_request_type,
@@ -40,6 +42,30 @@ app = App(
 )
 
 
+def _warmup(log: logging.Logger) -> None:
+    """Pre-warm DB pool, Fernet derivation, and region cache for EventBridge keep-warm."""
+    from utilities.database import get_engine
+    from utilities.field_encryption import _get_fernet, require_encryption_key
+
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        log.info("Keep-warm: DB connection verified")
+    except Exception:
+        log.warning("Keep-warm: DB ping failed", exc_info=True)
+    try:
+        _get_fernet(require_encryption_key())
+        log.info("Keep-warm: Fernet key derived")
+    except Exception:
+        log.warning("Keep-warm: Fernet derivation failed", exc_info=True)
+    try:
+        update_local_region_records()
+        log.info("Keep-warm: region records loaded (%d)", len(REGION_RECORDS))
+    except Exception:
+        log.warning("Keep-warm: region records load failed", exc_info=True)
+
+
 def _lambda_invocation_kind(event: dict) -> str:
     """Best-effort label for CloudWatch filtering (API vs scheduled vs Strava)."""
     if not isinstance(event, dict):
@@ -60,15 +86,21 @@ def handler(event, context):
         event.get("path") if isinstance(event, dict) else None,
         getattr(context, "aws_request_id", None) if context else None,
     )
+    if isinstance(event, dict) and (
+        event.get("source") == "aws.events" or event.get("detail-type")
+    ):
+        _warmup(logger)
+        return {"statusCode": 200, "body": "warm"}
     if event.get("path") == "/exchange_token":
         return strava.strava_exchange_token(event, context)
-    else:
-        slack_handler = SlackRequestHandler(app=app)
-        return slack_handler.handle(event, context)
+    slack_handler = SlackRequestHandler(app=app)
+    return slack_handler.handle(event, context)
 
 
 def main_response(body, logger, client, ack, context):
-    ack()
+    # Lambda lazy path: ack already sent by first invocation. Local dev: ack here.
+    if LOCAL_DEVELOPMENT:
+        ack()
     team_id = safe_get(body, "team_id") or safe_get(body, "team", "id")
     user_id = safe_get(body, "user_id") or safe_get(body, "user", "id")
     request_type, request_id = get_request_type(body)

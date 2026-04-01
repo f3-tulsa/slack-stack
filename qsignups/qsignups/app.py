@@ -29,7 +29,6 @@ from slack.handlers import (
     ao as ao_handler,
 )
 from slack import actions, inputs
-import weinke
 from field_encryption import require_encryption_key
 
 require_encryption_key()
@@ -74,6 +73,8 @@ def _refresh_home_ack(ack):
 
 def _refresh_home_lazy(body, client, logger, context):
     """Weinke PNG + S3 + DB can exceed Slack's 3s ack window; run after ack via lazy listener."""
+    import weinke  # lazy: Pillow + boto3 only when generating images
+
     logger.info(body)
     user_id = context["user_id"]
     team_id = context["team_id"]
@@ -1185,6 +1186,27 @@ logger.setLevel(level=logging.INFO)
 # logging.basicConfig(format="%(asctime)s %(message)s", level=logging.DEBUG)
 
 
+def _warmup(log: logging.Logger) -> None:
+    """Pre-warm DB pool and Fernet derivation for EventBridge keep-warm."""
+    from sqlalchemy import text
+
+    from database import get_engine
+    from field_encryption import _get_fernet, require_encryption_key
+
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        log.info("Keep-warm: DB connection verified")
+    except Exception:
+        log.warning("Keep-warm: DB ping failed", exc_info=True)
+    try:
+        _get_fernet(require_encryption_key())
+        log.info("Keep-warm: Fernet key derived")
+    except Exception:
+        log.warning("Keep-warm: Fernet derivation failed", exc_info=True)
+
+
 def handler(event, context):
     request_id = getattr(context, "aws_request_id", None) if context else None
     try:
@@ -1206,6 +1228,12 @@ def handler(event, context):
 
             extend_all_schedules(logger)
             return {"statusCode": 200, "body": "OK"}
+
+        if isinstance(event, dict) and (
+            event.get("source") == "aws.events" or event.get("detail-type")
+        ):
+            _warmup(logger)
+            return {"statusCode": 200, "body": "warm"}
 
         logger.info(
             "QSignups handler start kind=slack_bolt request_id=%s",
