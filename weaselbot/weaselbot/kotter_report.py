@@ -36,7 +36,6 @@ from .utils import (
     home_region_date_tiers,
     mysql_connection,
     paxminer_schema_name,
-    polars_mysql_uri_from_engine,
     slack_client,
     sql_string_literal,
     weaselbot_schema_name,
@@ -359,12 +358,11 @@ def main():
     )
     engine = mysql_connection()
     metadata = MetaData()
-    uri = polars_mysql_uri_from_engine(engine)
     pm = paxminer_schema_name()
     wb = weaselbot_schema_name()
 
-    schemas = pl.read_database_uri(
-        f"SELECT schema_name FROM `{pm}`.regions WHERE schema_name LIKE 'f3%'", uri=uri
+    schemas = pl.read_database(
+        f"SELECT schema_name FROM `{pm}`.regions WHERE schema_name LIKE 'f3%'", connection=engine
     )
 
     home_regions_sql = str(
@@ -372,9 +370,9 @@ def main():
     )
     nation_query = str(nation_sql(schemas, engine, metadata).compile(engine, compile_kwargs={"literal_binds": True}))
     logging.info("Building home regions dataframe...")
-    home_regions = pl.read_database_uri(home_regions_sql, uri=uri)
+    home_regions = pl.read_database(home_regions_sql, connection=engine)
     logging.info("Building national dataframe...")
-    nation_df = pl.read_database_uri(nation_query, uri=uri)
+    nation_df = pl.read_database(nation_query, connection=engine)
 
     home_regions = home_regions.group_by("email").agg(pl.all().sort_by("attendance").last())
     nation_df = nation_df.join(home_regions.drop("attendance"), on="email")
@@ -387,7 +385,7 @@ def main():
             query = (
                 f"SELECT channel_id AS home_ao, ao, site_q_user_id FROM {schema}.aos WHERE site_q_user_id IS NOT NULL"
             )
-            siteq_df = pl.read_database_uri(query=query, uri=uri)
+            siteq_df = pl.read_database(query=query, connection=engine)
             query = (
                 f"SELECT default_siteq, slack_token, NO_POST_THRESHOLD, NO_Q_THRESHOLD_WEEKS, REMINDER_WEEKS, "
                 f"NO_Q_THRESHOLD_POSTS, HOME_AO_CAPTURE FROM `{wb}`.regions "
@@ -401,7 +399,7 @@ def main():
                 REMINDER_WEEKS,
                 NO_Q_THRESHOLD_POSTS,
                 HOME_AO_CAPTURE,
-            ) = pl.read_database_uri(query=query, uri=uri).row(0)
+            ) = pl.read_database(query=query, connection=engine).row(0)
             slack_token = decrypt_field(slack_token) if slack_token else None
         except Exception as e:
             # if the site_q_user_id column isn't in their ao table, they're not set up for Kotter reports. We can stop here.

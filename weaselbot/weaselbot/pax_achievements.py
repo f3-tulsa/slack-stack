@@ -14,7 +14,6 @@ from .utils import (
     home_region_date_tiers,
     mysql_connection,
     paxminer_schema_name,
-    polars_mysql_uri_from_engine,
     send_to_slack,
     weaselbot_schema_name,
 )
@@ -488,7 +487,6 @@ def main():
     year = date.today().year
     engine = mysql_connection()
     metadata = MetaData()
-    uri = polars_mysql_uri_from_engine(engine)
     pm = paxminer_schema_name()
     t = Table("regions", metadata, autoload_with=engine, schema=pm)
     sql = str(
@@ -496,7 +494,7 @@ def main():
         .where(t.c.schema_name.like("f3%"))
         .compile(engine, compile_kwargs={"literal_binds": True})
     )
-    schemas = pl.read_database_uri(query=sql, uri=uri)
+    schemas = pl.read_database(query=sql, connection=engine)
 
     home_regions_sql = str(
         build_home_regions(schemas, metadata, engine).compile(engine, compile_kwargs={"literal_binds": True})
@@ -504,9 +502,9 @@ def main():
     nation_query = str(nation_sql(schemas, engine, metadata).compile(engine, compile_kwargs={"literal_binds": True}))
 
     logging.info("Building home regions...")
-    home_regions = pl.read_database_uri(query=home_regions_sql, uri=uri)
+    home_regions = pl.read_database(query=home_regions_sql, connection=engine)
     logging.info("Building national beatdown data...")
-    nation_df = pl.read_database_uri(query=nation_query, uri=uri).with_columns(
+    nation_df = pl.read_database(query=nation_query, connection=engine).with_columns(
         pl.col("backblast").cast(pl.String()), pl.col("ao").cast(pl.String())
     )
 
@@ -589,11 +587,13 @@ def main():
             .where(func.year(aa.c.date_awarded) == func.year(func.curdate()))
         )
 
-        awarded = pl.read_database_uri(str(sql.compile(engine, compile_kwargs={"literal_binds": True})), uri=uri)
-        awards = pl.read_database_uri(f"SELECT * FROM {schema}.achievements_list", uri=uri)
+        awarded = pl.read_database(
+            str(sql.compile(engine, compile_kwargs={"literal_binds": True})), connection=engine
+        )
+        awards = pl.read_database(f"SELECT * FROM {schema}.achievements_list", connection=engine)
 
         # we're pushing one schema at a time to Slack. Ensure all slack_id's are valid for that specific schema
-        users = pl.read_database_uri(f"SELECT email, user_id as slack_user_id FROM {schema}.users", uri=uri)
+        users = pl.read_database(f"SELECT email, user_id as slack_user_id FROM {schema}.users", connection=engine)
         dfs_regional = []
         for df in dfs:
             dfs_regional.append(df.filter(pl.col("region") == schema).join(users, on="email").drop("email"))

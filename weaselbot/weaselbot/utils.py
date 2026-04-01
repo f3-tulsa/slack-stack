@@ -75,19 +75,6 @@ def sql_string_literal(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "''")
 
 
-def polars_mysql_uri_from_engine(engine: Engine) -> str:
-    """Polars read_database_uri / connectorx expect ``mysql://`` without the SQLAlchemy driver suffix.
-
-    The returned string contains credentials — never log it or include it in exception messages.
-    """
-    u = engine.url
-    user = quote_plus(u.username or "")
-    password = quote_plus(u.password or "")
-    host = u.host or "localhost"
-    port = int(u.port or 3306)
-    return f"mysql://{user}:{password}@{host}:{port}/"
-
-
 def mysql_connection() -> Engine:
     """
     Establishes a connection to MySQL / TiDB using environment variables.
