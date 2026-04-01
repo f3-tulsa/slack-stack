@@ -484,6 +484,7 @@ deploy_weaselbot() {
       "F3RegionName=${F3_REGION_NAME}" \
       "WbSlackToken=${WB_SLACK_TOKEN}" \
       "F3RegionSlackTeamId=${F3_REGION_SLACK_TEAM_ID}" \
+      "WeaselbotPaxminerRegionalSchemas=${WEASELBOT_PAXMINER_REGIONAL_SCHEMAS:-}" \
     2>&1 | tee -a "$RECEIPT_FILE"
   return "${PIPESTATUS[0]}"
 }
