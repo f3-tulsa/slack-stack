@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import date
 from typing import Tuple
 
@@ -17,6 +18,15 @@ from .utils import (
     send_to_slack,
     weaselbot_schema_name,
 )
+
+
+def _regional_schema_allowlist() -> frozenset[str] | None:
+    """If set, only these PAXminer regional schema names participate in achievements (exact match)."""
+    raw = (os.environ.get("WEASELBOT_PAXMINER_REGIONAL_SCHEMAS") or "").strip()
+    if not raw:
+        return None
+    parts = [x.strip() for x in raw.split(",") if x.strip()]
+    return frozenset(parts) if parts else None
 
 
 def home_region_sub_query(u: Table, a: Table, b: Table, ao: Table, date_range: int) -> Subquery[Tuple[str, int]]:
@@ -70,12 +80,12 @@ def build_home_regions(schemas: pl.DataFrame, metadata: MetaData, engine: Engine
                 select(
                     literal_column(f"'{schema}'").label("region"),
                     u.c.email,
-                    case(
-                        (s1.c.attendance.is_not(None), s1.c.attendance),
-                        (s2.c.attendance.is_not(None), s2.c.attendance),
-                        (s3.c.attendance.is_not(None), s3.c.attendance),
-                        (s4.c.attendance.is_not(None), s4.c.attendance),
-                        else_=func.count(a.c.user_id),
+                    func.coalesce(
+                        func.max(s1.c.attendance),
+                        func.max(s2.c.attendance),
+                        func.max(s3.c.attendance),
+                        func.max(s4.c.attendance),
+                        func.count(a.c.user_id),
                     ).label("attendance"),
                 )
                 .select_from(
@@ -470,8 +480,10 @@ def main():
     Main function to process and send achievement data to Slack channels for various regions.
     This function performs the following steps:
     1. Establishes a connection to the MySQL database.
-    2. Retrieves schema names from the "regions" table.
-    3. Builds SQL queries to fetch home regions and national beatdown data.
+    2. Retrieves schema names from the "regions" table (optional filter:
+       WEASELBOT_PAXMINER_REGIONAL_SCHEMAS comma-separated allowlist).
+    3. Builds SQL for national beatdown data; if multiple schemas remain,
+       also builds home-region SQL (skipped when exactly one schema).
     4. Filters and processes the data to create various achievement dataframes.
     5. Iterates through each schema to:
         a. Retrieve AO table and Slack channel information.
@@ -495,22 +507,39 @@ def main():
         .compile(engine, compile_kwargs={"literal_binds": True})
     )
     schemas = pl.read_database(query=sql, connection=engine)
+    allow = _regional_schema_allowlist()
+    if allow is not None:
+        before = schemas.height
+        schemas = schemas.filter(pl.col("schema_name").is_in(list(allow)))
+        logging.info(
+            "WEASELBOT_PAXMINER_REGIONAL_SCHEMAS allowlist: %s regional schema(s) after filter (was %s)",
+            schemas.height,
+            before,
+        )
 
-    home_regions_sql = str(
-        build_home_regions(schemas, metadata, engine).compile(engine, compile_kwargs={"literal_binds": True})
-    )
+    if schemas.height == 0:
+        logging.error("No regional schemas to process after allowlist; exiting.")
+        engine.dispose()
+        return
+
     nation_query = str(nation_sql(schemas, engine, metadata).compile(engine, compile_kwargs={"literal_binds": True}))
-
-    logging.info("Building home regions...")
-    home_regions = pl.read_database(query=home_regions_sql, connection=engine)
     logging.info("Building national beatdown data...")
     nation_df = pl.read_database(query=nation_query, connection=engine).with_columns(
         pl.col("backblast").cast(pl.String()), pl.col("ao").cast(pl.String())
     )
 
-    home_regions = home_regions.group_by("email").agg(pl.all().sort_by("attendance").last())
-    nation_df = nation_df.join(home_regions.drop("attendance"), on="email")
-    del home_regions
+    if schemas.height == 1:
+        only_schema = schemas.row(0)[0]
+        nation_df = nation_df.with_columns(pl.lit(only_schema).alias("region"))
+        logging.info("Single regional schema %s: skipped build_home_regions; assigned region column in Polars.", only_schema)
+    else:
+        home_regions_sql = str(
+            build_home_regions(schemas, metadata, engine).compile(engine, compile_kwargs={"literal_binds": True})
+        )
+        logging.info("Building home regions...")
+        home_regions = pl.read_database(query=home_regions_sql, connection=engine)
+        home_regions = home_regions.group_by("email").agg(pl.all().sort_by("attendance").last())
+        nation_df = nation_df.join(home_regions.drop("attendance"), on="email")
 
     # for QSource, we want to capture only QSource
     bb_filter = (

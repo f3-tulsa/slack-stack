@@ -204,6 +204,11 @@ Resources:
               - lambda:AddPermission
               - lambda:RemovePermission
               - lambda:PublishVersion
+              - lambda:ListVersionsByFunction
+              - lambda:CreateAlias
+              - lambda:UpdateAlias
+              - lambda:DeleteAlias
+              - lambda:GetAlias
               - lambda:InvokeFunction
               - lambda:TagResource
               - lambda:UntagResource

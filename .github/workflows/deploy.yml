@@ -262,7 +262,8 @@ jobs:
               Stage=${{ vars.STAGE }} \
               F3RegionName=${{ vars.F3_REGION_NAME }} \
               WbSlackToken=${{ secrets.WB_SLACK_TOKEN }} \
-              F3RegionSlackTeamId=${{ vars.F3_REGION_SLACK_TEAM_ID }}
+              F3RegionSlackTeamId=${{ vars.F3_REGION_SLACK_TEAM_ID }} \
+              WeaselbotPaxminerRegionalSchemas=${{ vars.WEASELBOT_PAXMINER_REGIONAL_SCHEMAS }}
 
   deploy-slackblast:
     runs-on: ubuntu-latest

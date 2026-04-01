@@ -62,6 +62,10 @@ Parameters:
   F3RegionSlackTeamId:
     Type: String
     Description: Slack workspace Team ID (e.g. T01234567); available to Lambdas as F3_REGION_SLACK_TEAM_ID (e.g. weaselbot.regions.team_id)
+  WeaselbotPaxminerRegionalSchemas:
+    Type: String
+    Default: ""
+    Description: Optional comma-separated PAXminer regional schema names for achievements only (e.g. f3ttown_prod). Empty = all f3% from paxminer.regions.
 
 Resources:
   AchievementsFunction:
@@ -94,6 +98,7 @@ Resources:
           F3_REGION_NAME: !Ref F3RegionName
           WB_SLACK_TOKEN: !Ref WbSlackToken
           F3_REGION_SLACK_TEAM_ID: !Ref F3RegionSlackTeamId
+          WEASELBOT_PAXMINER_REGIONAL_SCHEMAS: !Ref WeaselbotPaxminerRegionalSchemas
     Metadata:
       DockerTag: weaselbot-achievements
       DockerContext: ..

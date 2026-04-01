@@ -161,6 +161,9 @@ Resources:
   QSignupsFunction:
     Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
     Properties:
+      AutoPublishAlias: live
+      SnapStart:
+        ApplyOn: PublishedVersions
       CodeUri: qsignups/
       Handler: app.handler
       Runtime: python3.12
@@ -197,7 +200,7 @@ Resources:
         QSignupsKeepWarm:
           Type: ScheduleV2
           Properties:
-            ScheduleExpression: "rate(15 minutes)"
+            ScheduleExpression: "rate(5 minutes)"
             Name: !FindInMap
               - StagesMap
               - Ref: Stage

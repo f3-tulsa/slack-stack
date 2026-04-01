@@ -134,6 +134,37 @@ def test_ensure_users_in_db_no_merge_needed(mock_ge):
 
 
 @patch("utilities.helper_functions.get_engine")
+def test_ensure_users_in_db_truncates_long_fields(mock_ge):
+    """phone, display_name, real_name longer than 45 chars are truncated."""
+    calls = []
+
+    def execute(stmt, params=None):
+        calls.append((str(stmt), params))
+        sql = str(stmt)
+        if "FROM users WHERE email" in sql and "user_id !=" in sql:
+            return _ExecResult([])
+        if "INSERT INTO users" in sql:
+            return _ExecResult()
+        raise AssertionError(f"Unexpected SQL: {sql[:120]}")
+
+    mock_ge.return_value, _ = _mock_engine_with_execute(execute)
+
+    long = "A" * 60
+    client = MagicMock()
+    client.users_info.return_value = _slack_user(
+        display=long, real=long, phone=long
+    )
+    logger = MagicMock()
+
+    ensure_users_in_db(["U_LONG"], client, logger, "region_schema")
+
+    insert_call = [c for c in calls if "INSERT INTO users" in c[0]][0]
+    assert len(insert_call[1]["uname"]) == 45
+    assert len(insert_call[1]["rname"]) == 45
+    assert len(insert_call[1]["phone"]) == 45
+
+
+@patch("utilities.helper_functions.get_engine")
 def test_ensure_users_in_db_merge_old_row_only(mock_ge):
     """Stale row with same email; canonical user_id not present until INSERT."""
     calls = []
