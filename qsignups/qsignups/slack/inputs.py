@@ -276,7 +276,7 @@ ADD_AO_FORM: ActionButton = ActionButton(label = 'Add an AO', action = "add_ao_f
 EDIT_AO_FORM: ActionButton = ActionButton(label = 'Edit an AO', action = "edit_ao_form")
 DELETE_AO_FORM: ActionButton = ActionButton(label = 'Delete an AO', action = "delete_ao_form")
 
-GENERAL_SETTINGS: ActionButton = ActionButton(label = 'General settings', action = "general_settings_form")
+GENERAL_SETTINGS: ActionButton = ActionButton(label = 'General Settings', action = "general_settings_form")
 
 WEEKDAY_SELECTOR = ActionSelector(
   label = "Day of Week",

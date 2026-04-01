@@ -92,7 +92,11 @@ def refresh(client, user: User, logger, top_message, team_id, context):
 
     # Build AO options list
     # Build view blocks
-    refresh_button = forms.make_action_button_row([inputs.ActionButton("Refresh Screen", action = actions.REFRESH_ACTION)])
+    home_actions = forms.make_action_button_row([
+        inputs.ActionButton("Refresh", action=actions.REFRESH_ACTION),
+        inputs.ActionButton("Manage Region Calendar", action=actions.MANAGE_SCHEDULE_ACTION),
+        inputs.GENERAL_SETTINGS,
+    ])
     refresh_context = {
         "type": "context",
         "elements": [
@@ -107,12 +111,12 @@ def refresh(client, user: User, logger, top_message, team_id, context):
     
     blocks = [
         forms.make_header_row(top_message),
-        refresh_button,
+        home_actions,
         refresh_context,
         forms.make_divider(),
     ]
     if not ao_list:
-        blocks.append(forms.make_header_row("Please use the button below to add some AOs!"))
+        blocks.append(forms.make_header_row("Please use the Manage Region Calendar button to add some AOs and Events!"))
     else:
         options = []
         for ao_row in ao_list:
@@ -130,7 +134,7 @@ def refresh(client, user: User, logger, top_message, team_id, context):
             "block_id": "ao_select_block",
             "text": {
                 "type": "mrkdwn",
-                "text": "Please select an AO to take a Q slot:"
+                "text": "Select an AO to take a Q Slot:"
             },
             "accessory": {
                 "action_id": "ao-select",
@@ -147,25 +151,29 @@ def refresh(client, user: User, logger, top_message, team_id, context):
     if (current_week_weinke_url != None) and (next_week_weinke_url != None):
         weinke_blocks = [
             {
-                "type": "mrkdwn",
-                "text": "This week's schedule:"
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "This week's schedule"
+                }
             },
             {
                 "type": "image",
                 "image_url": current_week_weinke_url,
-                "alt_text": "This week's schedule"
+                "alt_text": "This week's schedule",
             },
             {
-                "type": "mrkdwn",
-                "text": "Next week's schedule:"
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "Next week's schedule"
+                }
             },
             {
                 "type": "image",
                 "image_url": next_week_weinke_url,
-                "alt_text": "Next week's schedule"
+                "alt_text": "Next week's schedule",
             },
             {
-                "type": "divider"
+                "type": "divider",
             }
         ]
 
@@ -182,15 +190,6 @@ def refresh(client, user: User, logger, top_message, team_id, context):
             }
         }
         blocks.append(upcoming_schedule_block)
-
-    # Optionally add admin button
-    # user_info_dict = client.users_info(
-    #     user=user.id
-    # )
-    # if user_info_dict['user']['is_admin']:
-    button = forms.make_action_button_row([inputs.ActionButton("Manage Region Calendar", action = actions.MANAGE_SCHEDULE_ACTION)])
-    blocks.append(button)
-    blocks.append(forms.make_action_button_row([inputs.GENERAL_SETTINGS]))
 
     # if google.is_available(team_id):
     #     if authenticate.is_connected(team_id):
