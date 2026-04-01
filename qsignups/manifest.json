@@ -31,18 +31,6 @@
     },
     "slash_commands": [
       {
-        "command": "/hello",
-        "description": "Test saying hello",
-        "usage_hint": "/hello open mailbox",
-        "url": "__HOSTNAME__/slack/events"
-      },
-      {
-        "command": "/schedule",
-        "description": "Query for upcoming schedule",
-        "usage_hint": "/schedule tomorrow",
-        "url": "__HOSTNAME__/slack/events"
-      },
-      {
         "command": "/qsignups",
         "description": "Manage the Q signup schedule",
         "usage_hint": "/qsignups",
