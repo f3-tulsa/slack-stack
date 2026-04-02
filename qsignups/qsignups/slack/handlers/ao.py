@@ -67,10 +67,9 @@ def set_site_q(ao_channel_id: Optional[str], site_q_user_id: Optional[str]) -> N
         raise
 
 
-def edit(client, user_id, team_id, logger, page_label, input_data) -> UpdateResponse:
+def edit(client, user_id, team_id, logger, ao_channel_id, input_data) -> UpdateResponse:
 
     # Parse inputs
-    label, ao_display_name, ao_channel_id = page_label.replace("*", "").split("\n")
     ao_display_name = input_data["ao_display_name"]["ao_display_name"]["value"]
     ao_location_subtitle = input_data["ao_location_subtitle"]["ao_location_subtitle"][
         "value"

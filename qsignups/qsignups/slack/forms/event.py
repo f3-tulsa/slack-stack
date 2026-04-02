@@ -1,3 +1,4 @@
+import json
 from datetime import date
 
 import constants
@@ -58,7 +59,7 @@ def add_single_form(team_id, user_id, client, logger):
 
         forms.make_action_button_row([
             inputs.make_submit_button(actions.ADD_SINGLE_EVENT_ACTION),
-            inputs.CANCEL_BUTTON
+            inputs.BACK_TO_MANAGE_BUTTON
         ]),
         forms.make_header_row("Please wait after hitting Submit, and do not hit it more than once")
     ]
@@ -104,7 +105,7 @@ def add_recurring_form(team_id, user_id, client, logger):
 
         forms.make_action_button_row([
             inputs.make_submit_button(actions.ADD_RECURRING_EVENT_ACTION),
-            inputs.CANCEL_BUTTON
+            inputs.BACK_TO_MANAGE_BUTTON
         ]),
         forms.make_header_row("Please wait after hitting Submit, and do not hit it more than once")
     ]
@@ -137,6 +138,8 @@ def edit_single_form(team_id, user_id, client, logger):
             )
         ).as_form_field()
     ]
+
+    blocks.append(forms.make_action_button_row([inputs.BACK_TO_MANAGE_BUTTON]))
 
     # Publish view
     try:
@@ -188,6 +191,8 @@ def delete_single_form(team_id, user_id, client, logger):
         }
     ]
 
+    blocks.append(forms.make_action_button_row([inputs.BACK_TO_MANAGE_BUTTON]))
+
     # Publish view
     try:
         client.views_publish(
@@ -238,7 +243,7 @@ def select_recurring_form_for_edit(team_id, user_id, client, logger, input_data)
 
 
     # Cancel block
-    blocks.append(forms.make_action_button_row([inputs.CANCEL_BUTTON]))
+    blocks.append(forms.make_action_button_row([inputs.BACK_TO_MANAGE_BUTTON]))
 
     # Publish view
     try:
@@ -279,14 +284,17 @@ def select_recurring_form_for_delete(team_id, user_id, client, logger, input_dat
 
         # Create button blocks for each event for each AO
         for event in sorted_events:
-            button = inputs.ActionButton(label = "Delete Event", action = actions.DELETE_RECURRING_SELECT_ACTION, value = str(event.id), style = "danger")
+            button = inputs.ActionButton(
+                label="Delete Event Series",
+                action=actions.DELETE_RECURRING_SELECT_ACTION,
+                value=str(event.id),
+                style="danger",
+            )
             blocks.append(forms.make_header_row(f"{event.event_type} {event.event_day_of_week}s @ {event.event_time}", accessory = button))
-
-        # Divider block
-        blocks.append(forms.make_divider())
+            blocks.append(forms.make_divider())
 
     # Cancel block
-    blocks.append(forms.make_action_button_row([inputs.CANCEL_BUTTON]))
+    blocks.append(forms.make_action_button_row([inputs.BACK_TO_MANAGE_BUTTON]))
 
     logger.debug("add_recurring_form blocks count=%s", len(blocks))
     # Publish view
@@ -332,10 +340,9 @@ def edit_recurring_form(team_id, user_id, client, logger, input_data):
         inputs.END_TIME_SELECTOR.as_form_field(initial_value = event_end_time),
         forms.make_action_button_row([
             inputs.make_submit_button(actions.EDIT_RECURRING_EVENT_ACTION),
-            inputs.CANCEL_BUTTON
+            inputs.BACK_TO_MANAGE_BUTTON
         ]),
         forms.make_header_row("Please wait after hitting Submit, and do not hit it more than once"),
-        forms.make_context_row(str(event_id))
     ]
 
     try:
@@ -343,7 +350,8 @@ def edit_recurring_form(team_id, user_id, client, logger, input_data):
             user_id=user_id,
             view={
                 "type": "home",
-                "blocks": blocks
+                "blocks": blocks,
+                "private_metadata": json.dumps({"event_id": event_id}),
             }
         )
     except Exception as e:
@@ -363,7 +371,9 @@ def make_ao_section_selector(team_id, user_id, client, logger, label, action):
             options=inputs.as_selector_options(ao_list, ao_id_list)
         )
     ).as_form_field()]
-    
+
+    blocks.append(forms.make_action_button_row([inputs.BACK_TO_MANAGE_BUTTON]))
+
     try:
         client.views_publish(
             user_id=user_id,

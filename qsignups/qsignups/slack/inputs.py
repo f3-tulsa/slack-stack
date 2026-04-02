@@ -245,6 +245,9 @@ EVENT_TYPE_RADIO = ActionRadioButtons(
 )
 
 CANCEL_BUTTON: ActionButton = ActionButton(label = 'Cancel', action = actions.CANCEL_BUTTON_ACTION, style = 'danger')
+BACK_TO_MANAGE_BUTTON: ActionButton = ActionButton(
+    label='Cancel', action=actions.BACK_TO_MANAGE_ACTION, style='danger'
+)
 
 def make_submit_button(action):
   return ActionButton(label = 'Submit', action = action, style = 'primary')

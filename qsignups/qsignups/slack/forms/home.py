@@ -65,7 +65,7 @@ def refresh(client, user: User, logger, top_message, team_id, context):
             })
 
         # Create upcoming schedule message
-        sMsg = '*Upcoming Schedule:*'
+        sMsg = 'Upcoming Q Slots:'
         iterate_date = ''
         for event in upcoming_events:
             if event.event_date != iterate_date:
@@ -154,7 +154,7 @@ def refresh(client, user: User, logger, top_message, team_id, context):
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "This week's schedule"
+                    "text": "This week's schedule:"
                 }
             },
             {
@@ -166,7 +166,7 @@ def refresh(client, user: User, logger, top_message, team_id, context):
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "Next week's schedule"
+                    "text": "Next week's schedule:"
                 }
             },
             {

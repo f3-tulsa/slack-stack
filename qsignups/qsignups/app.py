@@ -17,10 +17,17 @@ from utilities import safe_get, get_user
 
 from database import DbManager, get_engine
 from db_oauth_stores import FixedSQLAlchemyOAuthStateStore
-from database.orm import Master
-from database.orm.views import vwAOsSort, vwMasterEvents
+from database.orm import Master, helper
+from database.orm.views import vwAOsSort, vwMasterEvents, vwWeeklyEvents
 
 from slack import forms
+from slack.confirm_modals import (
+    RECURRING_Q_SLOT_WARNING,
+    confirm_modal_view,
+    delete_confirm_modal_view,
+    format_field_change,
+    load_modal_metadata,
+)
 from slack.forms import ao, event, home, settings
 from slack.handlers import (
     settings as settings_handler,
@@ -73,6 +80,79 @@ app = App(
 
 # Inputs
 schedule_create_length_days = 365
+
+
+def _team_id_from_interaction(body):
+    return (
+        safe_get(body, "team", "id")
+        or safe_get(body, "view", "team_id")
+        or safe_get(body, "user", "team_id")
+    )
+
+
+def _context_for_home_refresh(body, client, bolt_context):
+    team_id = _team_id_from_interaction(body)
+    bot_token = ""
+    if bolt_context and bolt_context.get("bot_token"):
+        bot_token = bolt_context["bot_token"]
+    elif getattr(client, "token", None):
+        bot_token = client.token
+    return {
+        "user_id": safe_get(body, "user", "id"),
+        "team_id": team_id,
+        "bot_token": bot_token,
+    }
+
+
+def _display_slack_user(client, user_id):
+    if not user_id:
+        return "(none)"
+    try:
+        info = client.users_info(user=user_id)
+        return (
+            safe_get(info, "user", "profile", "display_name")
+            or safe_get(info, "user", "profile", "real_name")
+            or user_id
+        )
+    except Exception:
+        return user_id
+
+
+def _fmt_event_time_hhmm(t: str) -> str:
+    if not t or len(t) < 4:
+        return t or ""
+    return f"{t[:2]}:{t[2:]}"
+
+
+def publish_manage_calendar_screen(user_id, client, logger, team_id, bolt_context):
+    """Show the Manage Region Calendar home tab (admin only)."""
+    user_info = client.users_info(user=user_id)
+    user = get_user(user_id, client)
+    if not user_info["user"]["is_admin"]:
+        top_message = (
+            "You must be an admin to manage the schedule. "
+            "<https://slack.com/help/articles/218124397-Change-a-members-role|"
+            "Request admin status from your local space admin or owner>."
+        )
+        home.refresh(client, user, logger, top_message, team_id, bolt_context)
+        return
+    blocks = [
+        forms.make_header_row("Choose an option to manage your AOs:"),
+        forms.make_action_button_row([inputs.ADD_AO_FORM, inputs.EDIT_AO_FORM, inputs.DELETE_AO_FORM]),
+        forms.make_header_row("Choose an option to manage your Recurring Events:"),
+        forms.make_action_button_row(
+            [inputs.ADD_RECURRING_EVENT_FORM, inputs.EDIT_RECURRING_EVENT_FORM, inputs.DELETE_RECURRING_EVENT_FORM]
+        ),
+        forms.make_header_row("Choose an option to manage a Single Event:"),
+        forms.make_action_button_row(
+            [inputs.ADD_SINGLE_EVENT_FORM, inputs.EDIT_SINGLE_EVENT_FORM, inputs.DELETE_SINGLE_EVENT_FORM]
+        ),
+        forms.make_action_button_row([inputs.CANCEL_BUTTON]),
+    ]
+    try:
+        client.views_publish(user_id=user_id, view={"type": "home", "blocks": blocks})
+    except Exception as e:
+        logger.error("Error publishing manage calendar home tab: %s", e)
 
 
 def _refresh_home_ack(ack):
@@ -221,31 +301,14 @@ def handle_manager_schedule_button(ack, body, client, logger, context):
     logger.info(body)
     user_id = context["user_id"]
     team_id = context["team_id"]
-    user = get_user(user_id, client)
-    
-    user_info = client.users_info(user=user_id)
-    if user_info['user']['is_admin']:
-        blocks = [
-            forms.make_header_row("Choose an option to manage your AOs:"),
-            forms.make_action_button_row([inputs.ADD_AO_FORM, inputs.EDIT_AO_FORM, inputs.DELETE_AO_FORM]),
-            forms.make_header_row("Choose an option to manage your Recurring Events:"),
-            forms.make_action_button_row(
-                [inputs.ADD_RECURRING_EVENT_FORM, inputs.EDIT_RECURRING_EVENT_FORM, inputs.DELETE_RECURRING_EVENT_FORM]
-            ),
-            forms.make_header_row("Choose an option to manage your Single Events:"),
-            forms.make_action_button_row(
-                [inputs.ADD_SINGLE_EVENT_FORM, inputs.EDIT_SINGLE_EVENT_FORM, inputs.DELETE_SINGLE_EVENT_FORM]
-            ),
-            forms.make_header_row("Return to the Home Page:"),
-            forms.make_action_button_row([inputs.CANCEL_BUTTON]),
-        ]
-        try:
-            client.views_publish(user_id=user_id, view={"type": "home", "blocks": blocks})
-        except Exception as e:
-            logger.error(f"Error publishing home tab: {e}")
-    else:
-        top_message = 'You must be an admin to manage the schedule. <https://slack.com/help/articles/218124397-Change-a-members-role|Request admin status from your local space admin or owner>.'
-        home.refresh(client, user, logger, top_message, team_id, context)
+    publish_manage_calendar_screen(user_id, client, logger, team_id, context)
+
+
+@app.action(actions.BACK_TO_MANAGE_ACTION)
+def handle_back_to_manage(ack, body, client, logger, context):
+    ack()
+    logger.info(body)
+    publish_manage_calendar_screen(context["user_id"], client, logger, context["team_id"], context)
 
 
 
@@ -349,7 +412,7 @@ def handle_delete_event_form(ack, body, client, logger, context):
         user_id,
         client,
         logger,
-        label="Please select an AO to edit:",
+        label="Please select an AO to delete a recurring event from:",
         action=actions.DELETE_RECURRING_EVENT_AO_SELECT,
     )
 
@@ -383,12 +446,41 @@ def handle_general_settings_form(ack, body, client, logger, context):
 def handle_delete_recurring_select(ack, body, client, logger, context):
     ack()
     logger.info(body)
-    user_id = context["user_id"]
-    user = get_user(user_id, client)
     team_id = context["team_id"]
-    input_data = body["actions"][0]["value"]
-    response = weekly_handler.delete(client, user_id, team_id, logger, input_data)
-    home.refresh(client, user, logger, response.message, team_id, context)
+    event_id = int(body["actions"][0]["value"])
+    rows = DbManager.find_records(vwWeeklyEvents, [vwWeeklyEvents.id == event_id])
+    if not rows:
+        logger.error("delete recurring: weekly event id %s not found", event_id)
+        return
+    weekly_evt = rows[0]
+    summary_lines = [
+        f"*{weekly_evt.event_type}* at *{weekly_evt.ao_display_name}*",
+        f"{weekly_evt.event_day_of_week}s @ {_fmt_event_time_hhmm(weekly_evt.event_time)}",
+    ]
+    meta = {"v": 1, "event_id": event_id}
+    view = delete_confirm_modal_view(
+        actions.CONFIRM_DELETE_RECURRING_VIEW,
+        meta,
+        summary_lines,
+        warning_markdown="This will delete all future occurrences of this recurring event. This cannot be undone.",
+    )
+    try:
+        client.views_open(trigger_id=body["trigger_id"], view=view)
+    except Exception as e:
+        logger.error("Error opening delete recurring confirm modal: %s", e)
+
+
+@app.view(actions.CONFIRM_DELETE_RECURRING_VIEW)
+def handle_confirm_delete_recurring_view(ack, body, client, logger, context):
+    ack()
+    logger.info("confirm_delete_recurring_modal submit")
+    meta = load_modal_metadata(body["view"]["private_metadata"])
+    user_id = body["user"]["id"]
+    team_id = _team_id_from_interaction(body)
+    user = get_user(user_id, client)
+    hctx = _context_for_home_refresh(body, client, context)
+    response = weekly_handler.delete(client, user_id, team_id, logger, str(meta["event_id"]))
+    home.refresh(client, user, logger, response.message, team_id, hctx)
 
 
 @app.action(actions.SELECT_SLOT_EDIT_RECURRING_EVENT_FORM)
@@ -405,12 +497,65 @@ def handle_edit_recurring_event_slot_select(ack, body, client, logger, context):
 def handle_edit_recurring_event(ack, body, client, logger, context):
     ack()
     logger.info(body)
-    user_id = context["user_id"]
-    user = get_user(user_id, client)
     team_id = context["team_id"]
-    input_data = body
-    response = weekly_handler.edit(client, user_id, team_id, logger, input_data)
-    home.refresh(client, user, logger, response.message, team_id, context)
+    input_data = body["view"]["state"]["values"]
+    event_id = int(json.loads(body["view"].get("private_metadata") or "{}")["event_id"])
+    weekly_evt = DbManager.find_records(vwWeeklyEvents, [vwWeeklyEvents.id == event_id])[0]
+    ao_display_name = inputs.AO_SELECTOR.get_selected_value(input_data)
+    event_day_of_week = inputs.WEEKDAY_SELECTOR.get_selected_value(input_data)
+    event_time = inputs.START_TIME_SELECTOR.get_selected_value(input_data).replace(":", "")
+    event_end_time = inputs.END_TIME_SELECTOR.get_selected_value(input_data)
+    if event_end_time:
+        event_end_time = event_end_time.replace(":", "")
+    event_type = inputs.EVENT_TYPE_SELECTOR.get_selected_value(input_data)
+    if event_type == "Custom":
+        event_type = inputs.CUSTOM_EVENT_INPUT.get_selected_value(input_data) or "Custom"
+    summary_lines = []
+    for line in (
+        format_field_change("Event type", weekly_evt.event_type, event_type),
+        format_field_change("AO", weekly_evt.ao_display_name, ao_display_name),
+        format_field_change("Day", weekly_evt.event_day_of_week, event_day_of_week),
+        format_field_change(
+            "Start time",
+            _fmt_event_time_hhmm(weekly_evt.event_time),
+            _fmt_event_time_hhmm(event_time),
+        ),
+        format_field_change(
+            "End time",
+            _fmt_event_time_hhmm(weekly_evt.event_end_time or ""),
+            _fmt_event_time_hhmm(event_end_time or ""),
+        ),
+    ):
+        if line:
+            summary_lines.append(line)
+    if not summary_lines:
+        summary_lines.append("_No field changes detected._")
+    meta = {"v": 1, "event_id": event_id, "input_data": input_data}
+    view = confirm_modal_view(
+        actions.CONFIRM_EDIT_RECURRING_EVENT_VIEW,
+        meta,
+        summary_lines,
+        warning_markdown=RECURRING_Q_SLOT_WARNING,
+    )
+    try:
+        client.views_open(trigger_id=body["trigger_id"], view=view)
+    except Exception as e:
+        logger.error("Error opening edit recurring confirm modal: %s", e)
+
+
+@app.view(actions.CONFIRM_EDIT_RECURRING_EVENT_VIEW)
+def handle_confirm_edit_recurring_view(ack, body, client, logger, context):
+    ack()
+    logger.info("confirm_edit_recurring_event_modal submit")
+    meta = load_modal_metadata(body["view"]["private_metadata"])
+    user_id = body["user"]["id"]
+    team_id = _team_id_from_interaction(body)
+    user = get_user(user_id, client)
+    hctx = _context_for_home_refresh(body, client, context)
+    response = weekly_handler.edit_with_state_values(
+        client, user_id, team_id, logger, meta["event_id"], meta["input_data"]
+    )
+    home.refresh(client, user, logger, response.message, team_id, hctx)
 
 
 @app.action("delete_single_event_ao_select")
@@ -456,20 +601,14 @@ def handle_delete_single_event_ao_select(ack, body, client, logger, context):
 
         action_id = "delete_single_event_button"
         value = date_fmt_value + "|" + event.ao_channel_id
-        confirm_obj = {
-            "title": {"type": "plain_text", "text": "Delete this event?"},
-            "text": {"type": "mrkdwn", "text": "Are you sure you want to delete this event? This cannot be undone."},
-            "confirm": {"type": "plain_text", "text": "Yes, delete it"},
-            "deny": {"type": "plain_text", "text": "Cancel"},
-        }
         # Button template
         new_button = inputs.ActionButton(
-            label=f"{date_fmt}: {date_status}", value=value, action=action_id, confirm=confirm_obj
+            label=f"{date_fmt}: {date_status}", value=value, action=action_id
         )
         # Append button to list
         blocks.append(forms.make_action_button_row([new_button]))
 
-    blocks.append(forms.make_action_button_row([inputs.CANCEL_BUTTON]))
+    blocks.append(forms.make_action_button_row([inputs.BACK_TO_MANAGE_BUTTON]))
 
     # Publish view
     try:
@@ -480,15 +619,61 @@ def handle_delete_single_event_ao_select(ack, body, client, logger, context):
 
 @app.action("delete_single_event_button")
 def delete_single_event_button(ack, client, body, context, logger):
-    # acknowledge action and log payload
     ack()
     logger.info(body)
-    user_id = context["user_id"]
-    user = get_user(user_id, client)
     team_id = context["team_id"]
     input_data = body["actions"][0]["value"]
-    response = master_handler.delete(client, user_id, team_id, logger, input_data)
-    home.refresh(client, user, logger, response.message, team_id, context)
+    selected_list = str.split(input_data, "|")
+    selected_date = selected_list[0]
+    ao_channel_id = selected_list[1]
+    selected_date_dt = datetime.strptime(selected_date, "%Y-%m-%d %H:%M:%S")
+    selected_date_db = selected_date_dt.date().strftime("%Y-%m-%d")
+    selected_time_db = selected_date_dt.time().strftime("%H%M")
+    ev_rows = DbManager.find_records(
+        vwMasterEvents,
+        [
+            vwMasterEvents.team_id == team_id,
+            vwMasterEvents.ao_channel_id == ao_channel_id,
+            vwMasterEvents.event_date == selected_date_dt.date(),
+            vwMasterEvents.event_time == selected_time_db,
+        ],
+    )
+    ev = ev_rows[0] if ev_rows else None
+    ao_name = (ev.ao_display_name if ev else None) or ao_channel_id
+    date_fmt = selected_date_dt.strftime("%a, %m-%d @ %H%M")
+    q_status = (
+        "OPEN!"
+        if ev and ev.q_pax_id is None
+        else (ev.q_pax_name if ev else "(unknown)")
+    )
+    summary_lines = [
+        f"*{ao_name}*",
+        f"{date_fmt} -- Q: {q_status}",
+    ]
+    meta = {"v": 1, "input_data": input_data}
+    view = delete_confirm_modal_view(
+        actions.CONFIRM_DELETE_EVENT_VIEW,
+        meta,
+        summary_lines,
+        warning_markdown="This cannot be undone.",
+    )
+    try:
+        client.views_open(trigger_id=body["trigger_id"], view=view)
+    except Exception as e:
+        logger.error("Error opening delete single event confirm modal: %s", e)
+
+
+@app.view(actions.CONFIRM_DELETE_EVENT_VIEW)
+def handle_confirm_delete_event_view(ack, body, client, logger, context):
+    ack()
+    logger.info("confirm_delete_event_modal submit")
+    meta = load_modal_metadata(body["view"]["private_metadata"])
+    user_id = body["user"]["id"]
+    team_id = _team_id_from_interaction(body)
+    user = get_user(user_id, client)
+    hctx = _context_for_home_refresh(body, client, context)
+    response = master_handler.delete(client, user_id, team_id, logger, meta["input_data"])
+    home.refresh(client, user, logger, response.message, team_id, hctx)
 
 
 @app.action("edit_ao_select")
@@ -534,7 +719,11 @@ def handle_edit_ao_select(ack, body, client, logger, context):
             {
                 "type": "section",
                 "block_id": "page_label",
-                "text": {"type": "mrkdwn", "text": f"*Edit AO:*\n*{selected_channel_name}*\n{selected_channel}"},
+                "text": {"type": "mrkdwn", "text": f"*Edit AO:*\n*{selected_channel_name}*"},
+            },
+            {
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": f"Channel: <#{selected_channel}>"}],
             },
             {
                 "type": "input",
@@ -577,40 +766,20 @@ def handle_edit_ao_select(ack, body, client, logger, context):
             },
         ]
         blocks.append(
-            forms.make_action_button_row([inputs.make_submit_button(actions.EDIT_AO_ACTION), inputs.CANCEL_BUTTON])
+            forms.make_action_button_row([inputs.make_submit_button(actions.EDIT_AO_ACTION), inputs.BACK_TO_MANAGE_BUTTON])
         )
 
         try:
-            client.views_publish(user_id=user_id, view={"type": "home", "blocks": blocks})
+            client.views_publish(
+                user_id=user_id,
+                view={
+                    "type": "home",
+                    "blocks": blocks,
+                    "private_metadata": json.dumps({"ao_channel_id": selected_channel}),
+                },
+            )
         except Exception as e:
             logger.error(f"Error publishing home tab: {e}")
-
-
-@app.action(actions.DELETE_AO_SELECT_ACTION)
-def handle_delete_ao_select(ack, body, client, logger, context):
-    ack()
-    logger.info(body)
-    user_id = context["user_id"]
-    context["team_id"]
-
-    blocks = [
-        {
-            "type": "section",
-            "block_id": "page_label",
-            "text": {
-                "type": "mrkdwn",
-                "text": "Are you sure you want to delete this AO from QSignups? This will also delete all associated events.",
-            },
-        },
-        forms.make_action_button_row([inputs.make_submit_button(actions.DELETE_AO_ACTION), inputs.CANCEL_BUTTON]),
-    ]
-    try:
-        client.views_publish(
-            user_id=user_id,
-            view={"type": "home", "blocks": blocks, "private_metadata": body["actions"][0]["selected_option"]["value"]},
-        )
-    except Exception as e:
-        logger.error(f"Error publishing home tab: {e}")
 
 
 @app.action(actions.EDIT_SINGLE_EVENT_AO_SELECT)
@@ -677,7 +846,7 @@ def handle_edit_event_ao_select(ack, body, client, logger, context):
         blocks.append(new_button)
 
     # Cancel button
-    blocks.append(forms.make_action_button_row([inputs.CANCEL_BUTTON]))
+    blocks.append(forms.make_action_button_row([inputs.BACK_TO_MANAGE_BUTTON]))
 
     # Publish view
     try:
@@ -690,25 +859,90 @@ def handle_edit_event_ao_select(ack, body, client, logger, context):
 def submit_edit_ao_button(ack, body, client, logger, context):
     ack()
     logger.info(body)
-    user_id = context["user_id"]
-    user = get_user(user_id, client)
     team_id = context["team_id"]
     page_label = body["view"]["blocks"][0]["text"]["text"]
     input_data = body["view"]["state"]["values"]
-    response = ao_handler.edit(client, user_id, team_id, logger, page_label, input_data)
-    home.refresh(client, user, logger, response.message, team_id, context)
+    ao_channel_id = json.loads(body["view"].get("private_metadata") or "{}")["ao_channel_id"]
+    new_name = input_data["ao_display_name"]["ao_display_name"]["value"]
+    new_loc = input_data["ao_location_subtitle"]["ao_location_subtitle"]["value"]
+    new_site_q = safe_get(input_data, "site_q_user_id", "site_q_user_id", "selected_user")
+    aos = DbManager.find_records(vwAOsSort, [vwAOsSort.team_id == team_id, vwAOsSort.ao_channel_id == ao_channel_id])
+    old = aos[0] if aos else None
+    old_name = (old.ao_display_name or "") if old else ""
+    old_loc = (old.ao_location_subtitle or "") if old else ""
+    old_site_q = ao_handler.get_site_q(ao_channel_id)
+    summary_lines = []
+    for line in (
+        format_field_change("AO Title", old_name, new_name),
+        format_field_change("Location", old_loc, new_loc),
+        format_field_change(
+            "AOQ", _display_slack_user(client, old_site_q), _display_slack_user(client, new_site_q)
+        ),
+    ):
+        if line:
+            summary_lines.append(line)
+    if not summary_lines:
+        summary_lines.append("_No field changes detected; values match current records._")
+    meta = {"v": 1, "page_label": page_label, "ao_channel_id": ao_channel_id, "input_data": input_data}
+    view = confirm_modal_view(actions.CONFIRM_EDIT_AO_VIEW, meta, summary_lines)
+    try:
+        client.views_open(trigger_id=body["trigger_id"], view=view)
+    except Exception as e:
+        logger.error("Error opening edit AO confirm modal: %s", e)
+
+
+@app.view(actions.CONFIRM_EDIT_AO_VIEW)
+def handle_confirm_edit_ao_view(ack, body, client, logger, context):
+    ack()
+    logger.info("confirm_edit_ao_modal submit")
+    meta = load_modal_metadata(body["view"]["private_metadata"])
+    user_id = body["user"]["id"]
+    team_id = _team_id_from_interaction(body)
+    user = get_user(user_id, client)
+    hctx = _context_for_home_refresh(body, client, context)
+    response = ao_handler.edit(
+        client, user_id, team_id, logger, meta["ao_channel_id"], meta["input_data"]
+    )
+    home.refresh(client, user, logger, response.message, team_id, hctx)
 
 
 @app.action(actions.DELETE_AO_ACTION)
 def submit_delete_ao_button(ack, body, client, logger, context):
     ack()
     logger.info(body)
-    user_id = context["user_id"]
     team_id = context["team_id"]
+    ao_channel_id = body["actions"][0]["value"]
+    aos = DbManager.find_records(vwAOsSort, [vwAOsSort.team_id == team_id, vwAOsSort.ao_channel_id == ao_channel_id])
+    ao_rec = aos[0] if aos else None
+    ao_name = (ao_rec.ao_display_name if ao_rec else None) or ao_channel_id
+    summary_lines = [
+        f"*{ao_name}*",
+        f"Channel: <#{ao_channel_id}>",
+    ]
+    meta = {"v": 1, "ao_channel_id": ao_channel_id}
+    view = delete_confirm_modal_view(
+        actions.CONFIRM_DELETE_AO_VIEW,
+        meta,
+        summary_lines,
+        warning_markdown="This will also delete all associated events. This cannot be undone.",
+    )
+    try:
+        client.views_open(trigger_id=body["trigger_id"], view=view)
+    except Exception as e:
+        logger.error("Error opening delete AO confirm modal: %s", e)
+
+
+@app.view(actions.CONFIRM_DELETE_AO_VIEW)
+def handle_confirm_delete_ao_view(ack, body, client, logger, context):
+    ack()
+    logger.info("confirm_delete_ao_modal submit")
+    meta = load_modal_metadata(body["view"]["private_metadata"])
+    user_id = body["user"]["id"]
+    team_id = _team_id_from_interaction(body)
     user = get_user(user_id, client)
-    ao_channel_id = body["view"]["private_metadata"]
-    response = ao_handler.delete(client, user_id, team_id, logger, ao_channel_id)
-    home.refresh(client, user, logger, response.message, team_id, context)
+    hctx = _context_for_home_refresh(body, client, context)
+    response = ao_handler.delete(client, user_id, team_id, logger, meta["ao_channel_id"])
+    home.refresh(client, user, logger, response.message, team_id, hctx)
 
 
 @app.action(actions.EDIT_SETTINGS_ACTION)
@@ -1152,11 +1386,25 @@ def handle_edit_single_event_button(ack, client, body, logger, context):
     submit_button = inputs.ActionButton(
         label="Submit", style="primary", value=ao_channel_id, action=actions.EDIT_EVENT_ACTION
     )
-    blocks.append(forms.make_action_button_row([submit_button, inputs.CANCEL_BUTTON]))
+    blocks.append(forms.make_action_button_row([submit_button, inputs.BACK_TO_MANAGE_BUTTON]))
+
+    edit_meta = {
+        "original_date": selected_date_db,
+        "original_time": selected_time_db,
+        "ao_channel_id": ao_channel_id,
+        "q_pax_name": q_pax_name,
+    }
 
     # Publish view
     try:
-        client.views_publish(user_id=user_id, view={"type": "home", "blocks": blocks})
+        client.views_publish(
+            user_id=user_id,
+            view={
+                "type": "home",
+                "blocks": blocks,
+                "private_metadata": json.dumps(edit_meta),
+            },
+        )
     except Exception as e:
         logger.error(f"Error publishing home tab: {e}")
 
@@ -1164,13 +1412,99 @@ def handle_edit_single_event_button(ack, client, body, logger, context):
 # triggered when user hits submit on event edit
 @app.action(actions.EDIT_EVENT_ACTION)
 def handle_submit_edit_event_button(ack, client, body, logger, context):
-    # acknowledge action and log payload
     ack()
     logger.info(body)
-    user = get_user(context["user_id"], client)
     team_id = context["team_id"]
-    response = master_handler.update_events(client, user, team_id, logger, body)
-    home.refresh(client, user, logger, response.message, team_id, context)
+    pm = json.loads(body["view"].get("private_metadata") or "{}")
+    original_date = pm["original_date"]
+    original_time = pm["original_time"]
+    ao_channel_id = pm.get("ao_channel_id") or body["actions"][0]["value"]
+    results = body["view"]["state"]["values"]
+    selected_date = results["edit_event_datepicker"]["edit_event_datepicker"]["selected_date"]
+    selected_time = results["edit_event_timepicker"]["edit_event_timepicker"]["selected_time"].replace(":", "")
+    selected_end_time = results["edit_event_end_timepicker"]["edit_event_end_timepicker"]["selected_time"].replace(
+        ":", ""
+    )
+    selected_q_list = results["edit_event_q_select"]["edit_event_q_select"].get("selected_users") or []
+    selected_special = results["edit_event_special_select"]["edit_event_special_select"]["selected_option"]["text"][
+        "text"
+    ]
+    new_q_display = (
+        _display_slack_user(client, selected_q_list[0])
+        if selected_q_list
+        else "(open / none)"
+    )
+    try:
+        ao_rec = helper.find_ao(team_id, ao_channel_id=ao_channel_id)
+        if not ao_rec:
+            evt = None
+        else:
+            records = DbManager.find_records(
+                Master,
+                [
+                    Master.team_id == team_id,
+                    Master.ao_channel_id == ao_rec.ao_channel_id,
+                    Master.event_date == datetime.strptime(original_date, "%Y-%m-%d"),
+                    Master.event_time == original_time,
+                ],
+            )
+            evt = records[0] if records else None
+    except Exception:
+        evt = None
+    old_q = (evt.q_pax_name or "(open / none)") if evt else (pm.get("q_pax_name") or "(open / none)")
+    old_special = evt.event_special if evt and evt.event_special else "None"
+    if old_special is None:
+        old_special = "None"
+    summary_lines = []
+    for line in (
+        format_field_change("Event date", original_date, selected_date),
+        format_field_change("Event time", _fmt_event_time_hhmm(original_time), _fmt_event_time_hhmm(selected_time)),
+        format_field_change(
+            "End time",
+            _fmt_event_time_hhmm(evt.event_end_time) if evt and evt.event_end_time else "(default)",
+            _fmt_event_time_hhmm(selected_end_time),
+        ),
+        format_field_change("Q", old_q, new_q_display),
+        format_field_change("Special", str(old_special), selected_special),
+    ):
+        if line:
+            summary_lines.append(line)
+    if not summary_lines:
+        summary_lines.append("_No field changes detected._")
+    meta = {
+        "v": 1,
+        "ao_channel_id": ao_channel_id,
+        "original_date": original_date,
+        "original_time": original_time,
+        "state_values": results,
+    }
+    view = confirm_modal_view(actions.CONFIRM_EDIT_EVENT_VIEW, meta, summary_lines)
+    try:
+        client.views_open(trigger_id=body["trigger_id"], view=view)
+    except Exception as e:
+        logger.error("Error opening edit single event confirm modal: %s", e)
+
+
+@app.view(actions.CONFIRM_EDIT_EVENT_VIEW)
+def handle_confirm_edit_event_view(ack, body, client, logger, context):
+    ack()
+    logger.info("confirm_edit_event_modal submit")
+    meta = load_modal_metadata(body["view"]["private_metadata"])
+    user_id = body["user"]["id"]
+    team_id = _team_id_from_interaction(body)
+    user = get_user(user_id, client)
+    hctx = _context_for_home_refresh(body, client, context)
+    response = master_handler.update_events_from_state(
+        client,
+        user,
+        team_id,
+        logger,
+        meta["ao_channel_id"],
+        meta["state_values"],
+        meta["original_date"],
+        meta["original_time"],
+    )
+    home.refresh(client, user, logger, response.message, team_id, hctx)
 
 
 # triggered when user hits cancel or some other button that takes them home

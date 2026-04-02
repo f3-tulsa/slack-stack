@@ -88,7 +88,7 @@ def add_form(team_id, user_id, client, logger):
 
     blocks.append(forms.make_action_button_row([
         inputs.make_submit_button(actions.ADD_AO_ACTION),
-        inputs.CANCEL_BUTTON,
+        inputs.BACK_TO_MANAGE_BUTTON,
     ]))
 
     try:
@@ -106,7 +106,7 @@ def edit_form(team_id, user_id, client, logger):
 
     # list of AOs for dropdown
     aos: list[vwAOsSort] = DbManager.find_records(vwAOsSort, [vwAOsSort.team_id == team_id])
-    [ao.ao_display_name for ao in aos]
+    aos.sort(key=lambda x: x.ao_display_name.replace("The ", ""))
 
     ao_options = []
     for ao in aos:
@@ -141,6 +141,8 @@ def edit_form(team_id, user_id, client, logger):
         }
     ]
 
+    blocks.append(forms.make_action_button_row([inputs.BACK_TO_MANAGE_BUTTON]))
+
     # Publish view
     try:
         client.views_publish(
@@ -155,43 +157,25 @@ def edit_form(team_id, user_id, client, logger):
 
 def delete_form(team_id, user_id, client, logger):
 
-    # list of AOs for dropdown
     aos: list[vwAOsSort] = DbManager.find_records(vwAOsSort, [vwAOsSort.team_id == team_id])
+    aos.sort(key=lambda x: x.ao_display_name.replace("The ", ""))
 
-    ao_options = []
-    for ao in aos:
-        new_option = {
-            "text": {
-                "type": "plain_text",
-                "text": ao.ao_display_name,
-                "emoji": True
-            },
-            "value": ao.ao_channel_id
-        }
-        ao_options.append(new_option)
-
-    # Build blocks
     blocks = [
-        {
-            "type": "section",
-            "block_id": actions.DELETE_AO_SELECT_ACTION,
-            "text": {
-                "type": "mrkdwn",
-                "text": "Please select an AO to delete:"
-            },
-            "accessory": {
-                "action_id": actions.DELETE_AO_SELECT_ACTION,
-                "type": "static_select",
-                "placeholder": {
-                    "type": "plain_text",
-                    "text": "Select an AO"
-                },
-                "options": ao_options
-            }
-        }
+        forms.make_section_header_row("Delete an AO")
     ]
 
-    # Publish view
+    for ao in aos:
+        button = inputs.ActionButton(
+            label="Delete AO",
+            action=actions.DELETE_AO_ACTION,
+            value=ao.ao_channel_id,
+            style="danger",
+        )
+        blocks.append(forms.make_header_row(ao.ao_display_name, accessory=button))
+        blocks.append(forms.make_divider())
+
+    blocks.append(forms.make_action_button_row([inputs.BACK_TO_MANAGE_BUTTON]))
+
     try:
         client.views_publish(
             user_id=user_id,

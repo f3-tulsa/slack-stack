@@ -11,6 +11,7 @@ Use the OAuth install URL from your deployed API (CloudFormation output **`QSign
 ## Features
 
 - Home tab / slash commands for schedule and signups.
+- **Manage Region Calendar:** Cancel / back on Add, Edit, and Delete flows for AOs and events returns to the **Manage Region Calendar** menu (not the main Home screen). The “Return to the Home Page” control on that menu still goes to Home.
 - Google Calendar sync is **disabled** in production builds (no Google client packages in Lambda `requirements.txt`). Schema fields such as `google_auth_data` remain for a future re-enable; when restoring, add the Google deps back and uncomment the handlers in `app.py`.
 
 ## Schedule reconciliation
@@ -20,11 +21,18 @@ Use the OAuth install URL from your deployed API (CloudFormation output **`QSign
 - **Editing a recurring schedule:** The Slack edit flow **deletes** future recurring `qsignups_master` rows for the **old** series (after today) and **recreates** rows through the rolling horizon with the new day/time/AO. **Today’s** row is left in place. Q signups on deleted future dates are cleared (those beats are no longer valid).
 - **Deleting a recurring schedule:** Removes all future master rows for that series and the `qsignups_weekly` row (existing behavior).
 
+## Edit and delete confirmations
+
+- **Edit AO / single event / recurring event:** Submitting an edit form opens a **confirmation modal** listing changed fields (old → new). The database update runs only after **Confirm**. Dismiss the modal or use **Cancel** to abort.
+- **Edit recurring event:** The modal includes a warning that **existing Q signups for this series under the current schedule will be removed** when the series definition changes (Slack then regenerates future master rows for the new day/time/AO).
+- **Delete recurring event / Delete AO / delete single event:** Each delete action opens a **confirmation modal** with *You are about to delete:*, a short summary of the item, and a warning. The delete runs only after **Delete** on the modal; **Cancel** dismisses without changes.
+
 Local tests (run from `qsignups/qsignups` with `PYTHONPATH=.`):
 
 - Extend/edit schedule: [`testing/test_extend_schedule_local.py`](testing/test_extend_schedule_local.py)
 - Weinke rendering / S3 / grid logic: [`testing/test_weinke_local.py`](testing/test_weinke_local.py)
 - AO insert/edit (including PAXminer regional `aos.site_q_user_id`): [`testing/test_ao_handler_local.py`](testing/test_ao_handler_local.py)
+- Confirmation modal helpers (edit + delete): [`testing/test_confirm_modals_local.py`](testing/test_confirm_modals_local.py)
 
 ## CI/CD
 

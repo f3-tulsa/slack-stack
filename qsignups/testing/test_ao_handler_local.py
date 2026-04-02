@@ -77,7 +77,6 @@ def test_edit_calls_set_site_q() -> None:
     def capture_update(cls, filters, fields):
         captured["fields"] = fields
 
-    page_label = "*Edit AO:*\n*Bridge*\nC333"
     input_data = {
         "ao_display_name": {"ao_display_name": {"value": "Bridge"}},
         "ao_location_subtitle": {"ao_location_subtitle": {"value": "96th St"}},
@@ -86,7 +85,7 @@ def test_edit_calls_set_site_q() -> None:
 
     with patch("slack.handlers.ao.DbManager.update_records", side_effect=capture_update):
         with patch("slack.handlers.ao.set_site_q") as set_sq:
-            resp = ao_handler.edit(client, "U_editor", "T1", log, page_label, input_data)
+            resp = ao_handler.edit(client, "U_editor", "T1", log, "C333", input_data)
 
     assert resp.success is True
     assert set(captured["fields"].keys()) == {AO.ao_display_name, AO.ao_location_subtitle}
@@ -99,7 +98,6 @@ def test_edit_set_site_q_none_when_unset() -> None:
     log = logging.getLogger("test")
     client = MagicMock()
 
-    page_label = "*Edit AO:*\n*Bridge*\nC333"
     input_data = {
         "ao_display_name": {"ao_display_name": {"value": "Bridge"}},
         "ao_location_subtitle": {"ao_location_subtitle": {"value": "96th St"}},
@@ -107,7 +105,7 @@ def test_edit_set_site_q_none_when_unset() -> None:
 
     with patch("slack.handlers.ao.DbManager.update_records"):
         with patch("slack.handlers.ao.set_site_q") as set_sq:
-            resp = ao_handler.edit(client, "U_editor", "T1", log, page_label, input_data)
+            resp = ao_handler.edit(client, "U_editor", "T1", log, "C333", input_data)
 
     assert resp.success is True
     set_sq.assert_called_once_with("C333", None)

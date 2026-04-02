@@ -169,11 +169,8 @@ def delete(client, user_id, team_id, logger, input_data) -> UpdateResponse:
         logger.error(f"Error deleting: {e}")
         return UpdateResponse(success = False, message = f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker. Errors:\n{e}")
 
-def edit(client, user_id, team_id, logger, body) -> UpdateResponse:
-
-    input_data = body['view']['state']['values']
-    event_id = int(body['view']['blocks'][-1]['elements'][0]['text'])
-
+def edit_with_state_values(client, user_id, team_id, logger, event_id: int, input_data) -> UpdateResponse:
+    """Apply recurring weekly edit from home-tab state values (also used after confirmation modal)."""
     # Gather inputs from form
     ao_display_name = inputs.AO_SELECTOR.get_selected_value(input_data)
     event_day_of_week = inputs.WEEKDAY_SELECTOR.get_selected_value(input_data)
@@ -234,6 +231,13 @@ def edit(client, user_id, team_id, logger, body) -> UpdateResponse:
     except Exception as e:
         logger.error(f"Error updating: {e}")
         return UpdateResponse(success = False, message = f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker. Errors:\n{e}")
+
+
+def edit(client, user_id, team_id, logger, body) -> UpdateResponse:
+    input_data = body['view']['state']['values']
+    event_id = int(body['view']['blocks'][-1]['elements'][0]['text'])
+    return edit_with_state_values(client, user_id, team_id, logger, event_id, input_data)
+
 
 def insert(client, user_id, team_id, logger, input_data) -> UpdateResponse:
 

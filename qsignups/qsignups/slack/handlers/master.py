@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 
 from database import DbManager
@@ -72,14 +73,17 @@ def insert(client, user_id, team_id, logger, input_data) -> UpdateResponse:
         logger.error(f"Error inserting: {e}")
         return UpdateResponse(success = False, message = f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker. Errors:\n{e}")
 
-def update_events(client, user: User, team_id, logger, input_data) -> UpdateResponse:
-
-    original_info = input_data['view']['blocks'][0]['text']['text']
-    ignore, event, q_name = original_info.split('\n')
-    original_date, original_time, original_ao_name = event.split(' @ ')
-    ao_channel_id = input_data['actions'][0]['value']
-
-    results = input_data['view']['state']['values']
+def update_events_from_state(
+    client,
+    user: User,
+    team_id,
+    logger,
+    ao_channel_id: str,
+    results: dict,
+    original_date: str,
+    original_time: str,
+) -> UpdateResponse:
+    """Apply single-event edit from home-tab state values (also used after confirmation modal)."""
     selected_date = results['edit_event_datepicker']['edit_event_datepicker']['selected_date']
     selected_time = results['edit_event_timepicker']['edit_event_timepicker']['selected_time'].replace(':','')
     selected_end_time = results['edit_event_end_timepicker']['edit_event_end_timepicker']['selected_time'].replace(':','')
@@ -132,6 +136,23 @@ def update_events(client, user: User, team_id, logger, input_data) -> UpdateResp
     except Exception as e:
         logger.error(f"Error inserting: {e}")
         return UpdateResponse(success = False, message = f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker. Errors:\n{e}")
+
+
+def update_events(client, user: User, team_id, logger, input_data) -> UpdateResponse:
+    ao_channel_id = input_data["actions"][0]["value"]
+    results = input_data["view"]["state"]["values"]
+    pm = json.loads(input_data["view"].get("private_metadata") or "{}")
+    return update_events_from_state(
+        client,
+        user,
+        team_id,
+        logger,
+        ao_channel_id,
+        results,
+        pm["original_date"],
+        pm["original_time"],
+    )
+
 
 def clear_event_q(client, user: User, team_id, logger, ao_display_name, selected_dt) -> UpdateResponse:
 
