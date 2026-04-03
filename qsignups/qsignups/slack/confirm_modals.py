@@ -49,7 +49,7 @@ def delete_confirm_modal_view(
     summary_lines: list[str],
     *,
     warning_markdown: str | None = None,
-    title: str = "Confirm delete",
+    title: str = "Confirm Delete!?",
 ) -> dict[str, Any]:
     """Build a Slack modal for delete confirmation (views_open / view_submission)."""
     blocks: list[dict[str, Any]] = []
@@ -60,8 +60,8 @@ def delete_confirm_modal_view(
     if warning_markdown:
         blocks.append(
             {
-                "type": "context",
-                "elements": [{"type": "mrkdwn", "text": warning_markdown}],
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": warning_markdown},
             }
         )
     return {

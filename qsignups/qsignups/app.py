@@ -1002,15 +1002,14 @@ def submit_delete_ao_button(ack, body, client, logger, context):
     ao_rec = aos[0] if aos else None
     ao_name = (ao_rec.ao_display_name if ao_rec else None) or ao_channel_id
     summary_lines = [
-        f"*{ao_name}*",
-        f"Channel: <#{ao_channel_id}>",
+        f"*AO*: `{ao_name}`"
     ]
     meta = {"v": 1, "ao_channel_id": ao_channel_id}
     view = delete_confirm_modal_view(
         actions.CONFIRM_DELETE_AO_VIEW,
         meta,
         summary_lines,
-        warning_markdown="This will also delete all associated events. This cannot be undone.",
+        warning_markdown=":warning: This will also delete all associated calendar events! This cannot be undone! :warning:",
     )
     try:
         client.views_open(trigger_id=body["trigger_id"], view=view)

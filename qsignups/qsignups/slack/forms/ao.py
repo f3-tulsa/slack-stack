@@ -24,13 +24,9 @@ def publish_edit_ao_home(client, user_id, team_id, logger, selected_channel: str
 
     blocks = [
         {
-            "type": "section",
+            "type": "header",
             "block_id": "page_label",
-            "text": {"type": "mrkdwn", "text": f"*Edit AO:*\n*{selected_channel_name}*"},
-        },
-        {
-            "type": "context",
-            "elements": [{"type": "mrkdwn", "text": f"Channel: <#{selected_channel}>"}],
+            "text": {"type": "plain_text", "text": "Edit an AO"},
         },
         {
             "type": "input",
@@ -54,6 +50,10 @@ def publish_edit_ao_home(client, user_id, team_id, logger, selected_channel: str
                 "initial_value": ao_location_subtitle,
             },
             "label": {"type": "plain_text", "text": "Location (township, park, etc.)"},
+        },
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": f"Channel: <#{selected_channel}>"}],
         },
         {
             "type": "input",
