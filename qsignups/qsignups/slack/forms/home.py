@@ -5,6 +5,7 @@ import constants
 from database import DbManager
 from database.orm import AO, Region
 from database.orm.views import vwMasterEvents
+from permissions import PermissionLevel, resolve_user_permission, resolved_paxminer_regional_schema
 from slack import actions, forms, inputs
 # from google import authenticate
 from field_encryption import decrypt_field, encrypt_field
@@ -90,13 +91,18 @@ def refresh(client, user: User, logger, top_message, team_id, context):
             dt_fmt = q.event_date.strftime("%a %m-%d")
             top_message += f"\n- {q.event_type} on {dt_fmt} @ {q.event_time} at {q.ao_display_name}"
 
-    # Build AO options list
-    # Build view blocks
-    home_actions = forms.make_action_button_row([
-        inputs.ActionButton("Refresh", action=actions.REFRESH_ACTION),
-        inputs.ActionButton("Manage Region Calendar", action=actions.MANAGE_SCHEDULE_ACTION),
-        inputs.GENERAL_SETTINGS,
-    ])
+    user_info = client.users_info(user=user.id)
+    permission = resolve_user_permission(
+        user_info, user.id, resolved_paxminer_regional_schema()
+    )
+    buttons = [inputs.ActionButton("Refresh", action=actions.REFRESH_ACTION)]
+    if permission.level in (PermissionLevel.ADMIN, PermissionLevel.AOQ):
+        buttons.append(
+            inputs.ActionButton("Manage Region Calendar", action=actions.MANAGE_SCHEDULE_ACTION)
+        )
+    if permission.level == PermissionLevel.ADMIN:
+        buttons.append(inputs.GENERAL_SETTINGS)
+    home_actions = forms.make_action_button_row(buttons)
     refresh_context = {
         "type": "context",
         "elements": [
@@ -116,7 +122,18 @@ def refresh(client, user: User, logger, top_message, team_id, context):
         forms.make_divider(),
     ]
     if not ao_list:
-        blocks.append(forms.make_header_row("Please use the Manage Region Calendar button to add some AOs and Events!"))
+        if permission.level in (PermissionLevel.ADMIN, PermissionLevel.AOQ):
+            blocks.append(
+                forms.make_header_row(
+                    "Please use the Manage Region Calendar button to add some AOs and Events!"
+                )
+            )
+        else:
+            blocks.append(
+                forms.make_header_row(
+                    "No AOs are configured yet. Ask a region admin to add AOs and events."
+                )
+            )
     else:
         options = []
         for ao_row in ao_list:

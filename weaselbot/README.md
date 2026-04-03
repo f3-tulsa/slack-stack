@@ -2,7 +2,7 @@
 
 Supplemental Slack automation that sits on top of PAXminer data: **achievements** and **Kotter**-style inactivity reports.
 
-This app lives in the **[slack-stack](../README.md)** monorepo. It is deployed as **container-image** Lambdas (`weaselbot/template.yaml`). See the root README for `sam build`, `./deploy.sh`, GitHub Actions, and `DB_ENCRYPTION_KEY`.
+This app lives in the **[slack-stack](../README.md)** monorepo. It is deployed as **container-image** Lambdas (`weaselbot/template.yaml`). `sam build`, `./deploy.sh`, GitHub Actions, **`DB_ENCRYPTION_KEY`**: **[docs/DEPLOY.md](../docs/DEPLOY.md)**.
 
 ## Features
 
@@ -20,6 +20,8 @@ Create an app at [api.slack.com/apps](https://api.slack.com/apps/) from **[manif
 Wire achievements to a channel (e.g. `#achievements-unlocked`); tune **`weaselbot.regions`** (e.g. `achievement_channel`) and related PAXminer schema per your runbook.
 
 ## Local development
+
+Monorepo-wide testing: **[docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md)**.
 
 From the **repository root**:
 

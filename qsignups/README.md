@@ -2,7 +2,7 @@
 
 Slack app for **Q signups** and schedule management. **Google Calendar** integration exists in the `google/` package but is **not currently wired** in the deployed app (handlers and slash commands are commented out in `app.py`).
 
-Part of **[slack-stack](../README.md)**. Deploy with `qsignups/template.yaml`, `./deploy.sh`, or GitHub Actions — see the root README for `DB_ENCRYPTION_KEY`, Google OAuth secrets, and database schema variables.
+Part of **[slack-stack](../README.md)**. Deploy with `qsignups/template.yaml`, `./deploy.sh`, or GitHub Actions. Shared deploy, env, and OAuth details: **[docs/DEPLOY.md](../docs/DEPLOY.md)**. **Permission tiers** (Admin, AOQ, Q, User) and schema notes: **[docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)**.
 
 ## Install (production)
 

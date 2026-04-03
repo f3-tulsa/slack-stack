@@ -45,7 +45,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         if: github.event_name == 'push'
         with:
@@ -60,7 +60,6 @@ jobs:
             qsignups:
               - 'qsignups/**'
             infra:
-              - '.github/workflows/**'
               - 'infra/**'
 
       - id: pick
@@ -111,10 +110,6 @@ jobs:
       sam_s3_bucket: ${{ steps.resolve_bucket.outputs.sam_s3_bucket }}
     steps:
       - uses: actions/checkout@v6
-
-      - uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
 
       - uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -182,13 +177,9 @@ jobs:
     if: needs.detect-changes.outputs.run_paxminer == 'true'
     environment: ${{ github.event.inputs.environment || github.ref_name }}
     env:
-      SAM_NO_CACHE: ${{ vars.SAM_NO_CACHE }}
       SAM_S3_BUCKET: ${{ needs.setup.outputs.sam_s3_bucket }}
     steps:
       - uses: actions/checkout@v6
-      - uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
@@ -196,9 +187,7 @@ jobs:
       - name: Build PAXminer
         run: |
           set -euo pipefail
-          CACHE_FLAG=()
-          [[ "${SAM_NO_CACHE:-}" == "true" ]] && CACHE_FLAG=(--no-cached)
-          sam build -t PAXminer/template.yaml "${CACHE_FLAG[@]}"
+          sam build -t PAXminer/template.yaml --no-cached
       - name: Deploy PAXminer
         run: |
           sam deploy \
@@ -225,13 +214,9 @@ jobs:
     if: needs.detect-changes.outputs.run_weaselbot == 'true'
     environment: ${{ github.event.inputs.environment || github.ref_name }}
     env:
-      SAM_NO_CACHE: ${{ vars.SAM_NO_CACHE }}
       SAM_S3_BUCKET: ${{ needs.setup.outputs.sam_s3_bucket }}
     steps:
       - uses: actions/checkout@v6
-      - uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
@@ -239,9 +224,7 @@ jobs:
       - name: Build Weaselbot
         run: |
           set -euo pipefail
-          CACHE_FLAG=()
-          [[ "${SAM_NO_CACHE:-}" == "true" ]] && CACHE_FLAG=(--no-cached)
-          sam build -t weaselbot/template.yaml "${CACHE_FLAG[@]}"
+          sam build -t weaselbot/template.yaml --no-cached
       - name: Deploy Weaselbot
         run: |
           sam deploy \
@@ -271,14 +254,10 @@ jobs:
     if: needs.detect-changes.outputs.run_slackblast == 'true'
     environment: ${{ github.event.inputs.environment || github.ref_name }}
     env:
-      SAM_NO_CACHE: ${{ vars.SAM_NO_CACHE }}
       ENABLE_XRAY: ${{ vars.ENABLE_XRAY }}
       SAM_S3_BUCKET: ${{ needs.setup.outputs.sam_s3_bucket }}
     steps:
       - uses: actions/checkout@v6
-      - uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
@@ -286,9 +265,7 @@ jobs:
       - name: Build slackblast
         run: |
           set -euo pipefail
-          CACHE_FLAG=()
-          [[ "${SAM_NO_CACHE:-}" == "true" ]] && CACHE_FLAG=(--no-cached)
-          sam build -t slackblast/template.yaml --use-container "${CACHE_FLAG[@]}"
+          sam build -t slackblast/template.yaml --use-container --no-cached
       - name: Deploy slackblast
         env:
           SB_STRAVA_CLIENT_ID: ${{ secrets.SB_STRAVA_CLIENT_ID }}
@@ -329,15 +306,11 @@ jobs:
     if: needs.detect-changes.outputs.run_qsignups == 'true'
     environment: ${{ github.event.inputs.environment || github.ref_name }}
     env:
-      SAM_NO_CACHE: ${{ vars.SAM_NO_CACHE }}
       RUN_EXTEND_SCHEDULE: ${{ vars.RUN_EXTEND_SCHEDULE }}
       ENABLE_XRAY: ${{ vars.ENABLE_XRAY }}
       SAM_S3_BUCKET: ${{ needs.setup.outputs.sam_s3_bucket }}
     steps:
       - uses: actions/checkout@v6
-      - uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
@@ -345,9 +318,7 @@ jobs:
       - name: Build qsignups
         run: |
           set -euo pipefail
-          CACHE_FLAG=()
-          [[ "${SAM_NO_CACHE:-}" == "true" ]] && CACHE_FLAG=(--no-cached)
-          sam build -t qsignups/template.yaml --use-container "${CACHE_FLAG[@]}"
+          sam build -t qsignups/template.yaml --use-container --no-cached
       - name: Deploy qsignups
         env:
           QS_GOOGLE_CLIENT_ID: ${{ secrets.QS_GOOGLE_CLIENT_ID }}
@@ -399,8 +370,6 @@ jobs:
       needs.deploy-slackblast.result != 'failure' &&
       needs.deploy-qsignups.result != 'failure'
     environment: ${{ github.event.inputs.environment || github.ref_name }}
-    env:
-      SKIP_SMOKE_TEST: ${{ vars.SKIP_SMOKE_TEST }}
     steps:
       - uses: actions/checkout@v6
 
@@ -410,7 +379,6 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Smoke-test scheduled Lambdas
-        if: ${{ vars.SKIP_SMOKE_TEST != 'true' }}
         env:
           STAGE: ${{ vars.STAGE }}
           AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}

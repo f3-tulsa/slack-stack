@@ -2,7 +2,7 @@
 
 Slack app for **backblasts**, **preblasts**, optional **Strava** linking, email-to-post, custom fields, and FNG welcome flows. It uses the same shared database as PAXminer (per-region schemas plus a central `slackblast` schema).
 
-Built from **[slack-stack](../README.md)**. Deploy with `slackblast/template.yaml`, `./deploy.sh`, or GitHub Actions — see the root README for secrets, **`DB_ENCRYPTION_KEY`**, **`IMAGE_S3_BUCKET`**, and migration notes.
+Built from **[slack-stack](../README.md)**. Deploy with `slackblast/template.yaml`, `./deploy.sh`, or GitHub Actions. Secrets, **`DB_ENCRYPTION_KEY`**, **`IMAGE_S3_BUCKET`**, migration: **[docs/DEPLOY.md](../docs/DEPLOY.md)** and **[docs/MIGRATION.md](../docs/MIGRATION.md)**.
 
 ## Getting started (production)
 
@@ -22,6 +22,8 @@ Built from **[slack-stack](../README.md)**. Deploy with `slackblast/template.yam
 <img src="assets/backblast_demo.png" width="500" alt="Backblast form demo" />
 
 ## Local development
+
+Monorepo-wide testing and venv tips: **[docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md)**.
 
 Prerequisites: Python **3.12**, MySQL (or compatible), [ngrok](https://ngrok.com/) (or similar) for Slack callbacks.
 

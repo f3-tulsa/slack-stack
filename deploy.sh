@@ -21,13 +21,9 @@ BUILD_ONLY=false
 CONFIRM=false
 DO_BOOTSTRAP=false
 DO_SETUP_GITHUB=false
-DO_SKIP_SMOKE_TEST=false
 
-# SAM build: pass --no-cached only when SAM_NO_CACHE=true (from .env.deploy.*)
-SAM_BUILD_EXTRA=()
-if [[ "${SAM_NO_CACHE:-}" == "true" ]]; then
-  SAM_BUILD_EXTRA+=(--no-cached)
-fi
+# Always use uncached SAM builds (matches GitHub Actions)
+SAM_BUILD_EXTRA=(--no-cached)
 
 usage() {
   cat <<EOF
@@ -39,7 +35,6 @@ Options:
   --confirm              prompt for SAM changeset confirmation
   --bootstrap            deploy infra/template.bootstrap.yaml (OIDC + SAM artifact bucket), then continue
   --setup-github         create/update GitHub environment (same name as --env) with vars/secrets from this env file (needs gh CLI)
-  --skip-smoke-test      do not invoke PAXminer sync / Weaselbot achievements after deploy (token DB upsert waits for schedule)
 
 Env file: .env.deploy.<env>  (copy from .env.deploy.example)
 EOF
@@ -72,10 +67,6 @@ while [[ $# -gt 0 ]]; do
       DO_SETUP_GITHUB=true
       shift
       ;;
-    --skip-smoke-test)
-      DO_SKIP_SMOKE_TEST=true
-      shift
-      ;;
     -h|--help)
       usage
       ;;
@@ -97,8 +88,6 @@ fi
 set -a
 source "$ENV_FILE"
 set +a
-
-[[ "${SKIP_SMOKE_TEST:-}" == "true" ]] && DO_SKIP_SMOKE_TEST=true
 
 case "$ENV_NAME" in
   test|prod) ;;
@@ -378,7 +367,6 @@ log_receipt() {
   echo "Build only: ${BUILD_ONLY}"
   echo "Bootstrap: ${DO_BOOTSTRAP}"
   echo "Setup GitHub: ${DO_SETUP_GITHUB}"
-  echo "Skip smoke test: ${DO_SKIP_SMOKE_TEST}"
   echo ""
 } | tee "$RECEIPT_FILE"
 
@@ -677,10 +665,6 @@ fi
 
 run_smoke_test_lambdas() {
   [[ "$BUILD_ONLY" == true ]] && return 0
-  [[ "$DO_SKIP_SMOKE_TEST" == true ]] && {
-    echo "Skipping post-deploy Lambda smoke test (SKIP_SMOKE_TEST or --skip-smoke-test)."
-    return 0
-  }
   if ! command -v jq >/dev/null 2>&1; then
     echo "WARN: jq not found; skipping smoke test (install jq or use CI)."
     return 0

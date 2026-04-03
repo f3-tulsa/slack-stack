@@ -54,9 +54,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
       - name: sam validate --lint
         run: |
           set -euo pipefail

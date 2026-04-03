@@ -1,18 +1,34 @@
 import json
-from datetime import date
+from datetime import date, datetime, timedelta
+from typing import List, Optional
 
 import constants
 from database import DbManager
-from database.orm.views import vwWeeklyEvents, vwAOsSort
+from database.orm.views import vwWeeklyEvents, vwAOsSort, vwMasterEvents
 from slack import actions, forms, inputs
 
 from utilities import list_to_dict
 
 
-def add_single_form(team_id, user_id, client, logger):
-
-    # list of AOs for dropdown
+def _aos_for_team(
+    team_id: str, allowed_ao_channel_ids: Optional[List[str]] = None
+) -> list[vwAOsSort]:
     aos: list[vwAOsSort] = DbManager.find_records(vwAOsSort, [vwAOsSort.team_id == team_id])
+    aos.sort(key=lambda x: x.ao_display_name.replace("The ", ""))
+    if allowed_ao_channel_ids is not None:
+        allow = set(allowed_ao_channel_ids)
+        aos = [a for a in aos if a.ao_channel_id in allow]
+    return aos
+
+
+def add_single_form(
+    team_id,
+    user_id,
+    client,
+    logger,
+    allowed_ao_channel_ids: Optional[List[str]] = None,
+):
+    aos = _aos_for_team(team_id, allowed_ao_channel_ids)
     ao_list = [ao.ao_display_name for ao in aos]
 
     ao_selector = inputs.ActionSelector(
@@ -75,10 +91,14 @@ def add_single_form(team_id, user_id, client, logger):
     except Exception as e:
         logger.error("Error publishing home tab: %s", e, exc_info=True)
 
-def add_recurring_form(team_id, user_id, client, logger):
-
-    # list of AOs for dropdown
-    aos: list[vwAOsSort] = DbManager.find_records(vwAOsSort, [vwAOsSort.team_id == team_id])
+def add_recurring_form(
+    team_id,
+    user_id,
+    client,
+    logger,
+    allowed_ao_channel_ids: Optional[List[str]] = None,
+):
+    aos = _aos_for_team(team_id, allowed_ao_channel_ids)
     ao_list = [ao.ao_display_name for ao in aos]
 
     ao_selector = inputs.ActionSelector(
@@ -121,42 +141,176 @@ def add_recurring_form(team_id, user_id, client, logger):
     except Exception as e:
         logger.error("Error publishing home tab: %s", e, exc_info=True)
 
-def edit_single_form(team_id, user_id, client, logger):
+def publish_single_event_edit_slots(
+    team_id, user_id, client, logger, ao_channel_id: str, ao_display_name: str
+):
+    """Q slot picker for editing a single (non-recurring) master event."""
+    events = DbManager.find_records(
+        vwMasterEvents,
+        [
+            vwMasterEvents.team_id == team_id,
+            vwMasterEvents.ao_channel_id == ao_channel_id,
+            vwMasterEvents.event_date > datetime.now(tz=constants.app_timezone()),
+            vwMasterEvents.event_date
+            <= date.today() + timedelta(weeks=constants.EVENT_PICKER_WEEKS),
+        ],
+    )
+    events.sort(key=lambda e: (e.event_date, e.event_time or ""))
 
-    # list of AOs for dropdown
-    aos: list[vwAOsSort] = DbManager.find_records(vwAOsSort, [vwAOsSort.team_id == team_id])
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": "Please select a Q slot to edit for:"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"*{ao_display_name}*"}},
+        {"type": "divider"},
+    ]
+
+    for event in events[:90]:
+        event_date_time = datetime.strptime(
+            event.event_date.strftime("%Y-%m-%d") + " " + event.event_time, "%Y-%m-%d %H%M"
+        )
+        date_fmt = event_date_time.strftime("%a, %m-%d @ %H%M")
+        date_fmt_value = event_date_time.strftime("%Y-%m-%d %H:%M:%S")
+
+        if event.q_pax_id is None:
+            date_status = "OPEN!"
+        else:
+            date_status = event.q_pax_name
+
+        action_id = "edit_single_event_button"
+        value = date_fmt_value + "|" + event.ao_display_name
+
+        new_button = {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": f"{event.event_type} {date_fmt}: {date_status}",
+                        "emoji": True,
+                    },
+                    "action_id": action_id,
+                    "value": value,
+                }
+            ],
+        }
+        blocks.append(new_button)
+
+    blocks.append(forms.make_action_button_row([inputs.BACK_TO_MANAGE_BUTTON]))
+
+    try:
+        client.views_publish(user_id=user_id, view={"type": "home", "blocks": blocks})
+    except Exception as e:
+        logger.error("Error publishing home tab: %s", e, exc_info=True)
+
+
+def edit_single_form(
+    team_id,
+    user_id,
+    client,
+    logger,
+    allowed_ao_channel_ids: Optional[List[str]] = None,
+):
+    aos = _aos_for_team(team_id, allowed_ao_channel_ids)
+    if not aos:
+        logger.warning("edit_single_form: no AOs")
+        return
+    if len(aos) == 1:
+        publish_single_event_edit_slots(
+            team_id, user_id, client, logger, aos[0].ao_channel_id, aos[0].ao_display_name
+        )
+        return
+
     ao_list = [ao.ao_display_name for ao in aos]
     ao_id_list = [ao.ao_channel_id for ao in aos]
-    
+
     blocks = [
         inputs.SectionBlock(
-            label = "Please select an AO to edit:",
-            action = actions.EDIT_SINGLE_EVENT_AO_SELECT,
-            element = inputs.SelectorElement(
-                placeholder = "Select an AO",
-                options = inputs.as_selector_options(ao_list, ao_id_list)
-            )
+            label="Please select an AO to edit:",
+            action=actions.EDIT_SINGLE_EVENT_AO_SELECT,
+            element=inputs.SelectorElement(
+                placeholder="Select an AO",
+                options=inputs.as_selector_options(ao_list, ao_id_list),
+            ),
         ).as_form_field()
     ]
 
     blocks.append(forms.make_action_button_row([inputs.BACK_TO_MANAGE_BUTTON]))
 
-    # Publish view
     try:
         client.views_publish(
             user_id=user_id,
             view={
                 "type": "home",
-                "blocks": blocks
-            }
+                "blocks": blocks,
+            },
         )
     except Exception as e:
         logger.error("Error publishing home tab: %s", e, exc_info=True)
 
-def delete_single_form(team_id, user_id, client, logger):
+def publish_single_event_delete_slots(
+    team_id, user_id, client, logger, ao_channel_id: str, ao_display_name: str
+):
+    events = DbManager.find_records(
+        vwMasterEvents,
+        [
+            vwMasterEvents.team_id == team_id,
+            vwMasterEvents.ao_channel_id == ao_channel_id,
+            vwMasterEvents.event_date > datetime.now(tz=constants.app_timezone()) - timedelta(weeks=1),
+            vwMasterEvents.event_date
+            <= date.today() + timedelta(weeks=constants.EVENT_PICKER_WEEKS),
+        ],
+    )
+    events.sort(key=lambda e: (e.event_date, e.event_time or ""))
 
-    # list of AOs for dropdown
-    aos: list[vwAOsSort] = DbManager.find_records(vwAOsSort, [vwAOsSort.team_id == team_id])
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": "Please select a Q slot to delete for:"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"*{ao_display_name}*"}},
+        {"type": "divider"},
+    ]
+
+    for event in events[:90]:
+        event_date_time = datetime.strptime(
+            event.event_date.strftime("%Y-%m-%d") + " " + event.event_time, "%Y-%m-%d %H%M"
+        )
+        date_fmt = event_date_time.strftime("%a, %m-%d @ %H%M")
+        date_fmt_value = event_date_time.strftime("%Y-%m-%d %H:%M:%S")
+
+        if event.q_pax_id is None:
+            date_status = "OPEN!"
+        else:
+            date_status = event.q_pax_name
+
+        action_id = "delete_single_event_button"
+        value = date_fmt_value + "|" + event.ao_channel_id
+        new_button = inputs.ActionButton(
+            label=f"{date_fmt}: {date_status}", value=value, action=action_id
+        )
+        blocks.append(forms.make_action_button_row([new_button]))
+
+    blocks.append(forms.make_action_button_row([inputs.BACK_TO_MANAGE_BUTTON]))
+
+    try:
+        client.views_publish(user_id=user_id, view={"type": "home", "blocks": blocks})
+    except Exception as e:
+        logger.error("Error publishing home tab: %s", e, exc_info=True)
+
+
+def delete_single_form(
+    team_id,
+    user_id,
+    client,
+    logger,
+    allowed_ao_channel_ids: Optional[List[str]] = None,
+):
+    aos = _aos_for_team(team_id, allowed_ao_channel_ids)
+    if not aos:
+        logger.warning("delete_single_form: no AOs")
+        return
+    if len(aos) == 1:
+        publish_single_event_delete_slots(
+            team_id, user_id, client, logger, aos[0].ao_channel_id, aos[0].ao_display_name
+        )
+        return
 
     ao_options = []
     for ao in aos:
@@ -205,9 +359,16 @@ def delete_single_form(team_id, user_id, client, logger):
     except Exception as e:
         logger.error("Error publishing home tab: %s", e, exc_info=True)
 
-def select_recurring_form_for_edit(team_id, user_id, client, logger, input_data):
-
-    ao_channel_id = inputs.SECTION_SELECTOR.get_selected_value(input_data)
+def select_recurring_form_for_edit(
+    team_id,
+    user_id,
+    client,
+    logger,
+    input_data=None,
+    ao_channel_id: Optional[str] = None,
+):
+    if ao_channel_id is None:
+        ao_channel_id = inputs.SECTION_SELECTOR.get_selected_value(input_data)
 
     weekly_events: list[vwWeeklyEvents] = DbManager.find_records(vwWeeklyEvents, [
         vwWeeklyEvents.team_id == team_id, 
@@ -257,8 +418,16 @@ def select_recurring_form_for_edit(team_id, user_id, client, logger, input_data)
     except Exception as e:
         logger.error("Error publishing home tab: %s", e, exc_info=True)
 
-def select_recurring_form_for_delete(team_id, user_id, client, logger, input_data):
-    ao_channel_id = inputs.SECTION_SELECTOR.get_selected_value(input_data)
+def select_recurring_form_for_delete(
+    team_id,
+    user_id,
+    client,
+    logger,
+    input_data=None,
+    ao_channel_id: Optional[str] = None,
+):
+    if ao_channel_id is None:
+        ao_channel_id = inputs.SECTION_SELECTOR.get_selected_value(input_data)
     events = DbManager.find_records(vwWeeklyEvents, [ vwWeeklyEvents.team_id == team_id, vwWeeklyEvents.ao_channel_id == ao_channel_id])
 
     # Sort results_df
@@ -309,11 +478,18 @@ def select_recurring_form_for_delete(team_id, user_id, client, logger, input_dat
     except Exception as e:
         logger.error("Error publishing home tab: %s", e, exc_info=True)
 
-def edit_recurring_form(team_id, user_id, client, logger, input_data):
+def edit_recurring_form(
+    team_id,
+    user_id,
+    client,
+    logger,
+    input_data,
+    allowed_ao_channel_ids: Optional[List[str]] = None,
+):
     event_id = int(input_data)
     event: vwWeeklyEvents = DbManager.find_records(vwWeeklyEvents, [vwWeeklyEvents.id == event_id])[0]
 
-    aos: list[vwAOsSort] = DbManager.find_records(vwAOsSort, [vwAOsSort.team_id == team_id])
+    aos = _aos_for_team(team_id, allowed_ao_channel_ids)
     ao_list = [ao.ao_display_name for ao in aos]
 
     event_start_time = event.event_time[:2] + ':' + event.event_time[2:]
@@ -357,20 +533,41 @@ def edit_recurring_form(team_id, user_id, client, logger, input_data):
     except Exception as e:
         logger.error("Error publishing home tab: %s", e, exc_info=True)
 
-def make_ao_section_selector(team_id, user_id, client, logger, label, action):
-    # list of AOs for dropdown
-    aos: list[vwAOsSort] = DbManager.find_records(vwAOsSort, [vwAOsSort.team_id == team_id])
+def make_ao_section_selector(
+    team_id,
+    user_id,
+    client,
+    logger,
+    label,
+    action,
+    allowed_ao_channel_ids: Optional[List[str]] = None,
+    on_single_ao_callback=None,
+):
+    """
+    If exactly one AO is allowed, call on_single_ao_callback(team_id, user_id, client, logger, channel_id)
+    instead of showing a selector (e.g. jump straight to recurring list).
+    """
+    aos = _aos_for_team(team_id, allowed_ao_channel_ids)
+    if not aos:
+        logger.warning("make_ao_section_selector: no AOs")
+        return
+    if len(aos) == 1 and on_single_ao_callback:
+        on_single_ao_callback(team_id, user_id, client, logger, aos[0].ao_channel_id)
+        return
+
     ao_list = [ao.ao_display_name for ao in aos]
     ao_id_list = [ao.ao_channel_id for ao in aos]
-    
-    blocks = [inputs.SectionBlock(
-        label=label,
-        action=action,
-        element=inputs.SelectorElement(
-            placeholder="Select an AO",
-            options=inputs.as_selector_options(ao_list, ao_id_list)
-        )
-    ).as_form_field()]
+
+    blocks = [
+        inputs.SectionBlock(
+            label=label,
+            action=action,
+            element=inputs.SelectorElement(
+                placeholder="Select an AO",
+                options=inputs.as_selector_options(ao_list, ao_id_list),
+            ),
+        ).as_form_field()
+    ]
 
     blocks.append(forms.make_action_button_row([inputs.BACK_TO_MANAGE_BUTTON]))
 
@@ -379,8 +576,8 @@ def make_ao_section_selector(team_id, user_id, client, logger, label, action):
             user_id=user_id,
             view={
                 "type": "home",
-                "blocks": blocks
-            }
+                "blocks": blocks,
+            },
         )
     except Exception as e:
         logger.error("Error publishing home tab: %s", e, exc_info=True)
