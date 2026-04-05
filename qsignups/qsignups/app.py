@@ -48,14 +48,6 @@ from slack.handlers import (
 from slack import actions, inputs
 from field_encryption import require_encryption_key
 
-try:
-    from snapshot_restore_py import register_after_restore
-except ImportError:
-
-    def register_after_restore(func):
-        return func
-
-
 require_encryption_key()
 
 
@@ -329,7 +321,8 @@ def redirect_blocks(team_id: str, app_id: str):
     ]
 
 @app.event("app_mention")
-def handle_app_mentions(body, logger, client):
+def handle_app_mentions(ack, body, logger, client):
+    ack()
     logger.info(f"INFO: {body}")
     team_id = body["team_id"]
     app_id = body["api_app_id"]
@@ -366,7 +359,8 @@ def display_upcoming_schedule(ack):
 
 
 @app.event("app_home_opened")
-def update_home_tab(client, event, logger, context, body):
+def update_home_tab(ack, client, event, logger, context, body):
+    ack()
     logger.info(event)
     user_id = context["user_id"]
     team_id = context["team_id"]
@@ -1742,15 +1736,8 @@ def _warmup(log: logging.Logger) -> None:
         log.warning("Keep-warm: Fernet derivation failed", exc_info=True)
 
 
-@register_after_restore
-def _on_snapstart_restore() -> None:
-    """Dispose stale DB pool from snapshot and re-warm connections."""
-    from database import get_engine
-
-    try:
-        get_engine().dispose()
-    except Exception:
-        pass
+# Pre-warm during Lambda init (not counted against Slack's 3s ack); skip when not in Lambda (tests/local).
+if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
     _warmup(logger)
 
 

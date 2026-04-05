@@ -6,7 +6,7 @@ Part of **[slack-stack](../README.md)**. Deploy with `qsignups/template.yaml`, `
 
 ## Install (production)
 
-Use the OAuth install URL from your deployed API (CloudFormation output **`QSignupsApi`**) or from the Slack app’s **Install to Workspace** flow. If Slack shows a transient error, use “Try again” as usual.
+Use the OAuth install URL from your deployed stack (CloudFormation output **`QSignupsApi`** = Lambda **Function URL**; append **`/slack/install`**) or from the Slack app’s **Install to Workspace** flow. If Slack shows a transient error, use “Try again” as usual.
 
 ## Features
 
@@ -41,7 +41,7 @@ Workflow: [.github/workflows/deploy.yml](../.github/workflows/deploy.yml) (branc
 ## Local development
 
 1. Clone this monorepo and install [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html).
-2. Create a Slack app from **[manifest.json](manifest.json)**. For local dev, replace `__HOSTNAME__` with your ngrok base URL, or use **`python generate.py --hostname https://...`** to emit `generate/manifest.json`. After **`./deploy.sh`** from the repo root, use **`qsignups/manifest-{test|prod}.json`** (gitignored) for the deployed API URL.
+2. Create a Slack app from **[manifest.json](manifest.json)**. For local dev, replace `__HOSTNAME__` with your ngrok base URL, or use **`python generate.py --hostname https://...`** to emit `generate/manifest.json`. After **`./deploy.sh`** from the repo root, use **`qsignups/manifest-{test|prod}.json`** (gitignored) for the deployed **Function URL** base.
 
 3. From the **`qsignups/`** directory, create `env.json` for **`sam local start-api --env-vars`** (keys are **Lambda environment variable names**, logical resource id **`QSignupsFunction`**):
 

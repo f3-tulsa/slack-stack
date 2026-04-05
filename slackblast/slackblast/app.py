@@ -25,14 +25,6 @@ from utilities.helper_functions import (
 from utilities.routing import MAIN_MAPPER
 from utilities.slack.actions import LOADING_ID
 
-try:
-    from snapshot_restore_py import register_after_restore
-except ImportError:
-
-    def register_after_restore(func):
-        return func
-
-
 require_encryption_key()
 
 # Avoid duplicate CloudWatch lines: Lambda already attaches a root handler; Bolt can add more.
@@ -74,15 +66,8 @@ def _warmup(log: logging.Logger) -> None:
         log.warning("Keep-warm: region records load failed", exc_info=True)
 
 
-@register_after_restore
-def _on_snapstart_restore() -> None:
-    """Dispose stale DB pool from snapshot and re-warm connections."""
-    from utilities.database import get_engine
-
-    try:
-        get_engine().dispose()
-    except Exception:
-        pass
+# Pre-warm during Lambda init (not counted against Slack's 3s ack); skip when not in Lambda (tests/local).
+if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
     _warmup(logger)
 
 
@@ -90,12 +75,12 @@ def _lambda_invocation_kind(event: dict) -> str:
     """Best-effort label for CloudWatch filtering (API vs scheduled vs Strava)."""
     if not isinstance(event, dict):
         return "non_dict_event"
-    if event.get("path") == "/exchange_token":
+    if (event.get("path") or event.get("rawPath", "")) == "/exchange_token":
         return "strava_exchange_token"
     if event.get("source") == "aws.events" or event.get("detail-type"):
         return "eventbridge_scheduled"
     if event.get("requestContext") or event.get("httpMethod") or event.get("rawPath"):
-        return "api_gateway"
+        return "http_invoke"
     return "unknown"
 
 
@@ -103,7 +88,11 @@ def handler(event, context):
     logger.info(
         "Lambda invocation kind=%s path=%s request_id=%s",
         _lambda_invocation_kind(event),
-        event.get("path") if isinstance(event, dict) else None,
+        (
+            (event.get("path") or event.get("rawPath"))
+            if isinstance(event, dict)
+            else None
+        ),
         getattr(context, "aws_request_id", None) if context else None,
     )
     if isinstance(event, dict) and (
@@ -111,8 +100,10 @@ def handler(event, context):
     ):
         _warmup(logger)
         return {"statusCode": 200, "body": "warm"}
-    if event.get("path") == "/exchange_token":
-        return strava.strava_exchange_token(event, context)
+    if isinstance(event, dict):
+        path = event.get("path") or event.get("rawPath", "")
+        if path == "/exchange_token":
+            return strava.strava_exchange_token(event, context)
     slack_handler = SlackRequestHandler(app=app)
     return slack_handler.handle(event, context)
 

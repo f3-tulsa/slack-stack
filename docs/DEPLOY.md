@@ -11,7 +11,7 @@ This document covers first-time setup, environment variables, Slack OAuth, datab
 - [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
 - Python **3.12** (matches Lambda runtimes) and **Python 3** on your PATH (used by `deploy.sh` for manifest substitution)
 - **Docker** (required to build **PAXminer** and **Weaselbot** container images when deploying `paxminer`, `weaselbot`, or `all`)
-- AWS account with permissions for Lambda, API Gateway, CloudFormation, IAM, S3, ECR, EventBridge
+- AWS account with permissions for Lambda (including **Function URLs**), CloudFormation, IAM, S3, ECR, EventBridge
 - [GitHub CLI `gh`](https://cli.github.com/) (optional; required only for `./deploy.sh --setup-github`)
 
 ## Environment variables
@@ -105,9 +105,9 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 
 Bolt resolves the workspace bot token from the **`slack_installations`** table (keyed by `client_id` + `team_id`), not from the placeholder `SLACK_BOT_TOKEN` parameter alone.
 
-1. Deploy the stack and note the API base URL from CloudFormation (same base as **`SlackblastApi`** / **`QSignupsApi`**, e.g. `https://xxxx.execute-api.us-east-1.amazonaws.com/Prod`).
-2. In each Slack app’s settings, add an **OAuth Redirect URL**: `{API_BASE}/slack/oauth_redirect` (Bolt’s OAuth callback path; must match API Gateway).
-3. Open **`{API_BASE}/slack/install`** in a browser while signed into Slack and complete the install for your workspace. That writes **`slack_installations`** (and related rows) in `slackblast_<stage>` / `qsignups_<stage>`.
+1. Deploy the stack and note the **base URL** from CloudFormation outputs **`SlackblastApi`** / **`QSignupsApi`** (Lambda **Function URLs**, e.g. `https://xxxx.lambda-url.us-east-1.on.aws/` — no API Gateway `/Prod/` stage).
+2. In each Slack app’s settings, add an **OAuth Redirect URL**: `{FUNCTION_URL_BASE}/slack/oauth_redirect` (Bolt’s OAuth callback path; must match the deployed Function URL + path).
+3. Open **`{FUNCTION_URL_BASE}/slack/install`** in a browser while signed into Slack and complete the install for your workspace. That writes **`slack_installations`** (and related rows) in `slackblast_<stage>` / `qsignups_<stage>`.
 
 If you skip this, slash commands and modals can fail (e.g. missing auth, `expired_trigger_id` on cold starts, or `lambda:InvokeFunction` errors until the lazy listener can run with a valid client).
 
@@ -252,7 +252,7 @@ Replace `<stage>` with `test` or `prod`. Then run `./deploy.sh` or push to CI. E
 aws s3 cp slackblast/assets/ s3://YOUR_IMAGE_BUCKET/ --recursive
 ```
 
-5. After deploy, the script prints CloudFormation outputs, a **per-stack summary** (success / failure), and writes a **receipt** to `receipts/deploy-{STAGE}-{timestamp}.txt` (same output as the console; gitignored). It also generates **stage-specific Slack manifests** `manifest-{STAGE}.json` under each app directory for the stacks that deployed successfully — **slackblast** and **qsignups** manifests include the deployed API Gateway base URL (replace `__HOSTNAME__`). Use those JSON files when creating or updating Slack apps at [api.slack.com](https://api.slack.com/apps). Committed templates are the base `manifest.json` files in each app folder.
+5. After deploy, the script prints CloudFormation outputs, a **per-stack summary** (success / failure), and writes a **receipt** to `receipts/deploy-{STAGE}-{timestamp}.txt` (same output as the console; gitignored). It also generates **stage-specific Slack manifests** `manifest-{STAGE}.json` under each app directory for the stacks that deployed successfully — **slackblast** and **qsignups** manifests include the deployed Lambda **Function URL** base (replace `__HOSTNAME__`). Use those JSON files when creating or updating Slack apps at [api.slack.com](https://api.slack.com/apps). Committed templates are the base `manifest.json` files in each app folder.
 
 ## Deploy (GitHub Actions)
 
@@ -356,7 +356,7 @@ Create environments **`test`** and **`prod`** in your repo settings (or run `./d
 
 1. In IAM, add an **OIDC identity provider** for `https://token.actions.githubusercontent.com` (audience `sts.amazonaws.com`).
 2. Create a role trusted for `sts:AssumeRoleWithWebIdentity` with a condition limiting `sub` to this repository (e.g. `repo:OWNER/REPO:*` or stricter branch claims).
-3. Attach policies sufficient for SAM: Lambda, API Gateway, CloudFormation, IAM (for generated roles), S3, ECR, EventBridge.
+3. Attach policies sufficient for SAM: Lambda (including Function URL management), CloudFormation, IAM (for generated roles), S3, ECR, EventBridge.
 4. Set the role ARN as secret **`AWS_ROLE_ARN`** in both GitHub environments.
 
 ## Database encryption

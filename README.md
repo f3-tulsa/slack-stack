@@ -13,7 +13,7 @@ Each app has its own `template.yaml`; deploy order between stacks is flexible.
 
 ## Quick start
 
-1. **Prerequisites:** [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html), [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html), **Python 3.12**, **Docker** (for PAXminer & Weaselbot images), AWS account access for Lambda, API Gateway, CloudFormation, IAM, S3, ECR, EventBridge.
+1. **Prerequisites:** [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html), [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html), **Python 3.12**, **Docker** (for PAXminer & Weaselbot images), AWS account access for Lambda (including Function URLs), CloudFormation, IAM, S3, ECR, EventBridge.
 2. **Configure deploy:** Copy [`.env.deploy.example`](.env.deploy.example) to `.env.deploy.test` or `.env.deploy.prod` and fill in values.
 3. **Deploy:** See **[docs/DEPLOY.md](docs/DEPLOY.md)** for bootstrap, `./deploy.sh`, GitHub Actions, OAuth, and secrets.
 4. **Migrate existing data:** **[docs/MIGRATION.md](docs/MIGRATION.md)** when moving from another MySQL host.

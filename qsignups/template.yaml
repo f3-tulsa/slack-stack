@@ -118,7 +118,7 @@ Parameters:
       extend-schedule custom resource to run. Default "no-extend" skips re-invocation on
       routine deploys; set RUN_EXTEND_SCHEDULE=true in deploy env to pass a new nonce.
   EnableXRay:
-    Description: Enable AWS X-Ray on Lambda and API (extra cost beyond free tier); set ENABLE_XRAY=true in deploy env to turn on
+    Description: Enable AWS X-Ray on Lambda (extra cost beyond free tier); set ENABLE_XRAY=true in deploy env to turn on
     Type: String
     Default: "false"
     AllowedValues:
@@ -151,8 +151,6 @@ Globals:
     Timeout: 10
     MemorySize: 256
     Tracing: !If [XRayEnabled, Active, PassThrough]
-  Api:
-    TracingEnabled: !If [XRayEnabled, true, false]
 
 Mappings:
   StagesMap:
@@ -167,9 +165,8 @@ Resources:
   QSignupsFunction:
     Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
     Properties:
-      AutoPublishAlias: live
-      SnapStart:
-        ApplyOn: PublishedVersions
+      FunctionUrlConfig:
+        AuthType: NONE
       CodeUri: qsignups/
       Handler: app.handler
       Runtime: python3.12
@@ -188,21 +185,6 @@ Resources:
       Timeout: 400
       MemorySize: 512
       Events:
-        QSingups:
-          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
-          Properties:
-            Path: /slack/events
-            Method: post
-        QSignupsInstall:
-          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
-          Properties:
-            Path: /slack/install
-            Method: get
-        QSignupsOAuthRedirect:
-          Type: Api
-          Properties:
-            Path: /slack/oauth_redirect
-            Method: get
         QSignupsKeepWarm:
           Type: ScheduleV2
           Properties:
@@ -327,12 +309,9 @@ Resources:
       DeployNonce: !Ref ExtendScheduleDeployNonce
 
 Outputs:
-  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
-  # Find out more about other implicit resources you can reference within SAM
-  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
   QSignupsApi:
-    Description: API Gateway endpoint URL for Prod stage for QSignups function
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/slack/events/"
+    Description: Lambda Function URL for QSignups (append /slack/events, /slack/install, /slack/oauth_redirect for Slack)
+    Value: !GetAtt QSignupsFunctionUrl.FunctionUrl
   QSignupsFunction:
     Description: QSignups Lambda Function ARN
     Value: !GetAtt QSignupsFunction.Arn

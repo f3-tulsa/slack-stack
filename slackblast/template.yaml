@@ -91,7 +91,7 @@ Parameters:
       - "true"
       - "false"
   EnableXRay:
-    Description: Enable AWS X-Ray on Lambda and API (extra cost beyond free tier); set ENABLE_XRAY=true in deploy env to turn on
+    Description: Enable AWS X-Ray on Lambda (extra cost beyond free tier); set ENABLE_XRAY=true in deploy env to turn on
     Type: String
     Default: "false"
     AllowedValues:
@@ -106,8 +106,6 @@ Globals:
     Timeout: 10
     MemorySize: 256
     Tracing: !If [XRayEnabled, Active, PassThrough]
-  Api:
-    TracingEnabled: !If [XRayEnabled, true, false]
 
 Mappings:
   StagesMap:
@@ -146,9 +144,8 @@ Resources:
   SlackblastFunction:
     Type: AWS::Serverless::Function
     Properties:
-      AutoPublishAlias: live
-      SnapStart:
-        ApplyOn: PublishedVersions
+      FunctionUrlConfig:
+        AuthType: NONE
       CodeUri: slackblast/
       Handler: app.handler
       Runtime: python3.12
@@ -173,21 +170,6 @@ Resources:
       Timeout: 400
       MemorySize: 512
       Events:
-        Slackblast:
-          Type: Api
-          Properties:
-            Path: /slack/events
-            Method: post
-        SlackblastInstall:
-          Type: Api
-          Properties:
-            Path: /slack/install
-            Method: get
-        SlackblastOAuthRedirect:
-          Type: Api
-          Properties:
-            Path: /slack/oauth_redirect
-            Method: get
         SlackblastKeepWarm:
           Type: ScheduleV2
           Properties:
@@ -196,11 +178,6 @@ Resources:
               - StagesMap
               - Ref: Stage
               - KeepWarmName
-        StravaExchange:
-          Type: Api
-          Properties:
-            Path: /exchange_token
-            Method: get
       Environment:
         Variables:
           SLACK_BOT_TOKEN: !Ref SlackToken
@@ -230,8 +207,8 @@ Resources:
 
 Outputs:
   SlackblastApi:
-    Description: API Gateway endpoint URL for Prod stage for Slackblast function
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/slack/events/"
+    Description: Lambda Function URL for Slackblast (append /slack/events, /slack/install, /slack/oauth_redirect, /exchange_token)
+    Value: !GetAtt SlackblastFunctionUrl.FunctionUrl
   SlackblastFunction:
     Description: Slackblast Lambda Function ARN
     Value: !GetAtt SlackblastFunction.Arn

@@ -2,7 +2,7 @@
 
 ## Slack / Bolt
 
-- **`expired_trigger_id` / cold start:** First interaction after idle may fail; user retries usually succeed. Mitigations: provisioned concurrency, warmer pings, or lazy-listener self-invoke (already used in zip apps).
+- **`expired_trigger_id` / cold start:** First interaction after idle may fail; user retries usually succeed. Mitigations: **Lambda Function URLs** (less hop latency than API Gateway), EventBridge keep-warm, module-init DB/Fernet warmup, lazy-listener self-invoke (zip apps), or provisioned concurrency if still tight on Slack’s 3s window.
 - **OAuth tables missing:** Run the one-shot **`CREATE_OAUTH_TABLES`** flag for that app/stack after first deploy (see [DEPLOY.md](DEPLOY.md)).
 
 ## Lambda
