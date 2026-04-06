@@ -15,7 +15,6 @@ from utilities.constants import LOCAL_DEVELOPMENT
 from utilities.database.orm import Region
 from utilities.field_encryption import require_encryption_key
 from utilities.helper_functions import (
-    REGION_RECORDS,
     get_oauth_flow,
     get_region_record,
     get_request_type,
@@ -43,7 +42,7 @@ app = App(
 
 
 def _warmup(log: logging.Logger) -> None:
-    """Pre-warm DB pool, Fernet derivation, and region cache for EventBridge keep-warm."""
+    """Pre-warm DB pool and Fernet derivation for EventBridge keep-warm."""
     from utilities.database import get_engine
     from utilities.field_encryption import _get_fernet, require_encryption_key
 
@@ -59,11 +58,7 @@ def _warmup(log: logging.Logger) -> None:
         log.info("Keep-warm: Fernet key derived")
     except Exception:
         log.warning("Keep-warm: Fernet derivation failed", exc_info=True)
-    try:
-        update_local_region_records()
-        log.info("Keep-warm: region records loaded (%d)", len(REGION_RECORDS))
-    except Exception:
-        log.warning("Keep-warm: region records load failed", exc_info=True)
+    # Region rows are loaded lazily per team_id in get_region_record (no full-table scan).
 
 
 # Pre-warm during Lambda init (not counted against Slack's 3s ack); skip when not in Lambda (tests/local).
@@ -184,4 +179,4 @@ app.event(MATCH_ALL_PATTERN)(*ARGS, **LAZY_KWARGS)
 
 if __name__ == "__main__":
     app.start(3000)
-    update_local_region_records()
+    update_local_region_records()  # clear cache on local dev restart

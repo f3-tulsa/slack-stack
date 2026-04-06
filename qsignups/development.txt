@@ -57,10 +57,12 @@ This will generate three files in an generate subfolder:
 You'll need the Signing Secret and a Bot Token.  Get the Signing Secret from the App Info,
 and the Bot Token from the OAuth section.
 
-4.  Create the database tables in your MySQL database.
-4a. Create a new db schema.
-4b. Create the tables from sql scripts in db/tables
-4c. In order, apply any scripts from db/scripts folder
+4.  Create the database tables in your MySQL / TiDB database.
+4a. Create a new database (schema). Deployed names often follow `{app}_{stage}` (e.g. `qsignups_test`, `qsignups_prod`); set `ADMIN_DATABASE_SCHEMA` / your connection to match.
+4b. In the TiDB SQL console (or mysql client), run `USE your_schema;` first, or edit the `USE qsignups_test;` line at the top of each SQL file to match your schema.
+4c. Create the base tables from the scripts under `qsignups/db/tables/` (run each file in order as needed for a fresh install).
+4d. In order, apply incremental migrations from `qsignups/db/scripts/` (001, 002, …). Each script starts with `USE qsignups_test;` — change that line if your schema name differs.
+4e. Create or replace views from `qsignups/db/views/` after base tables exist.
 
 5. Create your Environment file.  Using environment.json as a template, create a second JSON file
 and set all variables as appropriate (DB connection parameters from step #4, Slack parameters from step #3).
@@ -74,8 +76,10 @@ The second file - this now has the environment variables you will need to run th
 
 7. Launch the Bolt app, after updating the environment.
 
+The app entrypoint lives under `qsignups/qsignups/` (see that package's README for `sam local` and env). For a classic local Bolt run from the qsignups package directory:
+
 source ./generate/setup
-python app.py
+python qsignups/app.py
 
 You should see "Bolt app is running! (development server)"
 

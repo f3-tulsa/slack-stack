@@ -4,7 +4,7 @@ import os
 import re
 from datetime import datetime
 from logging import Logger
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pytz
 from slack_bolt.oauth.oauth_flow import OAuthFlow
@@ -508,10 +508,13 @@ def replace_slack_user_ids(text: str, client, logger, region_record: Region = No
 
 
 def get_region_record(team_id: str, body, context, client, logger) -> Region:
-    if not REGION_RECORDS:
-        update_local_region_records()
-
     region_record = safe_get(REGION_RECORDS, team_id)
+    if region_record is None:
+        rows = DbManager.find_records(Region, [Region.team_id == team_id])
+        if rows:
+            region_record = rows[0]
+            REGION_RECORDS[team_id] = region_record
+
     team_domain = safe_get(body, "team", "domain")
 
     if not region_record:
@@ -566,11 +569,18 @@ def get_request_type(body: dict) -> Tuple[str]:
         return ("unknown", "unknown")
 
 
-def update_local_region_records() -> None:
-    _LOG.info("Updating local region records...")
-    region_records: List[Region] = DbManager.find_records(Region, filters=[True])
+def update_local_region_records(team_id: Optional[str] = None) -> None:
+    """Drop cached Region row(s) so the next get_region_record loads from the database.
+
+    Pass team_id to invalidate one workspace; omit to clear the entire cache.
+    """
     global REGION_RECORDS
-    REGION_RECORDS = {region.team_id: region for region in region_records}
+    if team_id is not None:
+        REGION_RECORDS.pop(team_id, None)
+        _LOG.debug("Invalidated region cache for team_id=%s", team_id)
+    else:
+        REGION_RECORDS.clear()
+        _LOG.info("Cleared region cache (all teams)")
 
 
 def parse_rich_block(

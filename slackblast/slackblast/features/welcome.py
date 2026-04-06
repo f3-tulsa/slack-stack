@@ -80,7 +80,7 @@ def handle_welcome_message_config_post(
         id=context["team_id"],
         fields=fields,
     )
-    update_local_region_records()
+    update_local_region_records(context["team_id"])
     logger.info(json.dumps({"event_type": "successful_config_update", "team_name": region_record.workspace_name}))
 
 

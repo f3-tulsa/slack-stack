@@ -212,4 +212,4 @@ def handle_config_form(body: dict, client: WebClient, logger: Logger, context: d
         id=context["team_id"],
         fields=fields,
     )
-    update_local_region_records()
+    update_local_region_records(context["team_id"])

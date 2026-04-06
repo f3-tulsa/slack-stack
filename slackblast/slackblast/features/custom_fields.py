@@ -45,7 +45,7 @@ def build_custom_field_menu(
             id=region_record.team_id,
             fields={"custom_fields": custom_fields},
         )
-        update_local_region_records()
+        update_local_region_records(region_record.team_id)
 
     for custom_field in custom_fields.values():
         label = f"Name: {custom_field['name']}\nType: {custom_field['type']}"
@@ -186,7 +186,7 @@ def delete_custom_field(body: dict, client: WebClient, logger: Logger, context: 
     custom_fields: dict = region_record.custom_fields
     custom_fields.pop(custom_field_name)
     DbManager.update_record(cls=Region, id=team_id, fields={"custom_fields": custom_fields})
-    update_local_region_records()
+    update_local_region_records(team_id)
     build_custom_field_menu(body, client, logger, context, region_record, update_view_id=view_id)
 
 
@@ -206,7 +206,7 @@ def handle_custom_field_add(body: dict, client: WebClient, logger: Logger, conte
     }
 
     DbManager.update_record(cls=Region, id=region_record.team_id, fields={Region.custom_fields: custom_fields})
-    update_local_region_records()
+    update_local_region_records(region_record.team_id)
 
     logger.info(
         json.dumps(
@@ -233,4 +233,4 @@ def handle_custom_field_menu(body: dict, client: WebClient, logger: Logger, cont
             )
 
     DbManager.update_record(cls=Region, id=region_record.team_id, fields={Region.custom_fields: custom_fields})
-    update_local_region_records()
+    update_local_region_records(region_record.team_id)

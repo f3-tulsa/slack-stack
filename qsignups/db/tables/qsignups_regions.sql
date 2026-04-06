@@ -1,3 +1,6 @@
+-- Change to your target schema before running (e.g. qsignups_prod)
+USE qsignups_test;
+
 CREATE TABLE `qsignups_regions` (
   `current_week_weinke` longtext CHARACTER SET utf8 COLLATE utf8_general_ci,
   `next_week_weinke` longtext CHARACTER SET utf8 COLLATE utf8_general_ci,

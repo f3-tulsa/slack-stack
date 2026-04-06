@@ -124,7 +124,7 @@ def handle_config_email_post(body: dict, client: WebClient, logger: Logger, cont
         id=context["team_id"],
         fields=fields,
     )
-    update_local_region_records()
+    update_local_region_records(context["team_id"])
     logger.info(json.dumps({"event_type": "successful_config_update", "team_name": region_record.workspace_name}))
 
 
@@ -144,7 +144,7 @@ def handle_config_general_post(body: dict, client: WebClient, logger: Logger, co
         id=context["team_id"],
         fields=fields,
     )
-    update_local_region_records()
+    update_local_region_records(context["team_id"])
     logger.info(json.dumps({"event_type": "successful_config_update", "team_name": region_record.workspace_name}))
 
 

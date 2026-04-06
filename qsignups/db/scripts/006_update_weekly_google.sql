@@ -1,7 +1,10 @@
-ALTER TABLE `qsignup`.`qsignups_weekly`
+-- Change to your target schema before running (e.g. qsignups_prod)
+USE qsignups_test;
+
+ALTER TABLE `qsignups_weekly`
 ADD COLUMN `google_calendar_id` VARCHAR(100) NULL AFTER `team_id`;
 
-CREATE TABLE `qsignup`.`qsignups_features` (
+CREATE TABLE `qsignups_features` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `region_id` INT NOT NULL,
   `feature` VARCHAR(45) NOT NULL,
@@ -11,6 +14,6 @@ CREATE TABLE `qsignup`.`qsignups_features` (
   PRIMARY KEY (`id`),
   CONSTRAINT `region_id_fk`
     FOREIGN KEY (`region_id`)
-    REFERENCES `qsignup`.`qsignups_regions` (`id`)
+    REFERENCES `qsignups_regions` (`id`)
     ON DELETE NO ACTION
     ON UPDATE NO ACTION);

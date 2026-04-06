@@ -1,3 +1,6 @@
+-- Change to your target schema before running (e.g. qsignups_prod)
+USE qsignups_test;
+
 CREATE TABLE `qsignups_aos` (
   `ao_channel_id` varchar(255) CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
   `ao_display_name` varchar(255) CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,

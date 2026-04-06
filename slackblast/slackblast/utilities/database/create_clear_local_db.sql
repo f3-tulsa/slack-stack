@@ -50,7 +50,8 @@ CREATE TABLE slackblast.`regions` (
   `postie_format` tinyint(1) DEFAULT 1,
   `created` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `regions_team_id_idx` (`team_id`)
 ) ENGINE = InnoDB AUTO_INCREMENT = 34 DEFAULT CHARSET = utf8mb3;
 -- Create or replace f3devregion tables
 DROP TABLE IF EXISTS f3devregion.beatdowns;

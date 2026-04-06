@@ -1,3 +1,6 @@
+-- Change to your target schema before running (e.g. qsignups_prod)
+USE qsignups_test;
+
 CREATE OR REPLACE VIEW vw_weekly_events AS
 SELECT w.*, a.ao_display_name
 FROM qsignups_weekly w
