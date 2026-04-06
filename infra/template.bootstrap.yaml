@@ -213,6 +213,10 @@ Resources:
               - lambda:TagResource
               - lambda:UntagResource
               - lambda:ListTags
+              - lambda:CreateFunctionUrlConfig
+              - lambda:UpdateFunctionUrlConfig
+              - lambda:DeleteFunctionUrlConfig
+              - lambda:GetFunctionUrlConfig
             Resource:
               - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:paxminer-*"
               - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:weaselbot-*"
