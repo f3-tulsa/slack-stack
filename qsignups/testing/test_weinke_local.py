@@ -57,6 +57,7 @@ def test_grid_pivot() -> None:
     m1.event_date = date(2025, 6, 4)  # Wed in week Jun 2–8, 2025
     m1.event_time = "0530"
     m1.q_pax_name = None
+    m1.event_type = None
     m1.event_special = None
 
     with patch.object(w.DbManager, "find_records", return_value=[m1]):

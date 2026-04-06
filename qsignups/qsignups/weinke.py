@@ -202,8 +202,9 @@ def _styled_cell_lines(
     col: int,
 ) -> List[StyledLine]:
     """
-    Wrapped lines with per-line font: bold for AO names, day/date headers, Q names;
-    regular for location subtitles and event times.
+    Wrapped lines with per-line font: bold for AO names, day/date headers, and the
+    first line of each schedule cell (Q name or OPEN!); regular for subtitles,
+    event type, event special, and time.
     """
     if not cell_text.strip():
         return [StyledLine("", font_reg)]
@@ -243,7 +244,8 @@ def _styled_cell_lines(
             out.extend(_wrap_paragraph_styled(draw, tail.strip(), font_reg, max_text_width))
         return out if out else [StyledLine("", font_reg)]
 
-    # Data cells: Q / special bold; last line if 4-digit time is regular. Supports "\n\n" merged blocks.
+    # Data cells: first line of each event block (Q name or OPEN!) bold; event_type, special, time regular.
+    # Supports "\n\n" merged blocks (multiple events in one cell).
     blocks = cell_text.split("\n\n")
     for bi, block in enumerate(blocks):
         if bi > 0:
@@ -252,14 +254,11 @@ def _styled_cell_lines(
         if not block:
             continue
         raw_lines = block.split("\n")
-        time_idx: Optional[int] = None
-        if raw_lines and re.match(r"^\d{4}$", raw_lines[-1].strip()):
-            time_idx = len(raw_lines) - 1
         for i, line in enumerate(raw_lines):
             if not line.strip() and i < len(raw_lines) - 1:
                 out.append(StyledLine("", font_reg))
                 continue
-            f = font_reg if time_idx is not None and i == time_idx else font_bold
+            f = font_bold if i == 0 else font_reg
             out.extend(_wrap_paragraph_styled(draw, line, f, max_text_width))
     return out if out else [StyledLine("", font_reg)]
 
@@ -336,10 +335,15 @@ def _master_row_label(m: Master) -> str:
         q = "OPEN!"
     else:
         q = re.sub(r"\s\(([\s\S]*?)\)", "", str(q))
+    et = str(m.event_type).strip() if m.event_type else ""
     t = str(m.event_time) if m.event_time is not None else ""
+    parts = [q]
+    if et:
+        parts.append(et)
     if m.event_special:
-        return f"{q}\n{m.event_special}\n{t}"
-    return f"{q}\n{t}"
+        parts.append(m.event_special)
+    parts.append(t)
+    return "\n".join(parts)
 
 
 def render_table_png(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> bytes:

@@ -83,6 +83,22 @@ def upload_weinke_s3(weinke_name: str) -> str:
     return f"https://{bucket}.s3.amazonaws.com/{key}"
 
 
+def _weinke_cell_label(row: pd.Series) -> str:
+    """Match qsignups/weinke._master_row_label: Q name, event type, optional special, time."""
+    q = str(row["q_pax_name"])
+    et_raw = row.get("event_type")
+    et = str(et_raw).strip() if pd.notna(et_raw) else ""
+    t = str(row["event_time"]) if pd.notna(row["event_time"]) else ""
+    parts = [q]
+    if et:
+        parts.append(et)
+    spec = row.get("event_special")
+    if spec is not None and pd.notna(spec) and str(spec).strip():
+        parts.append(str(spec))
+    parts.append(t)
+    return "\n".join(parts)
+
+
 def highlight_cells(s):
     highlight_cells_list = []
     for cell in s:
@@ -191,15 +207,7 @@ def main() -> None:
 
             df.loc[df["q_pax_name"].isna(), "q_pax_name"] = "OPEN!"
             df["q_pax_name"].replace(r"\s\(([\s\S]*?\))", "", regex=True, inplace=True)
-            df["label"] = df["q_pax_name"] + "\n" + df["event_time"].astype(str)
-            spec_ok = df["event_special"].notna()
-            df.loc[spec_ok, "label"] = (
-                df.loc[spec_ok, "q_pax_name"].astype(str)
-                + "\n"
-                + df.loc[spec_ok, "event_special"].astype(str)
-                + "\n"
-                + df.loc[spec_ok, "event_time"].astype(str)
-            )
+            df["label"] = df.apply(_weinke_cell_label, axis=1)
             df["AO\nLocation"] = df["ao_display_name"] + "\n" + df["ao_location_subtitle"]
             df["AO\nLocation2"] = df["AO\nLocation"].str.replace("The ", "")
 
