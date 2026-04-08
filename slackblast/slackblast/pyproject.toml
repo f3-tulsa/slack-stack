@@ -37,7 +37,7 @@ pymysql = "^1.1.1"
 sqlalchemy = "^2.0.28"
 requests = "^2.32.0"
 requests-oauthlib = "^2.0.0"
-pillow = "^12.1.1"
+pillow = "^12.2.0"
 pytz = ">=2024.1"
 
 [tool.poetry.group.dev.dependencies]
