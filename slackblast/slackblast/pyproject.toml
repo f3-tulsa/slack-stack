@@ -31,7 +31,7 @@ package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.12"
-slack-bolt = "^1.18.1"
+slack-bolt = "^1.28.0"
 cryptography = "^46.0.6"
 pymysql = "^1.1.1"
 sqlalchemy = "^2.0.28"
