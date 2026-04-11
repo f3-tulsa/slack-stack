@@ -7,6 +7,7 @@ from logging import Logger
 import boto3
 import requests
 from slack_sdk.web import WebClient
+from sqlalchemy.exc import IntegrityError
 
 from utilities import constants, sendmail
 from utilities.database import DbManager
@@ -695,7 +696,26 @@ COUNT: {count}
                     }
                 )
             )
+        except IntegrityError as e:
+            logger.error("Duplicate backblast: %s", e, exc_info=True)
+            client.chat_postMessage(
+                channel=context["user_id"],
+                text="WARNING: The backblast you just posted was not saved to the database. There is already a "
+                "backblast for this AO and Q on this date. Please edit the backblast using the `Edit this backblast`"
+                " button. Thanks!",
+            )
+            logger.info(json.dumps({"event_type": "failed_db_insert", "team_name": region_record.workspace_name}))
+        except Exception as e:
+            logger.error("Error saving backblast to database: %s", e, exc_info=True)
+            client.chat_postMessage(
+                channel=context["user_id"],
+                text=f"WARNING: The backblast you just posted was not saved to the database. "
+                f"Error: {type(e).__name__} - {e}\n"
+                f"Please try again or contact your region's Slackblast admin.",
+            )
+            logger.info(json.dumps({"event_type": "failed_db_insert", "team_name": region_record.workspace_name}))
 
+        try:
             paxminer_log_channel = get_channel_id(name="paxminer_logs", client=client, logger=logger)
             if paxminer_log_channel:
                 import_or_edit = "imported" if create_or_edit == "create" else "edited"
@@ -705,14 +725,7 @@ COUNT: {count}
                     f"\nLink: {res_link['permalink']}",
                 )
         except Exception as e:
-            logger.error("Error saving backblast to database: %s", e, exc_info=True)
-            client.chat_postMessage(
-                channel=context["user_id"],
-                text="WARNING: The backblast you just posted was not saved to the database. There is already a "
-                "backblast for this AO and Q on this date. Please edit the backblast using the `Edit this backblast`"
-                "button. Thanks!",
-            )
-            logger.info(json.dumps({"event_type": "failed_db_insert", "team_name": region_record.workspace_name}))
+            logger.error("Error posting to paxminer_logs channel: %s", e, exc_info=True)
 
     for file in file_send_list:
         try:
