@@ -1,5 +1,5 @@
 Pillow>=12.1.1,<13
-cryptography>=46.0.6
+cryptography>=46.0.7
 slack_sdk>=3.27.0,<4
 slack_bolt>=1.18.0,<2
 pymysql>=1.1.1,<2
