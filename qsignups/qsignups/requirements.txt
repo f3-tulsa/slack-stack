@@ -3,6 +3,6 @@ cryptography>=46.0.6
 slack_sdk>=3.27.0,<4
 slack_bolt>=1.18.0,<2
 pymysql>=1.1.1,<2
-pytz>=2024.1
+pytz>=2026.1.post1
 SQLAlchemy>=2.0.36,<3
 urllib3>=2.2.2,<3
