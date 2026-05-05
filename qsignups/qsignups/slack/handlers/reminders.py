@@ -92,8 +92,9 @@ def _region_timezone(region: Region, logger: logging.Logger):
 def _window_dates(region: Region, logger: logging.Logger):
     tz = _region_timezone(region, logger)
     today = datetime.now(tz=tz).date()
-    days = max(constants.UPCOMING_DAYS, 1)
-    return today, today + timedelta(days=days - 1)
+    days_since_sunday = (today.weekday() + 1) % 7
+    start_date = today - timedelta(days=days_since_sunday)
+    return start_date, start_date + timedelta(days=6)
 
 
 def _format_event_time(raw_time: str | None) -> str:
@@ -186,7 +187,7 @@ def _send_q_reminders(client: WebClient, result: TeamReminderResult, events, sta
             grouped[event.q_pax_id].append(event)
     for user_id, user_events in grouped.items():
         header = (
-            f":calendar: *Q reminder for {start_date.strftime('%m/%d')} - {end_date.strftime('%m/%d')}*\n"
+            f":calendar: *Q reminder for Sunday {start_date.strftime('%m/%d')} - Saturday {end_date.strftime('%m/%d')}*\n"
             "You are signed up to Q the following workouts:"
         )
         message = _compose_message(header, [_event_line(event) for event in user_events])
@@ -206,7 +207,7 @@ def _send_ao_reminders(client: WebClient, result: TeamReminderResult, events, st
     for channel_id, open_events in grouped.items():
         ao_name = open_events[0].ao_display_name or channel_id
         header = (
-            f":mega: *{ao_name} Q/leader lineup for {start_date.strftime('%m/%d')} - {end_date.strftime('%m/%d')}*\n"
+            f":mega: *{ao_name} Q/leader lineup for Sunday {start_date.strftime('%m/%d')} - Saturday {end_date.strftime('%m/%d')}*\n"
             "Here is who is leading each upcoming workout this week:"
         )
         message = _compose_message(header, [_ao_event_line(event) for event in open_events])
