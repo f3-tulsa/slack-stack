@@ -111,6 +111,23 @@ def _event_line(event) -> str:
     return f"- {when} - {ao_name} - {event_type} @ {_format_event_time(event.event_time)}"
 
 
+def _leader_label(event) -> str:
+    if getattr(event, "q_pax_id", None):
+        return f"<@{event.q_pax_id}>"
+    if getattr(event, "q_pax_name", None):
+        return event.q_pax_name
+    return "*OPEN*"
+
+
+def _ao_event_line(event) -> str:
+    event_type = event.event_type or "Workout"
+    when = event.event_date.strftime("%a %m/%d")
+    return (
+        f"- {when} - {event_type} @ {_format_event_time(event.event_time)} "
+        f"- Leader/Q: {_leader_label(event)}"
+    )
+
+
 def _compose_message(header: str, lines: list[str]) -> str:
     message = header
     shown = 0
@@ -184,15 +201,15 @@ def _send_q_reminders(client: WebClient, result: TeamReminderResult, events, sta
 def _send_ao_reminders(client: WebClient, result: TeamReminderResult, events, start_date, end_date, logger: logging.Logger) -> None:
     grouped = defaultdict(list)
     for event in events:
-        if not event.q_pax_id and event.ao_channel_id:
+        if event.ao_channel_id:
             grouped[event.ao_channel_id].append(event)
     for channel_id, open_events in grouped.items():
         ao_name = open_events[0].ao_display_name or channel_id
         header = (
-            f":mega: *Open Q slots for {ao_name} ({start_date.strftime('%m/%d')} - {end_date.strftime('%m/%d')})*\n"
-            "Use the QSignups Home tab to claim one of these open slots:"
+            f":mega: *{ao_name} Q/leader lineup for {start_date.strftime('%m/%d')} - {end_date.strftime('%m/%d')}*\n"
+            "Here is who is leading each upcoming workout this week:"
         )
-        message = _compose_message(header, [_event_line(event) for event in open_events])
+        message = _compose_message(header, [_ao_event_line(event) for event in open_events])
         try:
             client.chat_postMessage(channel=channel_id, text=message)
             result.ao_messages_sent += 1

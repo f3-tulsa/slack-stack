@@ -18,11 +18,20 @@ if _PKG not in sys.path:
     sys.path.insert(0, _PKG)
 
 
-def _event(ao_channel_id: str, ao_display_name: str, q_pax_id: str | None, event_date: date, event_time: str, event_type: str):
+def _event(
+    ao_channel_id: str,
+    ao_display_name: str,
+    q_pax_id: str | None,
+    q_pax_name: str | None,
+    event_date: date,
+    event_time: str,
+    event_type: str,
+):
     return SimpleNamespace(
         ao_channel_id=ao_channel_id,
         ao_display_name=ao_display_name,
         q_pax_id=q_pax_id,
+        q_pax_name=q_pax_name,
         event_date=event_date,
         event_time=event_time,
         event_type=event_type,
@@ -47,9 +56,9 @@ def test_send_team_reminders_groups_q_and_ao_messages() -> None:
         timezone="US/Central",
     )
     events = [
-        _event("CAO1", "The Bridge", "U1", date(2026, 5, 6), "0530", "Bootcamp"),
-        _event("CAO1", "The Bridge", "U1", date(2026, 5, 8), "0530", "Bootcamp"),
-        _event("CAO2", "The Forge", None, date(2026, 5, 7), "1730", "Beatdown"),
+        _event("CAO1", "The Bridge", "U1", "Ben", date(2026, 5, 6), "0530", "Bootcamp"),
+        _event("CAO1", "The Bridge", "U1", "Ben", date(2026, 5, 8), "0530", "Bootcamp"),
+        _event("CAO2", "The Forge", None, None, date(2026, 5, 7), "1730", "Beatdown"),
     ]
     client = MagicMock()
 
@@ -57,9 +66,16 @@ def test_send_team_reminders_groups_q_and_ao_messages() -> None:
         result = send_team_reminders(client, "T1", logging.getLogger("test"), region=region)
 
     assert result.q_messages_sent == 1
-    assert result.ao_messages_sent == 1
+    assert result.ao_messages_sent == 2
     assert result.error_count() == 0
-    assert client.chat_postMessage.call_count == 2
+    assert client.chat_postMessage.call_count == 3
+    ao_messages = [
+        kwargs["text"]
+        for _, kwargs in client.chat_postMessage.call_args_list
+        if kwargs["channel"] in {"CAO1", "CAO2"}
+    ]
+    assert any("<@U1>" in message for message in ao_messages)
+    assert any("*OPEN*" in message for message in ao_messages)
 
 
 def test_send_team_reminders_respects_disabled_flags() -> None:
