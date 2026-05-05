@@ -31,20 +31,42 @@ def test_extend_all_schedules_no_db() -> None:
 
 
 def test_handler_routes_extend_schedule() -> None:
-    """Import app without Slack auth.test (Bolt calls it in _init_middleware_list)."""
+    """Deploy-time extend-schedule should only reconcile the calendar."""
     import sys as sys_mod
     from unittest.mock import patch
 
     with patch.dict(os.environ, {"DB_ENCRYPTION_KEY": "ci-test-encryption-key-32chars!"}, clear=False):
         with patch("slack_bolt.app.app.App._init_middleware_list", lambda *args, **kwargs: None):
             with patch("slack.handlers.weekly.extend_all_schedules") as ext:
-                sys_mod.modules.pop("app", None)
-                import app as app_mod
+                with patch("slack.handlers.reminders.send_all_region_reminders") as remind:
+                    sys_mod.modules.pop("app", None)
+                    import app as app_mod
 
-                out = app_mod.handler({"source": "qsignups.extend-schedule"}, None)
-                ext.assert_called_once()
-                assert out.get("statusCode") == 200
+                    out = app_mod.handler({"source": "qsignups.extend-schedule"}, None)
+                    ext.assert_called_once()
+                    remind.assert_not_called()
+                    assert out.get("statusCode") == 200
 
+
+def test_handler_routes_weekly_automation() -> None:
+    """Weekly automation should reconcile the calendar and send reminders."""
+    import sys as sys_mod
+    from unittest.mock import MagicMock, patch
+
+    summary = MagicMock()
+    summary.to_log_message.return_value = "weekly reminder automation complete"
+
+    with patch.dict(os.environ, {"DB_ENCRYPTION_KEY": "ci-test-encryption-key-32chars!"}, clear=False):
+        with patch("slack_bolt.app.app.App._init_middleware_list", lambda *args, **kwargs: None):
+            with patch("slack.handlers.weekly.extend_all_schedules") as ext:
+                with patch("slack.handlers.reminders.send_all_region_reminders", return_value=summary) as remind:
+                    sys_mod.modules.pop("app", None)
+                    import app as app_mod
+
+                    out = app_mod.handler({"source": "qsignups.weekly-automation"}, None)
+                    ext.assert_called_once()
+                    remind.assert_called_once()
+                    assert out.get("statusCode") == 200
 
 def test_handler_keep_warm_short_circuit() -> None:
     """EventBridge keep-warm must not invoke extend_all_schedules or Slack Bolt."""
@@ -54,17 +76,19 @@ def test_handler_keep_warm_short_circuit() -> None:
     with patch.dict(os.environ, {"DB_ENCRYPTION_KEY": "ci-test-encryption-key-32chars!"}, clear=False):
         with patch("slack_bolt.app.app.App._init_middleware_list", lambda *args, **kwargs: None):
             with patch("slack.handlers.weekly.extend_all_schedules") as ext:
-                sys_mod.modules.pop("app", None)
-                import app as app_mod
+                with patch("slack.handlers.reminders.send_all_region_reminders") as remind:
+                    sys_mod.modules.pop("app", None)
+                    import app as app_mod
 
-                with patch.object(app_mod, "_warmup", MagicMock()) as warm:
-                    out = app_mod.handler(
-                        {"source": "aws.events", "detail-type": "Scheduled Event"},
-                        None,
-                    )
-                ext.assert_not_called()
-                warm.assert_called_once()
-                assert out == {"statusCode": 200, "body": "warm"}
+                    with patch.object(app_mod, "_warmup", MagicMock()) as warm:
+                        out = app_mod.handler(
+                            {"source": "aws.events", "detail-type": "Scheduled Event"},
+                            None,
+                        )
+                    ext.assert_not_called()
+                    remind.assert_not_called()
+                    warm.assert_called_once()
+                    assert out == {"statusCode": 200, "body": "warm"}
 
 
 def test_build_recurring_master_rows() -> None:
@@ -283,6 +307,8 @@ def main() -> None:
     print("extend_all_schedules (empty weeklies, mocked session) OK")
     test_handler_routes_extend_schedule()
     print("handler extend-schedule routing OK")
+    test_handler_routes_weekly_automation()
+    print("handler weekly automation routing OK")
     test_handler_keep_warm_short_circuit()
     print("handler keep-warm short-circuit OK")
     test_build_recurring_master_rows()
