@@ -11,7 +11,7 @@ Use the OAuth install URL from your deployed stack (CloudFormation output **`QSi
 ## Features
 
 - Home tab / slash commands for schedule and signups.
-- **Weekly reminders:** Region admins can enable **Q reminders** (DMs to upcoming Qs) and **AO reminders** (AO-channel posts for open Q slots) in **General Settings**. Admins also get a **Send Reminders Now** Home tab button as a manual fallback.
+- **Weekly reminders:** Region admins can enable **Q reminders** (DMs to upcoming Qs) and **AO reminders** (AO-channel posts announcing each upcoming workout's Q/leader, with open slots called out) in **General Settings**. Admins also get a **Send Reminders Now** Home tab button as a manual fallback.
 - **Manage Region Calendar:** Cancel / back on Add, Edit, and Delete flows for AOs and events returns to the **Manage Region Calendar** menu (not the main Home screen). The “Return to the Home Page” control on that menu still goes to Home.
 - Google Calendar sync is **disabled** in production builds (no Google client packages in Lambda `requirements.txt`). Schema fields such as `google_auth_data` remain for a future re-enable; when restoring, add the Google deps back and uncomment the handlers in `app.py`.
 
