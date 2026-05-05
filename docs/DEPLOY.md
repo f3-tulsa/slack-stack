@@ -164,7 +164,7 @@ With `--log-type Tail`, the CLI prints metadata to **stdout** (including base64 
 
 ### Manual Lambda invocation (qsignups)
 
-The **qsignups** stack runs `extend_all_schedules` after each deploy (CloudFormation custom resource) and as part of the weekly **`qsignups.weekly-automation`** EventBridge job. To trigger a **calendar reconciliation only** manually (replace `test` with your stage):
+The **qsignups** stack runs `extend_all_schedules` after each deploy (CloudFormation custom resource) and as part of the weekly **`qsignups.weekly-automation`** EventBridge job, scheduled for **Sunday 3:00 AM** in **`WeeklyAutomationTimezone`** (default **`America/Chicago`**). To trigger a **calendar reconciliation only** manually (replace `test` with your stage):
 
 ```bash
 export AWS_REGION=us-east-1   # or your stack region
