@@ -102,6 +102,7 @@ def refresh(client, user: User, logger, top_message, team_id, context):
         )
     if permission.level == PermissionLevel.ADMIN:
         buttons.append(inputs.GENERAL_SETTINGS)
+        buttons.append(inputs.SEND_REMINDERS_NOW)
     home_actions = forms.make_action_button_row(buttons)
     refresh_context = {
         "type": "context",
