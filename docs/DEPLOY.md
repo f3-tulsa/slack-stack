@@ -164,7 +164,7 @@ With `--log-type Tail`, the CLI prints metadata to **stdout** (including base64 
 
 ### Manual Lambda invocation (qsignups)
 
-The **qsignups** stack runs `extend_all_schedules` after each deploy (CloudFormation custom resource) and on a **7-day** EventBridge schedule. To trigger a full calendar reconciliation manually (replace `test` with your stage):
+The **qsignups** stack runs `extend_all_schedules` after each deploy (CloudFormation custom resource) and as part of the weekly **`qsignups.weekly-automation`** EventBridge job. To trigger a **calendar reconciliation only** manually (replace `test` with your stage):
 
 ```bash
 export AWS_REGION=us-east-1   # or your stack region
@@ -175,6 +175,14 @@ aws lambda invoke \
   --payload '{"source": "qsignups.extend-schedule"}' \
   --log-type Tail \
   /tmp/qs-extend.json && cat /tmp/qs-extend.json
+
+# full weekly automation: extend schedule + send enabled reminder messages
+aws lambda invoke \
+  --function-name qsignups-test-QSignupsFunction-XXXXX \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{"source": "qsignups.weekly-automation"}' \
+  --log-type Tail \
+  /tmp/qs-weekly.json && cat /tmp/qs-weekly.json
 ```
 
 Use the physical function name from CloudFormation (e.g. **Stack resources** → `QSignupsFunction`) or:

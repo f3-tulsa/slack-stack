@@ -201,7 +201,7 @@ Resources:
               - StagesMap
               - Ref: Stage
               - ExtendScheduleName
-            Input: '{"source": "qsignups.extend-schedule"}'
+            Input: '{"source": "qsignups.weekly-automation"}'
         # StravaExchange:
         #   Type: Api
         #   Properties:

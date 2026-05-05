@@ -162,6 +162,13 @@ class ActionRadioButtons(BaseAction):
     if initial_value:
       if isinstance(initial_value,BaseAction):
         j['element']['initial_option'] = initial_value.as_form_field()
+      elif isinstance(initial_value, str):
+        initial_option = next(
+          (option.as_form_field() for option in self.options if option.value == initial_value),
+          None,
+        )
+        if initial_option:
+          j['element']['initial_option'] = initial_option
       else:
         j['element']['initial_option'] = initial_value
     return j
@@ -280,6 +287,7 @@ EDIT_AO_FORM: ActionButton = ActionButton(label = 'Edit an AO', action = "edit_a
 DELETE_AO_FORM: ActionButton = ActionButton(label = 'Delete an AO', action = "delete_ao_form")
 
 GENERAL_SETTINGS: ActionButton = ActionButton(label = 'General Settings', action = "general_settings_form")
+SEND_REMINDERS_NOW: ActionButton = ActionButton(label = 'Send Reminders Now', action = actions.SEND_REMINDERS_ACTION)
 
 WEEKDAY_SELECTOR = ActionSelector(
   label = "Day of Week",
