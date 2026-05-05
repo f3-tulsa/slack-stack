@@ -9,9 +9,11 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from datetime import date
+from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+import pytz
 
 _PKG = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "qsignups"))
 if _PKG not in sys.path:
@@ -63,19 +65,42 @@ def test_send_team_reminders_groups_q_and_ao_messages() -> None:
     client = MagicMock()
 
     with patch("slack.handlers.reminders.DbManager.find_records", return_value=events):
-        result = send_team_reminders(client, "T1", logging.getLogger("test"), region=region)
+        with patch("slack.handlers.reminders._window_dates", return_value=(date(2026, 5, 3), date(2026, 5, 9))):
+            result = send_team_reminders(client, "T1", logging.getLogger("test"), region=region)
 
     assert result.q_messages_sent == 1
     assert result.ao_messages_sent == 2
     assert result.error_count() == 0
     assert client.chat_postMessage.call_count == 3
+    dm_messages = [
+        kwargs["text"]
+        for _, kwargs in client.chat_postMessage.call_args_list
+        if kwargs["channel"] == "U1"
+    ]
+    assert any("Sunday 05/03 - Saturday 05/09" in message for message in dm_messages)
     ao_messages = [
         kwargs["text"]
         for _, kwargs in client.chat_postMessage.call_args_list
         if kwargs["channel"] in {"CAO1", "CAO2"}
     ]
+    assert all("Sunday 05/03 - Saturday 05/09" in message for message in ao_messages)
     assert any("<@U1>" in message for message in ao_messages)
     assert any("*OPEN*" in message for message in ao_messages)
+
+
+def test_window_dates_use_sunday_through_saturday_for_midweek_manual_run() -> None:
+    from slack.handlers.reminders import _window_dates
+
+    region = SimpleNamespace(team_id="T1", timezone="US/Central")
+    central = pytz.timezone("US/Central")
+    fixed_now = central.localize(datetime(2026, 5, 6, 12, 0, 0))
+
+    with patch("slack.handlers.reminders.datetime", wraps=datetime) as mock_datetime:
+        mock_datetime.now.return_value = fixed_now
+        start_date, end_date = _window_dates(region, logging.getLogger("test"))
+
+    assert start_date == date(2026, 5, 3)
+    assert end_date == date(2026, 5, 9)
 
 
 def test_send_team_reminders_respects_disabled_flags() -> None:
@@ -128,6 +153,7 @@ def test_send_all_region_reminders_uses_stored_bot_tokens() -> None:
 if __name__ == "__main__":
     test_radio_buttons_restore_saved_string_value()
     test_send_team_reminders_groups_q_and_ao_messages()
+    test_window_dates_use_sunday_through_saturday_for_midweek_manual_run()
     test_send_team_reminders_respects_disabled_flags()
     test_send_all_region_reminders_uses_stored_bot_tokens()
     print("reminder tests OK")
