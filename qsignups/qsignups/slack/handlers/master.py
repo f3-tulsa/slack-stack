@@ -12,7 +12,8 @@ def _event_when_text(event_date, event_time) -> str:
     try:
         if event_date and event_time:
             dt = datetime.strptime(f"{event_date.strftime('%Y-%m-%d')} {event_time}", "%Y-%m-%d %H%M")
-            return dt.strftime("%A, %B %-d @ %H%M")
+            day = dt.strftime("%d").lstrip("0") or "0"
+            return f"{dt.strftime('%A, %B')} {day} @ {dt.strftime('%H%M')}"
     except Exception:
         pass
     return "the selected workout"
@@ -39,7 +40,7 @@ def _notify_signup_state_change(
     new_q_id: str | None,
     new_q_name: str | None,
 ) -> None:
-    if (previous_q_id or None) == (new_q_id or None) and (previous_q_name or None) == (new_q_name or None):
+    if previous_q_id == new_q_id and previous_q_name == new_q_name:
         return
     if not ao_channel_id:
         return
