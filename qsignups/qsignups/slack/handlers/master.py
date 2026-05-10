@@ -8,6 +8,62 @@ from . import UpdateResponse
 from utilities import safe_get, User
 # from google import authenticate, calendar
 
+def _event_when_text(event_date, event_time) -> str:
+    try:
+        if event_date and event_time:
+            dt = datetime.strptime(f"{event_date.strftime('%Y-%m-%d')} {event_time}", "%Y-%m-%d %H%M")
+            return dt.strftime("%A, %B %-d @ %H%M")
+    except Exception:
+        pass
+    return "the selected workout"
+
+
+def _q_label(q_id: str | None, q_name: str | None) -> str:
+    if q_id:
+        return f"<@{q_id}>"
+    if q_name:
+        return q_name
+    return "*OPEN*"
+
+
+def _notify_signup_state_change(
+    client,
+    logger,
+    ao_channel_id: str | None,
+    ao_display_name: str | None,
+    actor: User | None,
+    event_date,
+    event_time,
+    previous_q_id: str | None,
+    previous_q_name: str | None,
+    new_q_id: str | None,
+    new_q_name: str | None,
+) -> None:
+    if (previous_q_id or None) == (new_q_id or None) and (previous_q_name or None) == (new_q_name or None):
+        return
+    if not ao_channel_id:
+        return
+
+    actor_label = f"<@{actor.id}>" if actor and actor.id else (actor.name if actor and actor.name else "Someone")
+    when_text = _event_when_text(event_date, event_time)
+    ao_name = ao_display_name or "this AO"
+    message = (
+        f":mega: Q signup update for *{ao_name}* on *{when_text}*.\n"
+        f"Updated by: {actor_label}\n"
+        f"Previous: {_q_label(previous_q_id, previous_q_name)}\n"
+        f"Now: {_q_label(new_q_id, new_q_name)}"
+    )
+    try:
+        client.chat_postMessage(channel=ao_channel_id, text=message)
+    except Exception:
+        logger.warning(
+            "Failed to send Q signup state change notification channel=%s ao=%s",
+            ao_channel_id,
+            ao_name,
+            exc_info=True,
+        )
+
+
 def delete(client, user_id, team_id, logger, input_data) -> UpdateResponse:
 
     # gather and format selected date and time
@@ -130,6 +186,21 @@ def update_events_from_state(
         DbManager.find_records(Master, filters = [
             Master.id.in_([x.id for x in google_records])
         ])
+        previous_q_id = records[0].q_pax_id if records else None
+        previous_q_name = records[0].q_pax_name if records else None
+        _notify_signup_state_change(
+            client=client,
+            logger=logger,
+            ao_channel_id=ao.ao_channel_id if ao else None,
+            ao_display_name=ao.ao_display_name if ao else None,
+            actor=user,
+            event_date=datetime.strptime(selected_date, "%Y-%m-%d").date(),
+            event_time=selected_time,
+            previous_q_id=previous_q_id,
+            previous_q_name=previous_q_name,
+            new_q_id=selected_q_id_fmt,
+            new_q_name=selected_q_name_fmt,
+        )
         # for event in records_to_reschedules:
         #     calendar.schedule_event(team_id, user, region, event, ao)
         return UpdateResponse(success = True, message="Got it - I've made your updates!")
@@ -162,10 +233,25 @@ def clear_event_q(client, user: User, team_id, logger, ao_display_name, selected
         return UpdateResponse(success = False, message = "Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker")
 
     try:
+        previous_q_id = result.event.q_pax_id
+        previous_q_name = result.event.q_pax_name
         DbManager.update_record(Master, result.event.id, {
             Master.q_pax_id: None,
             Master.q_pax_name: None
         })
+        _notify_signup_state_change(
+            client=client,
+            logger=logger,
+            ao_channel_id=result.ao.ao_channel_id,
+            ao_display_name=result.ao.ao_display_name,
+            actor=user,
+            event_date=result.event.event_date,
+            event_time=result.event.event_time,
+            previous_q_id=previous_q_id,
+            previous_q_name=previous_q_name,
+            new_q_id=None,
+            new_q_name=None,
+        )
         if result.event.google_event_id:
             DbManager.get_record(Region, team_id)
             # calendar.schedule_event(team_id, None, region, result.event, result.ao)
@@ -181,10 +267,25 @@ def assign_event_q(client, user: User, team_id, logger, selected_dt, ao_display_
 
     if not result:
         return UpdateResponse(success = False, message = "Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker.")
+    previous_q_id = result.event.q_pax_id
+    previous_q_name = result.event.q_pax_name
     DbManager.update_record(Master, result.event.id, {
         Master.q_pax_id: user.id,
         Master.q_pax_name: user.name
     })
+    _notify_signup_state_change(
+        client=client,
+        logger=logger,
+        ao_channel_id=result.ao.ao_channel_id,
+        ao_display_name=result.ao.ao_display_name,
+        actor=user,
+        event_date=result.event.event_date,
+        event_time=result.event.event_time,
+        previous_q_id=previous_q_id,
+        previous_q_name=previous_q_name,
+        new_q_id=user.id,
+        new_q_name=user.name,
+    )
     # if authenticate.is_connected(team_id):
     #     new_master = DbManager.get_record(Master, result.event.id)
     #     region: Region = DbManager.get_record(Region, team_id)
