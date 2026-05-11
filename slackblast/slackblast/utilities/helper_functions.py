@@ -433,9 +433,12 @@ def check_for_duplicate(
         )
         logger.debug(f"Backblast dups: {backblast_dups}")
         logger.debug(f"og_ts: {og_ts}")
-        is_duplicate = (len(backblast_dups) > 0 or len(attendance_dups) > 0) and (
-            len(backblast_dups) == 0 or og_ts != backblast_dups[0].timestamp
-        )
+        has_dups = len(backblast_dups) > 0 or len(attendance_dups) > 0
+        # If the matching backblast record is the one being edited (og_ts matches),
+        # it is not a true duplicate. When only attendance dups exist (no backblast
+        # record), we cannot match og_ts and always treat it as a new duplicate.
+        is_same_backblast = len(backblast_dups) > 0 and og_ts == backblast_dups[0].timestamp
+        is_duplicate = has_dups and not is_same_backblast
     else:
         is_duplicate = False
 
