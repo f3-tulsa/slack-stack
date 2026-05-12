@@ -390,7 +390,7 @@ def main() -> None:
     downrange = (
         posts_df.join(home_regions.select(["email", "home_region", "home_user_id"]), on="email", how="inner")
         .filter(pl.col("home_region").str.starts_with(target_prefix))
-        .filter(~pl.col("source_region").str.starts_with(target_prefix).fill_null(False))
+        .filter(~(pl.col("source_region").str.starts_with(target_prefix).fill_null(False)))
         .filter(pl.col("date") >= lookback_cutoff)
     )
 

@@ -1,7 +1,7 @@
 import os
 import sys
 
-# Match Lambda layout (CodeUri = slackblast/slackblast)
+# match Lambda layout (CodeUri = slackblast/slackblast)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "slackblast"))
 
 from features.backblast import (

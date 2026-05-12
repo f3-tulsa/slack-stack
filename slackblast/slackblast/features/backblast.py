@@ -40,7 +40,7 @@ def _home_schema_prefix() -> str:
     return (os.environ.get(constants.DOWNRANGE_HOME_SCHEMA_PREFIX) or "f3ttown_").strip()
 
 
-def _downrange_source_event_id(source_schema: str, source_ts: str, source_ao_id: str, the_date) -> str:
+def _downrange_source_event_id(source_schema: str, source_ts: str, source_ao_id: str, the_date: date | str) -> str:
     return f"{source_schema}:{source_ts}:{source_ao_id}:{the_date}"
 
 
@@ -895,14 +895,14 @@ COUNT: {count}
                 len(attendance_records),
                 message_ts or res.get("ts"),
             )
-            non_null_source_ids = list({u for u in [the_q, *(the_coq or []), *pax] if u})
+            source_user_ids = list({u for u in [the_q, *(the_coq or []), *pax] if u})
             _sync_ttown_downrange_backblast(
                 region_record=region_record,
                 source_ts=message_ts or res.get("ts"),
                 source_ao_id=ao or chan,
                 source_ao_name=ao_name,
                 the_date=the_date,
-                source_user_ids=non_null_source_ids,
+                source_user_ids=source_user_ids,
                 user_records=user_records,
                 logger=logger,
             )
