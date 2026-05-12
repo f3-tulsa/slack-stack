@@ -53,6 +53,13 @@ def _downrange_ao_id(source_region: str, source_ao_id: str) -> str:
     return f"dr_{digest}"
 
 
+def _downrange_ao_name(source_region: str, source_ao: str | None, source_ao_id: str, max_len: int = 45) -> str:
+    region = (source_region or "")[:14]
+    ao_name = (source_ao or source_ao_id or "")[:20]
+    suffix = hashlib.sha1(f"{source_region}:{source_ao_id}".encode("utf-8")).hexdigest()[:6]
+    return f"DR {region}:{ao_name}:{suffix}"[:max_len]
+
+
 def _downrange_q_user_id(source_event_id: str) -> str:
     digest = hashlib.sha1(source_event_id.encode("utf-8")).hexdigest()[:20]
     return f"drq_{digest}"
@@ -255,7 +262,7 @@ def _sync_schema_rows(engine, schema: str, rows: pl.DataFrame) -> tuple[int, int
                 insert(aos)
                 .values(
                     channel_id=ao_id,
-                    ao=f"DR {event['source_region']}:{(event['source_ao'] or event['source_ao_id'])}"[:45],
+                    ao=_downrange_ao_name(event["source_region"], event["source_ao"], event["source_ao_id"]),
                     channel_created=0,
                     archived=0,
                     backblast=1,
@@ -352,6 +359,7 @@ def main() -> None:
     target_prefix = _target_schema_prefix()
     lookback_cutoff = date.today() - timedelta(days=_lookback_days())
 
+    # Intentionally include all regional schemas here so home-region resolution can be computed nationally.
     schemas = pl.read_database(
         f"SELECT schema_name FROM `{pm}`.regions WHERE schema_name LIKE 'f3%'",
         connection=engine,

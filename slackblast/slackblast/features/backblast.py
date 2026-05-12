@@ -2,7 +2,7 @@ import copy
 import hashlib
 import json
 import os
-from datetime import datetime
+from datetime import date, datetime
 from logging import Logger
 
 import boto3
@@ -54,6 +54,13 @@ def _downrange_q_user_id(source_event_id: str) -> str:
     return f"drq_{digest}"
 
 
+def _downrange_ao_name(source_schema: str, source_ao_name: str | None, source_ao_id: str, max_len: int = 45) -> str:
+    region = (source_schema or "")[:14]
+    ao_name = (source_ao_name or source_ao_id or "")[:20]
+    suffix = hashlib.sha1(f"{source_schema}:{source_ao_id}".encode("utf-8")).hexdigest()[:6]
+    return f"DR {region}:{ao_name}:{suffix}"[:max_len]
+
+
 def _safe_source_timestamp(source_schema: str, source_ts: str) -> str:
     ts = (source_ts or "").strip()
     if len(ts) <= 45:
@@ -68,7 +75,7 @@ def _sync_ttown_downrange_backblast(
     source_ts: str,
     source_ao_id: str,
     source_ao_name: str,
-    the_date,
+    the_date: date | str,
     source_user_ids: list[str],
     user_records: list[PaxminerUser] | None,
     logger: Logger,
@@ -133,7 +140,7 @@ def _sync_ttown_downrange_backblast(
                     schema=target_schema,
                     record=PaxminerAO(
                         channel_id=dr_ao_id,
-                        ao=f"DR {source_schema}:{source_ao_name or source_ao_id}"[:45],
+                        ao=_downrange_ao_name(source_schema, source_ao_name, source_ao_id),
                         channel_created=0,
                         archived=0,
                         backblast=1,
