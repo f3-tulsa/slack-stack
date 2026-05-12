@@ -77,6 +77,17 @@ Parameters:
     Description: IANA timezone for display (e.g. US/Central)
     Type: String
     Default: "US/Central"
+  DownrangeHomeSchemaPrefix:
+    Description: Home schema prefix for downrange auto-credit logic
+    Type: String
+    Default: "f3ttown_"
+  DownrangeSyncEnabled:
+    Description: Enable downrange auto-crediting into home schemas
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
   ImageBucketName:
     Description: Globally unique S3 bucket name for backblast / Strava static images (must be available)
     Type: String
@@ -193,6 +204,8 @@ Resources:
           PAXMINER_SCHEMA: !Ref PaxminerSchema
           DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
           TIMEZONE: !Ref Timezone
+          DOWNRANGE_HOME_SCHEMA_PREFIX: !Ref DownrangeHomeSchemaPrefix
+          DOWNRANGE_SYNC_ENABLED: !Ref DownrangeSyncEnabled
           IMAGE_S3_BUCKET: !Ref ImageBucketName
           ENV_SLACK_CLIENT_ID: !Ref SlackClientId
           STRAVA_CLIENT_ID: !Ref StravaClientID
