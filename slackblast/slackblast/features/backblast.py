@@ -116,7 +116,9 @@ def _sync_ttown_downrange_backblast(
                 for u in target_users
                 if getattr(u, "user_id", None) and getattr(u, "email", None)
             }
-            target_user_ids = sorted({target_user_id_by_email[e] for e in attendee_emails if e in target_user_id_by_email})
+            target_user_ids = sorted(
+                {target_user_id_by_email[e] for e in attendee_emails if e in target_user_id_by_email}
+            )
             if not target_user_ids:
                 continue
 

@@ -11,14 +11,14 @@ import logging
 import os
 import traceback
 
+from common.encryption import require_encryption_key
+
 # Configure root logging before cold-start bootstrap (token_bootstrap uses LOG.info).
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s]:%(message)s",
     level=logging.INFO,
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-
-from common.encryption import require_encryption_key
 
 require_encryption_key()
 
