@@ -20,10 +20,12 @@ def test_source_event_id_contains_expected_fields():
 def test_downrange_ids_are_stable():
     ao_id_1 = _downrange_ao_id("f3other_prod", "C123")
     ao_id_2 = _downrange_ao_id("f3other_prod", "C123")
+    ao_id_3 = _downrange_ao_id("f3other_prod", "C456")
     q_id_1 = _downrange_q_user_id("event:1")
     q_id_2 = _downrange_q_user_id("event:1")
 
     assert ao_id_1 == ao_id_2
+    assert ao_id_1 != ao_id_3
     assert q_id_1 == q_id_2
     assert ao_id_1.startswith("dr_")
     assert q_id_1.startswith("drq_")

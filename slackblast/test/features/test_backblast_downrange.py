@@ -15,10 +15,12 @@ from features.backblast import (
 def test_downrange_id_helpers_are_stable():
     ao_1 = _downrange_ao_id("f3other_prod", "C111")
     ao_2 = _downrange_ao_id("f3other_prod", "C111")
+    ao_3 = _downrange_ao_id("f3other_prod", "C222")
     q_1 = _downrange_q_user_id("event-id-123")
     q_2 = _downrange_q_user_id("event-id-123")
 
     assert ao_1 == ao_2
+    assert ao_1 != ao_3
     assert q_1 == q_2
     assert ao_1.startswith("dr_")
     assert q_1.startswith("drq_")

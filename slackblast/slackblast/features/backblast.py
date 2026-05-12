@@ -36,7 +36,7 @@ def _downrange_sync_enabled() -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
-def _ttown_schema_prefix() -> str:
+def _home_schema_prefix() -> str:
     return (os.environ.get(constants.DOWNRANGE_HOME_SCHEMA_PREFIX) or "f3ttown_").strip()
 
 
@@ -45,19 +45,19 @@ def _downrange_source_event_id(source_schema: str, source_ts: str, source_ao_id:
 
 
 def _downrange_ao_id(source_schema: str, source_ao_id: str) -> str:
-    digest = hashlib.sha1(f"{source_schema}:{source_ao_id}".encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256(f"{source_schema}:{source_ao_id}".encode("utf-8")).hexdigest()[:16]
     return f"dr_{digest}"
 
 
 def _downrange_q_user_id(source_event_id: str) -> str:
-    digest = hashlib.sha1(source_event_id.encode("utf-8")).hexdigest()[:20]
+    digest = hashlib.sha256(source_event_id.encode("utf-8")).hexdigest()[:20]
     return f"drq_{digest}"
 
 
 def _downrange_ao_name(source_schema: str, source_ao_name: str | None, source_ao_id: str, max_len: int = 45) -> str:
     region = (source_schema or "")[:14]
     ao_name = (source_ao_name or source_ao_id or "")[:20]
-    suffix = hashlib.sha1(f"{source_schema}:{source_ao_id}".encode("utf-8")).hexdigest()[:6]
+    suffix = hashlib.sha256(f"{source_schema}:{source_ao_id}".encode("utf-8")).hexdigest()[:6]
     return f"DR {region}:{ao_name}:{suffix}"[:max_len]
 
 
@@ -65,7 +65,7 @@ def _safe_source_timestamp(source_schema: str, source_ts: str) -> str:
     ts = (source_ts or "").strip()
     if len(ts) <= 45:
         return ts
-    digest = hashlib.sha1(f"{source_schema}:{ts}".encode("utf-8")).hexdigest()[:36]
+    digest = hashlib.sha256(f"{source_schema}:{ts}".encode("utf-8")).hexdigest()[:36]
     return f"drts_{digest}"[:45]
 
 
@@ -83,7 +83,7 @@ def _sync_ttown_downrange_backblast(
     if not _downrange_sync_enabled():
         return
     source_schema = (region_record.paxminer_schema or "").strip()
-    prefix = _ttown_schema_prefix()
+    prefix = _home_schema_prefix()
     if not source_schema or source_schema.startswith(prefix):
         return
     if not source_user_ids or not user_records:
@@ -895,14 +895,14 @@ COUNT: {count}
                 len(attendance_records),
                 message_ts or res.get("ts"),
             )
-            all_source_ids = list({u for u in [the_q, *(the_coq or []), *pax] if u})
+            non_null_source_ids = list({u for u in [the_q, *(the_coq or []), *pax] if u})
             _sync_ttown_downrange_backblast(
                 region_record=region_record,
                 source_ts=message_ts or res.get("ts"),
                 source_ao_id=ao or chan,
                 source_ao_name=ao_name,
                 the_date=the_date,
-                source_user_ids=all_source_ids,
+                source_user_ids=non_null_source_ids,
                 user_records=user_records,
                 logger=logger,
             )

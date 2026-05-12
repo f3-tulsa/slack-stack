@@ -13,7 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from .utils import home_region_date_tiers, mysql_connection, paxminer_schema_name, slack_client, weaselbot_schema_name
 
 
-def _target_schema_prefix() -> str:
+def _home_schema_prefix() -> str:
     return (os.environ.get("WEASELBOT_DOWNRANGE_HOME_SCHEMA_PREFIX") or "f3ttown_").strip()
 
 
@@ -49,19 +49,19 @@ def _source_event_id(source_region: str, source_ts: str, source_ao_id: str, bd_d
 
 
 def _downrange_ao_id(source_region: str, source_ao_id: str) -> str:
-    digest = hashlib.sha1(f"{source_region}:{source_ao_id}".encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256(f"{source_region}:{source_ao_id}".encode("utf-8")).hexdigest()[:16]
     return f"dr_{digest}"
 
 
 def _downrange_ao_name(source_region: str, source_ao: str | None, source_ao_id: str, max_len: int = 45) -> str:
     region = (source_region or "")[:14]
     ao_name = (source_ao or source_ao_id or "")[:20]
-    suffix = hashlib.sha1(f"{source_region}:{source_ao_id}".encode("utf-8")).hexdigest()[:6]
+    suffix = hashlib.sha256(f"{source_region}:{source_ao_id}".encode("utf-8")).hexdigest()[:6]
     return f"DR {region}:{ao_name}:{suffix}"[:max_len]
 
 
 def _downrange_q_user_id(source_event_id: str) -> str:
-    digest = hashlib.sha1(source_event_id.encode("utf-8")).hexdigest()[:20]
+    digest = hashlib.sha256(source_event_id.encode("utf-8")).hexdigest()[:20]
     return f"drq_{digest}"
 
 
@@ -69,7 +69,7 @@ def _source_timestamp(source_ts: str, source_region: str) -> str:
     ts = (source_ts or "").strip()
     if len(ts) <= 45:
         return ts
-    digest = hashlib.sha1(f"{source_region}:{ts}".encode("utf-8")).hexdigest()[:36]
+    digest = hashlib.sha256(f"{source_region}:{ts}".encode("utf-8")).hexdigest()[:36]
     return f"drts_{digest}"[:45]
 
 
@@ -356,7 +356,7 @@ def main() -> None:
     engine = mysql_connection()
     metadata = MetaData()
     pm = paxminer_schema_name()
-    target_prefix = _target_schema_prefix()
+    target_prefix = _home_schema_prefix()
     lookback_cutoff = date.today() - timedelta(days=_lookback_days())
 
     # Intentionally include all regional schemas here so home-region resolution can be computed nationally.
@@ -390,7 +390,7 @@ def main() -> None:
     downrange = (
         posts_df.join(home_regions.select(["email", "home_region", "home_user_id"]), on="email", how="inner")
         .filter(pl.col("home_region").str.starts_with(target_prefix))
-        .filter(~pl.col("source_region").str.starts_with(target_prefix))
+        .filter(~pl.col("source_region").str.starts_with(target_prefix).fill_null(False))
         .filter(pl.col("date") >= lookback_cutoff)
     )
 
