@@ -83,3 +83,21 @@ def kotter_handler(event, context):
             "statusCode": 500,
             "body": json.dumps({"ok": False, "error": traceback.format_exc()}),
         }
+
+
+def downrange_handler(event, context):
+    logging.info(
+        "Weaselbot downrange_handler start request_id=%s",
+        getattr(context, "aws_request_id", None) if context else None,
+    )
+    try:
+        from weaselbot.downrange_sync import main
+
+        main()
+        return {"statusCode": 200, "body": json.dumps({"ok": True, "mode": "downrange"})}
+    except Exception:
+        logging.exception("Weaselbot downrange sync failed")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"ok": False, "error": traceback.format_exc()}),
+        }

@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import os
 from datetime import datetime
@@ -9,7 +10,7 @@ import requests
 from slack_sdk.web import WebClient
 
 from utilities import constants, sendmail
-from utilities.database import DbManager
+from utilities.database import DbManager, paxminer_schema_name
 from utilities.database.orm import Attendance, Backblast, PaxminerUser, Region
 from utilities.field_encryption import decrypt_field
 from utilities.helper_functions import (
@@ -28,6 +29,194 @@ from utilities.helper_functions import (
 )
 from utilities.slack import actions, forms
 from utilities.slack import orm as slack_orm
+
+
+def _downrange_sync_enabled() -> bool:
+    raw = (os.environ.get(constants.DOWNRANGE_SYNC_ENABLED) or "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _ttown_schema_prefix() -> str:
+    return (os.environ.get(constants.DOWNRANGE_HOME_SCHEMA_PREFIX) or "f3ttown_").strip()
+
+
+def _downrange_source_event_id(source_schema: str, source_ts: str, source_ao_id: str, the_date) -> str:
+    return f"{source_schema}:{source_ts}:{source_ao_id}:{the_date}"
+
+
+def _downrange_ao_id(source_schema: str, source_ao_id: str) -> str:
+    digest = hashlib.sha1(f"{source_schema}:{source_ao_id}".encode("utf-8")).hexdigest()[:16]
+    return f"dr_{digest}"
+
+
+def _downrange_q_user_id(source_event_id: str) -> str:
+    digest = hashlib.sha1(source_event_id.encode("utf-8")).hexdigest()[:20]
+    return f"drq_{digest}"
+
+
+def _safe_source_timestamp(source_schema: str, source_ts: str) -> str:
+    ts = (source_ts or "").strip()
+    if len(ts) <= 45:
+        return ts
+    digest = hashlib.sha1(f"{source_schema}:{ts}".encode("utf-8")).hexdigest()[:36]
+    return f"drts_{digest}"[:45]
+
+
+def _sync_ttown_downrange_backblast(
+    *,
+    region_record: Region,
+    source_ts: str,
+    source_ao_id: str,
+    source_ao_name: str,
+    the_date,
+    source_user_ids: list[str],
+    user_records: list[PaxminerUser] | None,
+    logger: Logger,
+) -> None:
+    if not _downrange_sync_enabled():
+        return
+    source_schema = (region_record.paxminer_schema or "").strip()
+    prefix = _ttown_schema_prefix()
+    if not source_schema or source_schema.startswith(prefix):
+        return
+    if not source_user_ids or not user_records:
+        return
+
+    source_email_by_user_id = {
+        u.user_id: (u.email or "").strip().lower()
+        for u in user_records
+        if getattr(u, "user_id", None) and getattr(u, "email", None)
+    }
+    attendee_emails = {
+        source_email_by_user_id[user_id] for user_id in source_user_ids if source_email_by_user_id.get(user_id)
+    }
+    if not attendee_emails:
+        return
+
+    source_event_id = _downrange_source_event_id(source_schema, source_ts, source_ao_id, the_date)
+    dr_ao_id = _downrange_ao_id(source_schema, source_ao_id)
+    dr_q_user_id = _downrange_q_user_id(source_event_id)
+    dr_timestamp = _safe_source_timestamp(source_schema, source_ts)
+
+    schema_like = f"{prefix}%".replace("\\", "\\\\").replace("'", "''")
+    target_schema_rows = DbManager.execute_sql_query(
+        f"SELECT schema_name FROM `{paxminer_schema_name()}`.regions "
+        f"WHERE schema_name LIKE '{schema_like}' ORDER BY schema_name",
+        schema=paxminer_schema_name(),
+    ).fetchall()
+    target_schemas = [row[0] for row in target_schema_rows if row and row[0]]
+
+    for target_schema in target_schemas:
+        if target_schema == source_schema:
+            continue
+        try:
+            target_users = DbManager.find_records(PaxminerUser, filters=[True], schema=target_schema)
+            target_user_id_by_email = {
+                (u.email or "").strip().lower(): u.user_id
+                for u in target_users
+                if getattr(u, "user_id", None) and getattr(u, "email", None)
+            }
+            target_user_ids = sorted({target_user_id_by_email[e] for e in attendee_emails if e in target_user_id_by_email})
+            if not target_user_ids:
+                continue
+
+            downrange_ao_name = f"DR {source_schema}:{source_ao_name or source_ao_id}"[:45]
+            safe_ao_name = downrange_ao_name.replace("\\", "\\\\").replace("'", "''")
+            DbManager.execute_sql_query(
+                f"INSERT IGNORE INTO `{target_schema}`.aos (channel_id, ao, channel_created, archived, backblast) "
+                f"VALUES ('{dr_ao_id}', '{safe_ao_name}', 0, 0, 1)",
+                schema=target_schema,
+            )
+
+            existing_beatdown = DbManager.find_records(
+                Backblast,
+                filters=[
+                    Backblast.ao_id == dr_ao_id,
+                    Backblast.bd_date == the_date,
+                    Backblast.q_user_id == dr_q_user_id,
+                ],
+                schema=target_schema,
+            )
+            if not existing_beatdown:
+                DbManager.create_record(
+                    schema=target_schema,
+                    record=Backblast(
+                        timestamp=dr_timestamp,
+                        ts_edited=None,
+                        ao_id=dr_ao_id,
+                        bd_date=the_date,
+                        q_user_id=dr_q_user_id,
+                        coq_user_id=None,
+                        pax_count=len(target_user_ids),
+                        backblast=(
+                            "Downrange import: "
+                            f"{source_schema} | {source_ao_name or source_ao_id} | {the_date}"
+                        ),
+                        backblast_parsed=(
+                            "Downrange import\n"
+                            f"Source: {source_schema}\n"
+                            f"AO: {source_ao_name or source_ao_id}\n"
+                            f"Date: {the_date}"
+                        ),
+                        fngs="None listed",
+                        fng_count=0,
+                        json={
+                            "source_schema": source_schema,
+                            "source_ao_id": source_ao_id,
+                            "source_ao": source_ao_name,
+                            "source_ts": source_ts,
+                            "source_event_id": source_event_id,
+                            "downrange_import": True,
+                        },
+                    ),
+                )
+
+            existing_attendance = DbManager.find_records(
+                Attendance,
+                filters=[
+                    Attendance.ao_id == dr_ao_id,
+                    Attendance.date == the_date,
+                    Attendance.q_user_id == dr_q_user_id,
+                ],
+                schema=target_schema,
+            )
+            existing_user_ids = {row.user_id for row in existing_attendance}
+            new_attendance_records = [
+                Attendance(
+                    timestamp=dr_timestamp,
+                    ts_edited=None,
+                    user_id=user_id,
+                    ao_id=dr_ao_id,
+                    date=the_date,
+                    q_user_id=dr_q_user_id,
+                    json={
+                        "source_schema": source_schema,
+                        "source_ao_id": source_ao_id,
+                        "source_ts": source_ts,
+                        "source_event_id": source_event_id,
+                        "downrange_import": True,
+                    },
+                )
+                for user_id in target_user_ids
+                if user_id not in existing_user_ids
+            ]
+            if new_attendance_records:
+                DbManager.create_records(schema=target_schema, records=new_attendance_records)
+            logger.info(
+                "downrange sync source_schema=%s target_schema=%s matched_users=%s inserted_attendance=%s",
+                source_schema,
+                target_schema,
+                len(target_user_ids),
+                len(new_attendance_records),
+            )
+        except Exception as exc:
+            logger.error(
+                "downrange sync failed source_schema=%s target_schema=%s error=%s",
+                source_schema,
+                target_schema,
+                exc,
+                exc_info=True,
+            )
 
 
 def add_custom_field_blocks(form: slack_orm.BlockView, region_record: Region) -> slack_orm.BlockView:
@@ -686,6 +875,17 @@ COUNT: {count}
                 "bd_attendance rows inserted count=%s timestamp=%s",
                 len(attendance_records),
                 message_ts or res.get("ts"),
+            )
+            all_source_ids = list({u for u in [the_q, *(the_coq or []), *pax] if u})
+            _sync_ttown_downrange_backblast(
+                region_record=region_record,
+                source_ts=message_ts or res.get("ts"),
+                source_ao_id=ao or chan,
+                source_ao_name=ao_name,
+                the_date=the_date,
+                source_user_ids=all_source_ids,
+                user_records=user_records,
+                logger=logger,
             )
             logger.info(
                 json.dumps(
