@@ -116,7 +116,7 @@ def build_home_regions(schemas: pl.DataFrame, metadata: MetaData, engine):
                     .outerjoin(s4, u.c.email == s4.c.email)
                 )
                 .where(func.year(b.c.bd_date) == func.year(func.curdate()))
-                .group_by(literal_column(f"'{schema}'").label("region"), u.c.email, u.c.user_id)
+                .group_by(u.c.email, u.c.user_id)
             )
             queries.append(sql)
         except SQLAlchemyError as exc:

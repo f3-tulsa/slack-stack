@@ -13,7 +13,7 @@ import traceback
 
 from common.encryption import require_encryption_key
 
-# Configure root logging before cold-start bootstrap (token_bootstrap uses LOG.info).
+# Configure root logging before executing bootstrap steps (token_bootstrap uses LOG.info).
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s]:%(message)s",
     level=logging.INFO,

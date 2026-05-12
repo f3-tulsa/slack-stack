@@ -11,7 +11,7 @@ from slack_sdk.web import WebClient
 
 from utilities import constants, sendmail
 from utilities.database import DbManager, paxminer_schema_name
-from utilities.database.orm import Attendance, Backblast, PaxminerUser, Region
+from utilities.database.orm import Attendance, Backblast, PaxminerAO, PaxminerRegion, PaxminerUser, Region
 from utilities.field_encryption import decrypt_field
 from utilities.helper_functions import (
     app_timezone,
@@ -98,13 +98,14 @@ def _sync_ttown_downrange_backblast(
     dr_q_user_id = _downrange_q_user_id(source_event_id)
     dr_timestamp = _safe_source_timestamp(source_schema, source_ts)
 
-    schema_like = f"{prefix}%".replace("\\", "\\\\").replace("'", "''")
-    target_schema_rows = DbManager.execute_sql_query(
-        f"SELECT schema_name FROM `{paxminer_schema_name()}`.regions "
-        f"WHERE schema_name LIKE '{schema_like}' ORDER BY schema_name",
+    target_regions = DbManager.find_records(
+        PaxminerRegion,
+        filters=[PaxminerRegion.schema_name.like(f"{prefix}%")],
         schema=paxminer_schema_name(),
-    ).fetchall()
-    target_schemas = [row[0] for row in target_schema_rows if row and row[0]]
+    )
+    target_schemas = sorted(
+        [region.schema_name for region in target_regions if getattr(region, "schema_name", None)]
+    )
 
     for target_schema in target_schemas:
         if target_schema == source_schema:
@@ -122,13 +123,22 @@ def _sync_ttown_downrange_backblast(
             if not target_user_ids:
                 continue
 
-            downrange_ao_name = f"DR {source_schema}:{source_ao_name or source_ao_id}"[:45]
-            safe_ao_name = downrange_ao_name.replace("\\", "\\\\").replace("'", "''")
-            DbManager.execute_sql_query(
-                f"INSERT IGNORE INTO `{target_schema}`.aos (channel_id, ao, channel_created, archived, backblast) "
-                f"VALUES ('{dr_ao_id}', '{safe_ao_name}', 0, 0, 1)",
+            existing_ao = DbManager.find_records(
+                PaxminerAO,
+                filters=[PaxminerAO.channel_id == dr_ao_id],
                 schema=target_schema,
             )
+            if not existing_ao:
+                DbManager.create_record(
+                    schema=target_schema,
+                    record=PaxminerAO(
+                        channel_id=dr_ao_id,
+                        ao=f"DR {source_schema}:{source_ao_name or source_ao_id}"[:45],
+                        channel_created=0,
+                        archived=0,
+                        backblast=1,
+                    ),
+                )
 
             existing_beatdown = DbManager.find_records(
                 Backblast,
