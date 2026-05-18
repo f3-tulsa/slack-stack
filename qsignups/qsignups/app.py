@@ -283,7 +283,7 @@ def _refresh_home_lazy(body, client, logger, context):
     user_id = context["user_id"]
     team_id = context["team_id"]
     user = get_user(user_id, client)
-    top_message = f"Welcome to QSignups, {user.name}!"
+    top_message = f"Welcome to QSignups, {user.name}! Step up and get on the Q sheet! :muscle:"
     try:
         weinke.generate_and_store_weinke(team_id, logger)
     except Exception:
@@ -386,7 +386,7 @@ def update_home_tab(ack, client, event, logger, context, body):
     
     if not safe_get(body, "event", "view"):
         user = get_user(user_id, client)
-        top_message = f"Welcome to QSignups, {user.name}!"
+        top_message = f"Welcome to QSignups, {user.name}! Step up and get on the Q sheet! :muscle:"
         home.refresh(client, user, logger, top_message, team_id, context)
 
 
@@ -1059,9 +1059,9 @@ def handle_submit_general_settings_button(ack, body, client, logger, context):
     response = settings_handler.update(client, user_id, team_id, logger, input_data)
     # Take the user back home
     if response.success:
-        top_message = "Success! Changed general region settings"
+        top_message = ":white_check_mark: Region settings locked in—you're dialed in!"
     else:
-        top_message = f"Sorry, there was a problem of some sort; please try again or contact your local administrator / Weasel Shaker. Error:\n{response.message}"
+        top_message = f"Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker. Error:\n{response.message}"
     home.refresh(client, user, logger, top_message, team_id, context)
 
 
@@ -1151,7 +1151,7 @@ def ao_select_slot(ack, client, body, logger, context):
     # Construct view
     # Top of view
     blocks = [
-        {"type": "section", "text": {"type": "mrkdwn", "text": "Please select an open Q slot for:"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": "Choose an open Q slot and lead the beatdown at:"}},
         {"type": "section", "text": {"type": "mrkdwn", "text": f"*{ao_display_name}*"}},
         {"type": "divider"},
     ]
@@ -1227,9 +1227,9 @@ def handle_date_select_button(ack, client, body, logger, context):
 
     # Generate top message and go back home
     if response.success:
-        top_message = f"Got it, {user.name}! I have you down for the Q at *{ao_display_name}* on *{selected_dt.strftime('%A, %B %-d @ %H%M')}*"
+        top_message = f":fire: You're on the Q sheet, {user.name}! Time to bring the pain at *{ao_display_name}* on *{selected_dt.strftime('%A, %B %-d @ %H%M')}*. Start prepping that Weinke!"
     else:
-        top_message = response.message or "Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker."
+        top_message = response.message or "Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker."
 
     home.refresh(client, user, logger, top_message, team_id, context)
 
@@ -1284,13 +1284,13 @@ def handle_date_select_button_from_message(ack, client, body, logger, context):
             # update top message
             open_count += -1
             if open_count == 1:
-                open_msg = " I see there is an open spot - who wants it?"
+                open_msg = " One Q slot is still open—step up, HIM!"
             elif open_count > 1:
-                open_msg = " I see there are some open spots - who wants them?"
+                open_msg = " There are open Q slots—get after it, HIMs!"
             else:
                 open_msg = ""
 
-            message_blocks[0]["text"]["text"] = f"Hello HIMs! Here is your Q lineup for the week.{open_msg}"
+            message_blocks[0]["text"]["text"] = f"Hello HIMs! :fire: Here's your Q lineup for the week.{open_msg}"
 
             # publish update
             logging.info("sending blocks: %s", message_blocks)
@@ -1724,7 +1724,7 @@ def cancel_button_select(ack, client, body, logger, context):
     user_id = context["user_id"]
     team_id = context["team_id"]
     user = get_user(user_id, client)
-    top_message = f"Welcome to QSignups, {user.name}!"
+    top_message = f"Welcome to QSignups, {user.name}! Step up and get on the Q sheet! :muscle:"
     home.refresh(client, user, logger, top_message, team_id, context)
 
 
