@@ -32,18 +32,18 @@ class TeamReminderResult:
         return len(self.errors)
 
     def to_user_message(self, manual: bool = False) -> str:
-        prefix = "*Manual reminder run complete.*" if manual else "*Weekly reminder automation complete.*"
+        prefix = "*Manual Q sheet reminder blast complete.*" if manual else "*Weekly Q sheet reminder blast complete.*"
         parts = []
         if self.q_enabled:
             if self.q_messages_sent:
-                parts.append(f"sent {self.q_messages_sent} Q reminder message(s)")
+                parts.append(f"dropped {self.q_messages_sent} Q reminder notice(s) on the PAX")
             else:
-                parts.append("no Q reminders were needed")
+                parts.append("all Q slots are filled—no reminders needed")
         else:
             parts.append("Q reminders are disabled")
         if self.ao_enabled:
             if self.ao_messages_sent:
-                parts.append(f"sent {self.ao_messages_sent} AO reminder message(s)")
+                parts.append(f"posted {self.ao_messages_sent} AO weekly Weinke notice(s)")
             else:
                 parts.append("no AO reminders were needed")
         else:
@@ -187,8 +187,8 @@ def _send_q_reminders(client: WebClient, result: TeamReminderResult, events, sta
             grouped[event.q_pax_id].append(event)
     for user_id, user_events in grouped.items():
         header = (
-            f":calendar: *Q reminder for Sunday {start_date.strftime('%m/%d')} - Saturday {end_date.strftime('%m/%d')}*\n"
-            "You are signed up to Q the following workouts:"
+            f":calendar: *HIM—you're on the Q sheet for the week of Sunday {start_date.strftime('%m/%d')} - Saturday {end_date.strftime('%m/%d')}*\n"
+            "Lace up—here are the beatdowns you're leading:"
         )
         message = _compose_message(header, [_event_line(event) for event in user_events])
         try:
@@ -207,8 +207,8 @@ def _send_ao_reminders(client: WebClient, result: TeamReminderResult, events, st
     for channel_id, open_events in grouped.items():
         ao_name = open_events[0].ao_display_name or channel_id
         header = (
-            f":mega: *{ao_name} Q/leader lineup for Sunday {start_date.strftime('%m/%d')} - Saturday {end_date.strftime('%m/%d')}*\n"
-            "Here is who is leading each upcoming workout this week:"
+            f":mega: *{ao_name} Weinke — Week of Sunday {start_date.strftime('%m/%d')} - Saturday {end_date.strftime('%m/%d')}*\n"
+            "Here's who's bringing the pain this week:"
         )
         message = _compose_message(header, [_ao_event_line(event) for event in open_events])
         try:
