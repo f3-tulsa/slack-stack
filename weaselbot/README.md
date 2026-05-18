@@ -15,7 +15,7 @@ This app lives in the **[slack-stack](../README.md)** monorepo. It is deployed a
 
 ## Slack app manifest
 
-Create an app at [api.slack.com/apps](https://api.slack.com/apps/) from **[manifest.json](manifest.json)** (JSON), then install to your workspace. Deploy passes **`WB_SLACK_TOKEN`**, **`F3_REGION_SLACK_TEAM_ID`**, **`F3_REGION_NAME`**, and **`STAGE`**; the Lambda **encrypts** the token and **upserts** into **`weaselbot.regions`** on cold start (see root README). The Kotter Lambda also exposes an IAM-authenticated Function URL (`KotterApi` output) for manual admin use: call with `?action=status` to check availability or `?action=send` to trigger a report run. After `./deploy.sh`, a copy is written as **`manifest-{test|prod}.json`** (gitignored).
+Create an app at [api.slack.com/apps](https://api.slack.com/apps/) from **[manifest.json](manifest.json)** (JSON), then install to your workspace. Deploy passes **`WB_SLACK_TOKEN`**, **`WB_SLACK_SIGNING_SECRET`**, **`F3_REGION_SLACK_TEAM_ID`**, **`F3_REGION_NAME`**, and **`STAGE`**; the Lambda **encrypts** the token and **upserts** into **`weaselbot.regions`** on cold start (see root README). The Kotter Lambda exposes `KotterApi` (Function URL) for Slack interactivity and slash commands; workspace admins can run `/kotter-report` and click **Send Monthly Kotter Now**. After `./deploy.sh`, a copy is written as **`manifest-{test|prod}.json`** (gitignored).
 
 Wire achievements to a channel (e.g. `#achievements-unlocked`); tune **`weaselbot.regions`** (e.g. `achievement_channel`) and related PAXminer schema per your runbook.
 

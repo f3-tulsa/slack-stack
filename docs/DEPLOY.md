@@ -160,7 +160,7 @@ aws lambda invoke --function-name weaselbot-test-weaselbot-kotter \
   --cli-binary-format raw-in-base64-out --payload '{}' /tmp/wb-kotter.json && cat /tmp/wb-kotter.json
 ```
 
-For Weaselbot Kotter, you can also use the IAM-protected Function URL output (`KotterApi`) for manual admin operations: `GET ...?action=status` (health) or `POST ...?action=send` (manual send).
+For Weaselbot Kotter, admins can manually send from Slack via `/kotter-report` and the **Send Monthly Kotter Now** button (uses `KotterApi` Function URL behind the app manifest URL substitution).
 
 With `--log-type Tail`, the CLI prints metadata to **stdout** (including base64 `LogResult`); decode with `jq -r '.LogResult' | base64 -d` if you need the tail of CloudWatch logs inline.
 
