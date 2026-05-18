@@ -404,7 +404,7 @@ def handle_backblast_post(body: dict, client: WebClient, logger: Logger, context
     ao_name = get_channel_name(the_ao, logger, client, region_record)
     q_name, q_url = get_user_names([the_q], logger, client, return_urls=True, user_records=user_records)
     q_name = (q_name or [""])[0]
-    q_url = q_url[0]
+    q_url = (q_url or [""])[0]
 
     count = count or auto_count
 
