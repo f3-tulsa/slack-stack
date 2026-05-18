@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: Weaselbot — PAX achievements (daily) and Kotter reports (weekly), container-image Lambda.
+Description: Weaselbot — PAX achievements (daily) and Kotter reports (monthly), container-image Lambda.
 
 Globals:
   Function:
@@ -40,7 +40,7 @@ Parameters:
     Default: rate(1 day)
   KotterSchedule:
     Type: String
-    Default: cron(0 12 ? * MON *)
+    Default: cron(0 12 1 * ? *)
   HomeRegionDateTiers:
     Type: String
     Default: "30,60,90,120"
@@ -120,6 +120,8 @@ Resources:
           - handlers.kotter_handler
       MemorySize: 512
       Timeout: 900
+      FunctionUrlConfig:
+        AuthType: AWS_IAM
       Events:
         WeeklyRun:
           Type: Schedule
@@ -156,3 +158,5 @@ Outputs:
     Value: !GetAtt AchievementsFunction.Arn
   KotterFunctionArn:
     Value: !GetAtt KotterFunction.Arn
+  KotterApi:
+    Value: !GetAtt KotterFunctionUrl.FunctionUrl

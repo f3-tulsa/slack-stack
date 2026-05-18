@@ -23,6 +23,26 @@ from common.encryption import require_encryption_key
 require_encryption_key()
 
 
+def _parse_manual_action(event) -> str:
+    if not isinstance(event, dict):
+        return ""
+    query = event.get("queryStringParameters") or {}
+    action = (query.get("action") or "").strip().lower()
+    if action:
+        return action
+    body = event.get("body")
+    if not body:
+        return ""
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except json.JSONDecodeError:
+            return ""
+    if isinstance(body, dict):
+        return (body.get("action") or "").strip().lower()
+    return ""
+
+
 def _try_bootstrap_weaselbot_slack_token() -> None:
     f3 = os.environ.get("F3_REGION_NAME", "").strip()
     st = os.environ.get("STAGE", "").strip()
@@ -73,10 +93,26 @@ def kotter_handler(event, context):
         getattr(context, "aws_request_id", None) if context else None,
     )
     try:
+        request_context = (event or {}).get("requestContext", {})
+        http_request = isinstance(request_context, dict) and "http" in request_context
+        action = _parse_manual_action(event)
+        if http_request and action == "status":
+            return {"statusCode": 200, "body": json.dumps({"ok": True, "mode": "kotter-status"})}
+        if http_request and action != "send":
+            return {
+                "statusCode": 400,
+                "body": json.dumps(
+                    {
+                        "ok": False,
+                        "error": "Set action=send to manually trigger Kotter reports.",
+                    }
+                ),
+            }
         from weaselbot.kotter_report import main
 
         main()
-        return {"statusCode": 200, "body": json.dumps({"ok": True, "mode": "kotter"})}
+        mode = "kotter-manual" if http_request else "kotter"
+        return {"statusCode": 200, "body": json.dumps({"ok": True, "mode": mode})}
     except Exception:
         logging.exception("Weaselbot kotter failed")
         return {
