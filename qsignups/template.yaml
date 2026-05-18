@@ -73,6 +73,10 @@ Parameters:
   Timezone:
     Type: String
     Default: "US/Central"
+  WeeklyAutomationTimezone:
+    Type: String
+    Default: "America/Chicago"
+    Description: IANA timezone for the weekly Sunday reminder schedule
   ScheduleCreateLengthDays:
     Type: String
     Default: "365"
@@ -196,12 +200,13 @@ Resources:
         QSignupsExtendSchedule:
           Type: ScheduleV2
           Properties:
-            ScheduleExpression: "rate(7 days)"
+            ScheduleExpression: "cron(0 3 ? * SUN *)"
+            ScheduleExpressionTimezone: !Ref WeeklyAutomationTimezone
             Name: !FindInMap
               - StagesMap
               - Ref: Stage
               - ExtendScheduleName
-            Input: '{"source": "qsignups.extend-schedule"}'
+            Input: '{"source": "qsignups.weekly-automation"}'
         # StravaExchange:
         #   Type: Api
         #   Properties:

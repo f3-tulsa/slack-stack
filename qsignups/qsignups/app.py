@@ -44,6 +44,7 @@ from slack.handlers import (
     weekly as weekly_handler,
     master as master_handler,
     ao as ao_handler,
+    reminders as reminder_handler,
 )
 from slack import actions, inputs
 from field_encryption import require_encryption_key
@@ -291,6 +292,24 @@ def _refresh_home_lazy(body, client, logger, context):
 
 
 app.action(actions.REFRESH_ACTION)(ack=_refresh_home_ack, lazy=[_refresh_home_lazy])
+
+
+def _send_reminders_ack(ack):
+    ack()
+
+
+def _send_reminders_lazy(body, client, logger, context):
+    logger.info(body)
+    user_id = context["user_id"]
+    team_id = context["team_id"]
+    user = get_user(user_id, client)
+    if not _require_slack_admin(client, user_id, team_id, logger, context):
+        return
+    result = reminder_handler.send_team_reminders(client, team_id, logger)
+    home.refresh(client, user, logger, result.to_user_message(manual=True), team_id, context)
+
+
+app.action(actions.SEND_REMINDERS_ACTION)(ack=_send_reminders_ack, lazy=[_send_reminders_lazy])
 
 
 def redirect_blocks(team_id: str, app_id: str):
@@ -1762,6 +1781,18 @@ def handler(event, context):
 
             extend_all_schedules(logger)
             return {"statusCode": 200, "body": "OK"}
+
+        if isinstance(event, dict) and event.get("source") == "qsignups.weekly-automation":
+            logger.info(
+                "QSignups handler start kind=weekly_automation request_id=%s",
+                request_id,
+            )
+            from slack.handlers.weekly import extend_all_schedules
+            from slack.handlers.reminders import send_all_region_reminders
+
+            extend_all_schedules(logger)
+            summary = send_all_region_reminders(logger)
+            return {"statusCode": 200, "body": summary.to_log_message()}
 
         if isinstance(event, dict) and (
             event.get("source") == "aws.events" or event.get("detail-type")

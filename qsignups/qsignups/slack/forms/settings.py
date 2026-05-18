@@ -9,17 +9,17 @@ def general_form(team_id, user_id, client, logger):
 
     initial_q_reminder = None
     if region.signup_reminders == 1:
-        initial_q_reminder = inputs.Q_REMINDER_ENABLED
+        initial_q_reminder = inputs.Q_REMINDER_ENABLED.value
     elif region.signup_reminders == 0:
-        initial_q_reminder = inputs.Q_REMINDER_DISABLED
+        initial_q_reminder = inputs.Q_REMINDER_DISABLED.value
     else:
         initial_q_reminder = None
 
     initial_ao_reminder = None
     if region.weekly_ao_reminders == 1:
-        initial_ao_reminder = inputs.AO_REMINDER_ENABLED
+        initial_ao_reminder = inputs.AO_REMINDER_ENABLED.value
     elif region.weekly_ao_reminders == 0:
-        initial_ao_reminder = inputs.AO_REMINDER_DISABLED
+        initial_ao_reminder = inputs.AO_REMINDER_DISABLED.value
     else:
         initial_ao_reminder = None
 
