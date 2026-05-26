@@ -8,6 +8,63 @@ from . import UpdateResponse
 from utilities import safe_get, User
 # from google import authenticate, calendar
 
+def _event_when_text(event_date, event_time) -> str:
+    try:
+        if event_date and event_time:
+            dt = datetime.strptime(f"{event_date.strftime('%Y-%m-%d')} {event_time}", "%Y-%m-%d %H%M")
+            day = dt.strftime("%d").lstrip("0") or "0"
+            return f"{dt.strftime('%A, %B')} {day} @ {dt.strftime('%H%M')}"
+    except Exception:
+        pass
+    return "the selected workout"
+
+
+def _q_label(q_id: str | None, q_name: str | None) -> str:
+    if q_id:
+        return f"<@{q_id}>"
+    if q_name:
+        return q_name
+    return "*OPEN*"
+
+
+def _notify_signup_state_change(
+    client,
+    logger,
+    ao_channel_id: str | None,
+    ao_display_name: str | None,
+    actor: User | None,
+    event_date,
+    event_time,
+    previous_q_id: str | None,
+    previous_q_name: str | None,
+    new_q_id: str | None,
+    new_q_name: str | None,
+) -> None:
+    if previous_q_id == new_q_id and previous_q_name == new_q_name:
+        return
+    if not ao_channel_id:
+        return
+
+    actor_label = f"<@{actor.id}>" if actor and actor.id else (actor.name if actor and actor.name else "Someone")
+    when_text = _event_when_text(event_date, event_time)
+    ao_name = ao_display_name or "this AO"
+    message = (
+        f":fire: Q sheet update at *{ao_name}* — *{when_text}*\n"
+        f"Updated by: {actor_label}\n"
+        f"Previous: {_q_label(previous_q_id, previous_q_name)}\n"
+        f"Now: {_q_label(new_q_id, new_q_name)}"
+    )
+    try:
+        client.chat_postMessage(channel=ao_channel_id, text=message)
+    except Exception:
+        logger.warning(
+            "Failed to send Q signup state change notification channel=%s ao=%s",
+            ao_channel_id,
+            ao_name,
+            exc_info=True,
+        )
+
+
 def delete(client, user_id, team_id, logger, input_data) -> UpdateResponse:
 
     # gather and format selected date and time
@@ -29,10 +86,10 @@ def delete(client, user_id, team_id, logger, input_data) -> UpdateResponse:
     # Perform deletions
     try:
         DbManager.delete_records(Master, master_filter)
-        return UpdateResponse(success = True, message=f"Success! Deleted event on {selected_date_db} at {selected_time_db}")
+        return UpdateResponse(success = True, message=f":white_check_mark: That beatdown slot on {selected_date_db} at {selected_time_db} has been wiped from the Weinke.")
     except Exception as e:
         logger.error(f"Error deleting: {e}")
-        return UpdateResponse(success = False, message = f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker. Errors:\n{e}")
+        return UpdateResponse(success = False, message = f"Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker. Errors:\n{e}")
 
 def insert(client, user_id, team_id, logger, input_data) -> UpdateResponse:
 
@@ -68,10 +125,10 @@ def insert(client, user_id, team_id, logger, input_data) -> UpdateResponse:
             event_recurring = event_recurring,
             team_id = team_id
         ))
-        return UpdateResponse(success = True, message="Got it - I've made your updates!")
+        return UpdateResponse(success = True, message=":white_check_mark: Locked in—the Weinke has been updated!")
     except Exception as e:
         logger.error(f"Error inserting: {e}")
-        return UpdateResponse(success = False, message = f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker. Errors:\n{e}")
+        return UpdateResponse(success = False, message = f"Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker. Errors:\n{e}")
 
 def update_events_from_state(
     client,
@@ -130,12 +187,27 @@ def update_events_from_state(
         DbManager.find_records(Master, filters = [
             Master.id.in_([x.id for x in google_records])
         ])
+        previous_q_id = records[0].q_pax_id if records else None
+        previous_q_name = records[0].q_pax_name if records else None
+        _notify_signup_state_change(
+            client=client,
+            logger=logger,
+            ao_channel_id=ao.ao_channel_id if ao else None,
+            ao_display_name=ao.ao_display_name if ao else None,
+            actor=user,
+            event_date=datetime.strptime(selected_date, "%Y-%m-%d").date(),
+            event_time=selected_time,
+            previous_q_id=previous_q_id,
+            previous_q_name=previous_q_name,
+            new_q_id=selected_q_id_fmt,
+            new_q_name=selected_q_name_fmt,
+        )
         # for event in records_to_reschedules:
         #     calendar.schedule_event(team_id, user, region, event, ao)
-        return UpdateResponse(success = True, message="Got it - I've made your updates!")
+        return UpdateResponse(success = True, message=":white_check_mark: Locked in—the Weinke has been updated!")
     except Exception as e:
         logger.error(f"Error inserting: {e}")
-        return UpdateResponse(success = False, message = f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker. Errors:\n{e}")
+        return UpdateResponse(success = False, message = f"Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker. Errors:\n{e}")
 
 
 def update_events(client, user: User, team_id, logger, input_data) -> UpdateResponse:
@@ -159,32 +231,62 @@ def clear_event_q(client, user: User, team_id, logger, ao_display_name, selected
     # gather and format selected date and time
     result: helper.MasterEventAndAO = helper.find_master_event(team_id, selected_dt, ao_display_name = ao_display_name)
     if not result:
-        return UpdateResponse(success = False, message = "Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker")
+        return UpdateResponse(success = False, message = "Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker.")
 
     try:
+        previous_q_id = result.event.q_pax_id
+        previous_q_name = result.event.q_pax_name
         DbManager.update_record(Master, result.event.id, {
             Master.q_pax_id: None,
             Master.q_pax_name: None
         })
+        _notify_signup_state_change(
+            client=client,
+            logger=logger,
+            ao_channel_id=result.ao.ao_channel_id,
+            ao_display_name=result.ao.ao_display_name,
+            actor=user,
+            event_date=result.event.event_date,
+            event_time=result.event.event_time,
+            previous_q_id=previous_q_id,
+            previous_q_name=previous_q_name,
+            new_q_id=None,
+            new_q_name=None,
+        )
         if result.event.google_event_id:
             DbManager.get_record(Region, team_id)
             # calendar.schedule_event(team_id, None, region, result.event, result.ao)
 
-        return UpdateResponse(success = True, message=f"Got it, {user.name}! I have cleared the Q slot at *{ao_display_name}* on *{selected_dt.strftime('%A, %B %-d @ %H%M')}*")
+        return UpdateResponse(success = True, message=f":white_check_mark: Roger that, {user.name}! The Q slot at *{ao_display_name}* on *{selected_dt.strftime('%A, %B %-d @ %H%M')}* is now open.")
     except Exception as e:
         logger.error("Error updating: %s", e, exc_info=True)
-        return UpdateResponse(success = False, message = f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker {e}")
+        return UpdateResponse(success = False, message = f"Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker. Errors:\n{e}")
 
 def assign_event_q(client, user: User, team_id, logger, selected_dt, ao_display_name = None, ao_channel_id = None) -> UpdateResponse:
 
     result: helper.MasterEventAndAO = helper.find_master_event(team_id, selected_dt, ao_display_name = ao_display_name, ao_channel_id = ao_channel_id)
 
     if not result:
-        return UpdateResponse(success = False, message = "Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker.")
+        return UpdateResponse(success = False, message = "Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker.")
+    previous_q_id = result.event.q_pax_id
+    previous_q_name = result.event.q_pax_name
     DbManager.update_record(Master, result.event.id, {
         Master.q_pax_id: user.id,
         Master.q_pax_name: user.name
     })
+    _notify_signup_state_change(
+        client=client,
+        logger=logger,
+        ao_channel_id=result.ao.ao_channel_id,
+        ao_display_name=result.ao.ao_display_name,
+        actor=user,
+        event_date=result.event.event_date,
+        event_time=result.event.event_time,
+        previous_q_id=previous_q_id,
+        previous_q_name=previous_q_name,
+        new_q_id=user.id,
+        new_q_name=user.name,
+    )
     # if authenticate.is_connected(team_id):
     #     new_master = DbManager.get_record(Master, result.event.id)
     #     region: Region = DbManager.get_record(Region, team_id)
@@ -194,4 +296,4 @@ def assign_event_q(client, user: User, team_id, logger, selected_dt, ao_display_
     #             Master.google_event_id: event['id'],
     #         })
 
-    return UpdateResponse(success = True, message="Got it - I've made your updates!")
+    return UpdateResponse(success = True, message=":white_check_mark: Locked in—the Weinke has been updated!")

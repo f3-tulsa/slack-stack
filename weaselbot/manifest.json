@@ -8,7 +8,15 @@
     "bot_user": {
       "display_name": "WeaselBot",
       "always_online": true
-    }
+    },
+    "slash_commands": [
+      {
+        "command": "/kotter-report",
+        "url": "__HOSTNAME__",
+        "description": "Open Kotter report controls",
+        "usage_hint": "/kotter-report"
+      }
+    ]
   },
   "oauth_config": {
     "scopes": {
@@ -23,11 +31,16 @@
         "reactions:write",
         "users:read",
         "users:read.email",
-        "channels:history"
+        "channels:history",
+        "commands"
       ]
     }
   },
   "settings": {
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "__HOSTNAME__"
+    },
     "org_deploy_enabled": false,
     "socket_mode_enabled": false,
     "token_rotation_enabled": false

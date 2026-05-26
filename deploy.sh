@@ -471,6 +471,7 @@ deploy_weaselbot() {
       "Stage=${STAGE}" \
       "F3RegionName=${F3_REGION_NAME}" \
       "WbSlackToken=${WB_SLACK_TOKEN}" \
+      "WbSlackSigningSecret=${WB_SLACK_SIGNING_SECRET}" \
       "F3RegionSlackTeamId=${F3_REGION_SLACK_TEAM_ID}" \
       "WeaselbotPaxminerRegionalSchemas=${WEASELBOT_PAXMINER_REGIONAL_SCHEMAS:-}" \
     2>&1 | tee -a "$RECEIPT_FILE"
@@ -605,8 +606,18 @@ done
 
 log_receipt ""
 log_receipt "--- Stage-specific Slack manifests ---"
+WB_API_URL=""
 SB_API_URL=""
 QS_API_URL=""
+if [[ "$WEASEL_RC" -eq 0 ]]; then
+  WB_FULL="$(get_stack_output "weaselbot-${STAGE}" "KotterApi")"
+  WB_API_URL="$(api_base_from_events_url "$WB_FULL")"
+  if [[ -n "$WB_API_URL" ]]; then
+    write_stage_manifest_subst "weaselbot" "$WB_API_URL" || log_receipt "WARN: could not write weaselbot manifest-${STAGE}.json"
+  else
+    log_receipt "WARN: KotterApi output missing; skip weaselbot manifest generation"
+  fi
+fi
 if [[ "$SB_RC" -eq 0 ]]; then
   SB_FULL="$(get_stack_output "slackblast-${STAGE}" "SlackblastApi")"
   SB_API_URL="$(api_base_from_events_url "$SB_FULL")"
@@ -628,9 +639,6 @@ fi
 if [[ "$PAX_RC" -eq 0 ]]; then
   write_stage_manifest_copy "PAXminer" || log_receipt "WARN: could not write PAXminer manifest-${STAGE}.json"
 fi
-if [[ "$WEASEL_RC" -eq 0 ]]; then
-  write_stage_manifest_copy "weaselbot" || log_receipt "WARN: could not write weaselbot manifest-${STAGE}.json"
-fi
 
 log_receipt ""
 log_receipt "=== Deploy summary ==="
@@ -648,6 +656,7 @@ summarize_row "slackblast-${STAGE}" "$SB_RC"
 summarize_row "qsignups-${STAGE}" "$QS_RC"
 log_receipt ""
 log_receipt "API base URLs (for Slack manifests):"
+log_receipt "  weaselbot: ${WB_API_URL:-n/a}"
 log_receipt "  slackblast: ${SB_API_URL:-n/a}"
 log_receipt "  qsignups:   ${QS_API_URL:-n/a}"
 log_receipt ""

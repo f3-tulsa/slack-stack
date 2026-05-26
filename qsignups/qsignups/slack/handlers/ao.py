@@ -89,12 +89,12 @@ def edit(client, user_id, team_id, logger, ao_channel_id, input_data) -> UpdateR
             },
         )
         set_site_q(ao_channel_id, site_q_user_id)
-        return UpdateResponse(success=True, message="Got it - I've made your updates!")
+        return UpdateResponse(success=True, message=":white_check_mark: Locked in—the Weinke has been updated!")
     except Exception as e:
         logger.error(f"Error updating: {e}")
         return UpdateResponse(
             success=False,
-            message=f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker. Errors:\n{e}",
+            message=f"Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker. Errors:\n{e}",
         )
 
 
@@ -111,12 +111,12 @@ def delete(client, user_id, team_id, logger, ao_channel_id) -> UpdateResponse:
         DbManager.delete_records(
             cls=Master, filters=[Master.ao_channel_id == ao_channel_id]
         )
-        return UpdateResponse(success=True, message="Got it - I've made your updates!")
+        return UpdateResponse(success=True, message=":white_check_mark: Locked in—the Weinke has been updated!")
     except Exception as e:
         logger.error(f"Error deleting AO: {e}")
         return UpdateResponse(
             success=False,
-            message=f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker. Errors:\n{e}",
+            message=f"Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker. Errors:\n{e}",
         )
 
 
@@ -152,10 +152,10 @@ def insert(client, user_id, team_id, logger, input_data) -> UpdateResponse:
             )
         )
         set_site_q(ao_channel_id, site_q_user_id)
-        return UpdateResponse(success=True, message="Got it - I've made your updates!")
+        return UpdateResponse(success=True, message=":white_check_mark: Locked in—the Weinke has been updated!")
     except Exception as e:
         logger.error(f"Error inserting: {e}")
         return UpdateResponse(
             success=False,
-            message=f"Sorry, there was an error of some sort; please try again or contact your local administrator / Weasel Shaker. Errors:\n{e}",
+            message=f"Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker. Errors:\n{e}",
         )

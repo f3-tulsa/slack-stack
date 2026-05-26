@@ -352,6 +352,18 @@ def handle_backblast_post(body: dict, client: WebClient, logger: Logger, context
     if region_record.paxminer_schema:
         user_records = DbManager.find_records(PaxminerUser, filters=[True], schema=region_record.paxminer_schema)
 
+    q_is_app_user = any(
+        getattr(user_record, "user_id", None) == the_q and bool(getattr(user_record, "app", 0))
+        for user_record in (user_records or [])
+    )
+    db_q_user_id = user_id if q_is_app_user else the_q
+    if q_is_app_user:
+        logger.info(
+            "Selected Q %s is an app/bot user; storing DB q_user_id as submitting user %s",
+            the_q,
+            user_id,
+        )
+
     chan = destination
     if chan == "The_AO":
         chan = the_ao
@@ -405,7 +417,7 @@ def handle_backblast_post(body: dict, client: WebClient, logger: Logger, context
     ao_name = get_channel_name(the_ao, logger, client, region_record)
     q_name, q_url = get_user_names([the_q], logger, client, return_urls=True, user_records=user_records)
     q_name = (q_name or [""])[0]
-    q_url = q_url[0]
+    q_url = (q_url or [""])[0]
 
     count = count or auto_count
 
@@ -651,7 +663,7 @@ COUNT: {count}
                     ts_edited=safe_get(res, "message", "edited", "ts"),
                     ao_id=ao or chan,
                     bd_date=the_date,
-                    q_user_id=the_q,
+                    q_user_id=db_q_user_id,
                     coq_user_id=the_coq[0] if the_coq else None,
                     pax_count=count,
                     backblast=f"{post_msg}\n{moleskin_text}".replace("*", ""),
@@ -678,7 +690,7 @@ COUNT: {count}
                         user_id=pax_id,
                         ao_id=ao or chan,
                         date=the_date,
-                        q_user_id=the_q,
+                        q_user_id=db_q_user_id,
                     )
                 )
 
