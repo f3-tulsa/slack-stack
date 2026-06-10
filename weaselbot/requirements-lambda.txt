@@ -1,5 +1,5 @@
 # Runtime only (Lambda container); omit jupyter/dev stack from pyproject.toml
-cryptography>=46.0.6
+cryptography>=48.0.1
 polars>=1.21.0
 pyarrow>=19.0.0
 connectorx>=0.4.1
