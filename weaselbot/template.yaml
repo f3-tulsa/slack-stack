@@ -41,10 +41,32 @@ Parameters:
   KotterSchedule:
     Type: String
     Default: cron(0 12 ? * MON *)
+  DownrangeSchedule:
+    Type: String
+    Default: cron(0 13 * * ? *)
   HomeRegionDateTiers:
     Type: String
     Default: "30,60,90,120"
     Description: Comma-separated day tiers for home-region logic
+  DownrangeHomeSchemaPrefix:
+    Type: String
+    Default: f3ttown_
+    Description: Home schema prefix used for downrange detection (e.g. f3ttown_)
+  DownrangeLookbackDays:
+    Type: String
+    Default: "14"
+    Description: Lookback window (days) for report/backfill
+  DownrangeReportLimit:
+    Type: String
+    Default: "50"
+    Description: Max rows per report message before truncation
+  DownrangeSyncEnabled:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: If true, mirror downrange attendance into home schema beatdowns/bd_attendance
   Stage:
     Type: String
     AllowedValues:
@@ -151,8 +173,55 @@ Resources:
       LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-weaselbot-kotter"
       RetentionInDays: 30
 
+  DownrangeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-weaselbot-downrange"
+      PackageType: Image
+      ImageConfig:
+        Command:
+          - handlers.downrange_handler
+      MemorySize: 512
+      Timeout: 900
+      Events:
+        DailyRun:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref DownrangeSchedule
+      Environment:
+        Variables:
+          DATABASE_HOST: !Ref DatabaseHost
+          DATABASE_PORT: !Ref DatabasePort
+          DATABASE_USER: !Ref DatabaseUser
+          DATABASE_PASSWORD: !Ref DatabasePassword
+          DATABASE_TLS_ENABLED: !Ref DatabaseTlsEnabled
+          PAXMINER_SCHEMA: !Ref PaxminerSchema
+          WEASELBOT_SCHEMA: !Ref WeaselbotSchema
+          DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
+          HOME_REGION_DATE_TIERS: !Ref HomeRegionDateTiers
+          WEASELBOT_DOWNRANGE_HOME_SCHEMA_PREFIX: !Ref DownrangeHomeSchemaPrefix
+          WEASELBOT_DOWNRANGE_LOOKBACK_DAYS: !Ref DownrangeLookbackDays
+          WEASELBOT_DOWNRANGE_REPORT_LIMIT: !Ref DownrangeReportLimit
+          WEASELBOT_DOWNRANGE_SYNC_ENABLED: !Ref DownrangeSyncEnabled
+          STAGE: !Ref Stage
+          F3_REGION_NAME: !Ref F3RegionName
+          WB_SLACK_TOKEN: !Ref WbSlackToken
+          F3_REGION_SLACK_TEAM_ID: !Ref F3RegionSlackTeamId
+    Metadata:
+      DockerTag: weaselbot-downrange
+      DockerContext: ..
+      Dockerfile: weaselbot/Dockerfile
+
+  DownrangeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-weaselbot-downrange"
+      RetentionInDays: 30
+
 Outputs:
   AchievementsFunctionArn:
     Value: !GetAtt AchievementsFunction.Arn
   KotterFunctionArn:
     Value: !GetAtt KotterFunction.Arn
+  DownrangeFunctionArn:
+    Value: !GetAtt DownrangeFunction.Arn

@@ -11,14 +11,14 @@ import logging
 import os
 import traceback
 
-# Configure root logging before cold-start bootstrap (token_bootstrap uses LOG.info).
+from common.encryption import require_encryption_key
+
+# Configure root logging before executing bootstrap steps (token_bootstrap uses LOG.info).
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s]:%(message)s",
     level=logging.INFO,
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-
-from common.encryption import require_encryption_key
 
 require_encryption_key()
 
@@ -79,6 +79,24 @@ def kotter_handler(event, context):
         return {"statusCode": 200, "body": json.dumps({"ok": True, "mode": "kotter"})}
     except Exception:
         logging.exception("Weaselbot kotter failed")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"ok": False, "error": traceback.format_exc()}),
+        }
+
+
+def downrange_handler(event, context):
+    logging.info(
+        "Weaselbot downrange_handler start request_id=%s",
+        getattr(context, "aws_request_id", None) if context else None,
+    )
+    try:
+        from weaselbot.downrange_sync import main
+
+        main()
+        return {"statusCode": 200, "body": json.dumps({"ok": True, "mode": "downrange"})}
+    except Exception:
+        logging.exception("Weaselbot downrange sync failed")
         return {
             "statusCode": 500,
             "body": json.dumps({"ok": False, "error": traceback.format_exc()}),
