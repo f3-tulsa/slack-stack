@@ -69,5 +69,4 @@ jobs:
               --body "Cherry-picked from successful test deploy ${HEAD_SHA} (supersedes test PR #${PR_NUMBER})."
           fi
           PR_URL=$(gh pr view "$BRANCH" --json url -q .url)
-          gh pr review --approve "$PR_URL"
           gh pr merge --auto --squash "$PR_URL"
