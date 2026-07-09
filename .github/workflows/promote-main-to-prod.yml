@@ -49,5 +49,4 @@ jobs:
               --body "Automated promotion from main. Merges when CI passes on prod."
           fi
           PR_URL=$(gh pr list --base prod --head main --state open --json url -q '.[0].url')
-          gh pr review --approve "$PR_URL"
           gh pr merge --auto --merge "$PR_URL"
