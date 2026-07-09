@@ -20,6 +20,12 @@ jobs:
           app-id: ${{ secrets.AUTOMATION_APP_ID }}
           private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
 
+      # Checkout so `gh pr edit --base` (retargeting majors to test) has a git
+      # repo + remote to operate against; without it gh errors "not a git repository".
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
       - uses: dependabot/fetch-metadata@v2
         id: meta
         with:
