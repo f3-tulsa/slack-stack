@@ -12,9 +12,17 @@ jobs:
   promote:
     runs-on: ubuntu-latest
     steps:
+      # App token so the main->prod merge triggers deploy.yml on the prod push.
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Skip when main and prod are identical
         id: check
@@ -31,7 +39,7 @@ jobs:
       - name: Open or refresh main to prod PR
         if: steps.check.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           EXISTING=$(gh pr list --base prod --head main --state open --json number -q '.[0].number // empty')
@@ -41,5 +49,4 @@ jobs:
               --body "Automated promotion from main. Merges when CI passes on prod."
           fi
           PR_URL=$(gh pr list --base prod --head main --state open --json url -q '.[0].url')
-          gh pr review --approve "$PR_URL"
           gh pr merge --auto --merge "$PR_URL"
