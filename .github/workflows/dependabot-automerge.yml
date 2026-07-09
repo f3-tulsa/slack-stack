@@ -25,8 +25,30 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Route major updates to test
-        if: steps.meta.outputs.update-type == 'version-update:semver-major'
+      # Only fast-track to main when we are CONFIDENT the update is minor/patch:
+      # either fetch-metadata says so, or it belongs to the minor-patch group.
+      # Everything else (semver-major, or ambiguous update-type: null that
+      # Dependabot reports for ">=" range requirements) routes to test for
+      # deploy validation first. Defaulting ambiguous updates to test is the
+      # safe choice - it never lets an unvalidated major reach prod.
+      - name: Decide route
+        id: route
+        env:
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          DEP_GROUP: ${{ steps.meta.outputs.dependency-group }}
+        run: |
+          set -euo pipefail
+          if [[ "$UPDATE_TYPE" == "version-update:semver-minor" \
+             || "$UPDATE_TYPE" == "version-update:semver-patch" \
+             || "$DEP_GROUP" == "minor-patch" ]]; then
+            echo "target=main" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=test" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Routing to: $(grep target "$GITHUB_OUTPUT") (update-type='${UPDATE_TYPE}', group='${DEP_GROUP}')"
+
+      - name: Route major/unvalidated updates to test
+        if: steps.route.outputs.target == 'test'
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
@@ -35,15 +57,13 @@ jobs:
           set -euo pipefail
           gh label create dependency-major --color "B60205" --force 2>/dev/null || true
           gh pr edit "$PR_NUMBER" --base test --add-label dependency-major
-          gh pr review --approve "$PR_URL"
           gh pr merge --auto --squash "$PR_URL"
 
-      - name: Auto-merge patch and minor updates to main
-        if: steps.meta.outputs.update-type != 'version-update:semver-major'
+      - name: Auto-merge minor/patch updates to main
+        if: steps.route.outputs.target == 'main'
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
-          gh pr review --approve "$PR_URL"
           gh pr merge --auto --squash "$PR_URL"
