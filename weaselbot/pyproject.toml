@@ -65,14 +65,14 @@ dependencies = [
 
 [dependency-groups]
 lambda = [
-    "cryptography==46.0.7",
+    "cryptography>=49.0.0",
     "connectorx>=0.4.1",
-    "pyarrow>=19.0.0",
+    "pyarrow>=23.0.1",
     "polars>=1.21.0",
     "sqlalchemy>=2.0.38",
     "pymysql>=1.1.1",
     "slack-sdk>=3.34.0",
-    "python-dotenv>=1.0.1",
+    "python-dotenv>=1.2.2",
     "numpy>=2.2.2",
 ]
 dev = [
