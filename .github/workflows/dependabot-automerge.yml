@@ -15,13 +15,26 @@ jobs:
         id: meta
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Auto-merge patch and minor updates
-        if: >-
-          steps.meta.outputs.update-type == 'version-update:semver-patch' ||
-          steps.meta.outputs.update-type == 'version-update:semver-minor'
+
+      - name: Route major updates to test
+        if: steps.meta.outputs.update-type == 'version-update:semver-major'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
+          gh label create dependency-major --color "B60205" --force 2>/dev/null || true
+          gh pr edit "$PR_NUMBER" --base test --add-label dependency-major
           gh pr review --approve "$PR_URL"
           gh pr merge --auto --squash "$PR_URL"
+
+      - name: Auto-merge patch and minor updates to main
+        if: steps.meta.outputs.update-type != 'version-update:semver-major'
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash "$PR_URL"

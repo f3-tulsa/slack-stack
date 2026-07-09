@@ -1,24 +1,30 @@
 #!/usr/bin/env bash
-# One-time repo admin setup for dependabot auto-merge on test.
+# One-time repo admin setup for dependabot auto-merge on main/test/prod.
 # Requires: gh auth with admin permissions on f3-tulsa/slack-stack
 set -euo pipefail
 
 REPO="${1:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
-RULESET_ID="${TEST_RULESET_ID:-15405493}"
-LOW_SHA="${LOW_SHA:-ccdbdea}"
-AUTO_SHA="${AUTO_SHA:-dee6354}"
-MAJOR_SHA="${MAJOR_SHA:-0231994}"
+MAIN_RULESET_ID="${MAIN_RULESET_ID:-15405638}"
+PROD_RULESET_ID="${PROD_RULESET_ID:-15405317}"
+TEST_RULESET_ID="${TEST_RULESET_ID:-15405493}"
 
 echo "Configuring ${REPO}..."
 
 gh api "repos/${REPO}" -X PATCH -f allow_auto_merge=true
 echo "Enabled allow_auto_merge"
 
-gh api "repos/${REPO}/rulesets/${RULESET_ID}" > /tmp/test-ruleset.json
-python3 <<'PY'
+patch_ruleset() {
+  local ruleset_id="$1"
+  local ruleset_name="$2"
+  gh api "repos/${REPO}/rulesets/${ruleset_id}" > "/tmp/ruleset-${ruleset_id}.json"
+  python3 <<PY
 import json
-with open("/tmp/test-ruleset.json") as f:
+
+ruleset_id = "${ruleset_id}"
+ruleset_name = "${ruleset_name}"
+with open(f"/tmp/ruleset-{ruleset_id}.json") as f:
     data = json.load(f)
+
 checks = [
     {"context": "test"},
     {"context": "pip-audit"},
@@ -27,7 +33,26 @@ checks = [
     {"context": "weaselbot-requirements-sync"},
     {"context": "pre-commit"},
 ]
-rules = [r for r in data["rules"] if r["type"] != "required_status_checks"]
+
+keep_types = {"deletion", "non_fast_forward", "pull_request"}
+rules = [r for r in data["rules"] if r["type"] in keep_types and r["type"] != "required_status_checks"]
+rules = [r for r in rules if r["type"] != "required_status_checks"]
+
+if not any(r["type"] == "pull_request" for r in rules):
+    rules.append({
+        "type": "pull_request",
+        "parameters": {
+            "allowed_merge_methods": ["merge", "squash", "rebase"],
+            "dismiss_stale_reviews_on_push": True,
+            "dismissal_restriction": {"allowed_actors": [], "enabled": False},
+            "require_code_owner_review": False,
+            "require_last_push_approval": False,
+            "required_approving_review_count": 0,
+            "required_review_thread_resolution": False,
+            "required_reviewers": [],
+        },
+    })
+
 rules.append({
     "type": "required_status_checks",
     "parameters": {
@@ -35,6 +60,7 @@ rules.append({
         "required_status_checks": checks,
     },
 })
+
 payload = {
     "name": data["name"],
     "target": data["target"],
@@ -42,29 +68,22 @@ payload = {
     "conditions": data["conditions"],
     "rules": rules,
 }
-with open("/tmp/test-ruleset-patch.json", "w") as f:
+with open(f"/tmp/ruleset-patch-{ruleset_id}.json", "w") as f:
     json.dump(payload, f)
+print(f"Prepared {ruleset_name} ({ruleset_id})")
 PY
+  gh api "repos/${REPO}/rulesets/${ruleset_id}" -X PUT --input "/tmp/ruleset-patch-${ruleset_id}.json"
+  echo "Updated ${ruleset_name} ruleset (${ruleset_id})"
+}
 
-gh api "repos/${REPO}/rulesets/${RULESET_ID}" -X PUT --input /tmp/test-ruleset-patch.json
-echo "Updated Test Set ruleset with required CI checks"
+patch_ruleset "$MAIN_RULESET_ID" "Main Set"
+patch_ruleset "$PROD_RULESET_ID" "Prod Set"
+patch_ruleset "$TEST_RULESET_ID" "Test Set"
 
-LOW_RISK=(7 8 9 10 11 12 14 15 16 18 19 21 22 23 25 26 29 31 32 34 35 36 59 67 69)
-for n in "${LOW_RISK[@]}"; do
-  gh pr close "$n" --repo "$REPO" \
-    --comment "Superseded by low-risk consolidation on test (${LOW_SHA}, ${AUTO_SHA})." \
-    --delete-branch || true
-done
+gh label create dependency-major --repo "$REPO" --color "B60205" --force 2>/dev/null || true
+echo "Ensured dependency-major label exists"
 
-HIGH_RISK=(13 20 33 50 66 70)
-if [[ -n "$MAJOR_SHA" ]]; then
-  for n in "${HIGH_RISK[@]}"; do
-    gh pr close "$n" --repo "$REPO" \
-      --comment "Superseded by test-first majors PR (${MAJOR_SHA})." \
-      --delete-branch || true
-  done
-fi
-
-echo "Done. Open/merge PRs:"
-echo "  1. chore/deps-consolidation-and-automation -> test"
-echo "  2. chore/deps-major-bumps -> test (after #1 merges)"
+echo "Done. Next steps:"
+echo "  1. Merge chore/reconcile-main-trunk -> main"
+echo "  2. Align prod and test to main via promotion PRs"
+echo "  3. Validate minor/patch auto-merge and major test-first flow"
