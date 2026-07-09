@@ -1,4 +1,4 @@
-dateparser>=1.4.0
+dateparser>=1.4.1
 matplotlib>=3.8.0
 numpy>=1.26.0
 pandas>=2.1.0
