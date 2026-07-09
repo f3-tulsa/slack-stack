@@ -1,0 +1,65 @@
+name: Promote major dependency to main
+
+on:
+  workflow_run:
+    workflows: ["Deploy Slack Stack"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'test'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Find merged dependency-major PR for deploy commit
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          PR_NUMBER=$(gh pr list --state merged --base test \
+            --json number,labels,mergeCommit \
+            --jq ".[] | select(.mergeCommit.oid == \"${HEAD_SHA}\") | select([.labels[].name] | index(\"dependency-major\")) | .number" \
+            | head -1)
+          if [[ -z "$PR_NUMBER" ]]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No dependency-major PR found for ${HEAD_SHA}; skipping promotion."
+            exit 0
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Cherry-pick dependency commit to main
+        if: steps.pr.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          BRANCH="promote/major-dep-${HEAD_SHA:0:7}"
+          git fetch origin main
+          git checkout -B "$BRANCH" "origin/main"
+          git cherry-pick "$HEAD_SHA"
+          git push -u origin "$BRANCH" --force-with-lease
+          EXISTING=$(gh pr list --base main --head "$BRANCH" --state open --json number -q '.[0].number // empty')
+          if [[ -z "$EXISTING" ]]; then
+            gh pr create --base main --head "$BRANCH" \
+              --title "chore: promote major dependency update from test" \
+              --body "Cherry-picked from successful test deploy ${HEAD_SHA} (supersedes test PR #${PR_NUMBER})."
+          fi
+          PR_URL=$(gh pr view "$BRANCH" --json url -q .url)
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash "$PR_URL"

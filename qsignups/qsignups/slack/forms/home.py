@@ -66,7 +66,7 @@ def refresh(client, user: User, logger, top_message, team_id, context):
             })
 
         # Create upcoming schedule message
-        sMsg = 'Upcoming Q Slots:'
+        sMsg = ':calendar: Upcoming Q Slots—who\'s bringing the pain?'
         iterate_date = ''
         for event in upcoming_events:
             if event.event_date != iterate_date:
@@ -74,7 +74,7 @@ def refresh(client, user: User, logger, top_message, team_id, context):
                 iterate_date = event.event_date
 
             if event.q_pax_name is None:
-                q_name = '*OPEN!*'
+                q_name = '*OPEN—Who wants it?*'
             else:
                 q_name = event.q_pax_name
             sMsg += f"\n{event.ao_display_name} - {event.event_type} @ {event.event_time} - {q_name}"
@@ -86,7 +86,7 @@ def refresh(client, user: User, logger, top_message, team_id, context):
 
     # Extend top message with upcoming qs list
     if len(upcoming_qs) > 0:
-        top_message += '\n\nYou have some upcoming Qs:'
+        top_message += '\n\n:fire: You\'re on the Q sheet for these upcoming beatdowns:'
         for q in upcoming_qs:
             dt_fmt = q.event_date.strftime("%a %m-%d")
             top_message += f"\n- {q.event_type} on {dt_fmt} @ {q.event_time} at {q.ao_display_name}"
@@ -126,13 +126,13 @@ def refresh(client, user: User, logger, top_message, team_id, context):
         if permission.level in (PermissionLevel.ADMIN, PermissionLevel.AOQ):
             blocks.append(
                 forms.make_header_row(
-                    "Please use the Manage Region Calendar button to add some AOs and Events!"
+                    "Time to get this region dialed in—use the Manage Region Calendar button to add AOs and Events!"
                 )
             )
         else:
             blocks.append(
                 forms.make_header_row(
-                    "No AOs are configured yet. Ask a region admin to add AOs and events."
+                    "No AOs are live yet. EH your region admin to get the schedule going!"
                 )
             )
     else:
@@ -152,7 +152,7 @@ def refresh(client, user: User, logger, top_message, team_id, context):
             "block_id": "ao_select_block",
             "text": {
                 "type": "mrkdwn",
-                "text": "Select an AO to take a Q Slot:"
+                "text": "Select an AO to claim a Q slot and lead the beatdown:"
             },
             "accessory": {
                 "action_id": "ao-select",
@@ -172,25 +172,25 @@ def refresh(client, user: User, logger, top_message, team_id, context):
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "This week's schedule:"
+                    "text": "This week's Weinke:"
                 }
             },
             {
                 "type": "image",
                 "image_url": current_week_weinke_url,
-                "alt_text": "This week's schedule",
+                "alt_text": "This week's Weinke",
             },
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "Next week's schedule:"
+                    "text": "Next week's Weinke:"
                 }
             },
             {
                 "type": "image",
                 "image_url": next_week_weinke_url,
-                "alt_text": "Next week's schedule",
+                "alt_text": "Next week's Weinke",
             },
             {
                 "type": "divider",
