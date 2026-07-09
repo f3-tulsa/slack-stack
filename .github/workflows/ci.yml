@@ -34,10 +34,11 @@ jobs:
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         working-directory: slackblast/slackblast
         run: |
+          poetry export -f requirements.txt --without-hashes -o requirements.txt
           cd ../..
           if git diff --quiet slackblast/slackblast/requirements.txt; then
-          if git diff --quiet slackblast/slackblast/requirements.txt; then
             echo "requirements.txt is already in sync with poetry.lock."
+          elif [[ -n "${PR_HEAD_REPO}" && "${PR_HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]]; then
             echo "::error::slackblast/slackblast/requirements.txt is out of sync with poetry.lock. Run: cd slackblast/slackblast && poetry export -f requirements.txt --without-hashes -o requirements.txt"
             exit 1
           else
@@ -46,6 +47,7 @@ jobs:
             git add slackblast/slackblast/requirements.txt
             git commit -m "chore: sync slackblast requirements.txt with poetry.lock"
             git push
+            echo "::notice::slackblast/slackblast/requirements.txt was out of sync and has been auto-fixed."
           fi
 
   weaselbot-requirements-sync:
