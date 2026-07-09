@@ -41,7 +41,7 @@ jobs:
       run_slackblast: ${{ steps.pick.outputs.run_slackblast }}
       run_qsignups: ${{ steps.pick.outputs.run_qsignups }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -109,7 +109,7 @@ jobs:
     outputs:
       sam_s3_bucket: ${{ steps.resolve_bucket.outputs.sam_s3_bucket }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -179,7 +179,7 @@ jobs:
     env:
       SAM_S3_BUCKET: ${{ needs.setup.outputs.sam_s3_bucket }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
@@ -216,7 +216,7 @@ jobs:
     env:
       SAM_S3_BUCKET: ${{ needs.setup.outputs.sam_s3_bucket }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
@@ -258,7 +258,7 @@ jobs:
       ENABLE_XRAY: ${{ vars.ENABLE_XRAY }}
       SAM_S3_BUCKET: ${{ needs.setup.outputs.sam_s3_bucket }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
@@ -311,7 +311,7 @@ jobs:
       ENABLE_XRAY: ${{ vars.ENABLE_XRAY }}
       SAM_S3_BUCKET: ${{ needs.setup.outputs.sam_s3_bucket }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
@@ -372,7 +372,7 @@ jobs:
       needs.deploy-qsignups.result != 'failure'
     environment: ${{ github.event.inputs.environment || github.ref_name }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: aws-actions/configure-aws-credentials@v6
         with:

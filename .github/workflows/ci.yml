@@ -16,7 +16,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.head_ref || github.ref_name }}
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
@@ -34,10 +34,11 @@ jobs:
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         working-directory: slackblast/slackblast
         run: |
+          poetry export -f requirements.txt --without-hashes -o requirements.txt
           cd ../..
           if git diff --quiet slackblast/slackblast/requirements.txt; then
-          if git diff --quiet slackblast/slackblast/requirements.txt; then
             echo "requirements.txt is already in sync with poetry.lock."
+          elif [[ -n "${PR_HEAD_REPO}" && "${PR_HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]]; then
             echo "::error::slackblast/slackblast/requirements.txt is out of sync with poetry.lock. Run: cd slackblast/slackblast && poetry export -f requirements.txt --without-hashes -o requirements.txt"
             exit 1
           else
@@ -46,12 +47,60 @@ jobs:
             git add slackblast/slackblast/requirements.txt
             git commit -m "chore: sync slackblast requirements.txt with poetry.lock"
             git push
+            echo "::notice::slackblast/slackblast/requirements.txt was out of sync and has been auto-fixed."
           fi
+
+  weaselbot-requirements-sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - name: Sync weaselbot requirements-lambda.txt with uv.lock
+        env:
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        working-directory: weaselbot
+        run: |
+          uv export --format requirements-txt --no-hashes --only-group lambda -o requirements-lambda.txt
+          cd ..
+          if git diff --quiet weaselbot/requirements-lambda.txt; then
+            echo "requirements-lambda.txt is already in sync with uv.lock."
+          elif [[ -n "${PR_HEAD_REPO}" && "${PR_HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]]; then
+            echo "::error::weaselbot/requirements-lambda.txt is out of sync with uv.lock. Run: cd weaselbot && uv export --format requirements-txt --no-hashes --no-dev -o requirements-lambda.txt"
+            exit 1
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add weaselbot/requirements-lambda.txt
+            git commit -m "chore: sync weaselbot requirements-lambda.txt with uv.lock"
+            git push
+            echo "::notice::weaselbot/requirements-lambda.txt was out of sync and has been auto-fixed."
+          fi
+
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - name: Install Poetry and export plugin
+        run: |
+          python -m pip install --upgrade pip poetry pre-commit
+          poetry self add poetry-plugin-export
+      - name: Run pre-commit
+        run: pre-commit run --all-files
 
   sam-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Validate SAM templates
         run: |
           sam validate -t PAXminer/template.yaml --lint
@@ -66,7 +115,7 @@ jobs:
       # qsignups app import validates DB_ENCRYPTION_KEY at module load (handler routing test)
       DB_ENCRYPTION_KEY: ci-test-encryption-key-32chars!
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -85,7 +134,8 @@ jobs:
           set -euo pipefail
           python -m venv .venv-slackblast
           . .venv-slackblast/bin/activate
-          pip install pytest -r slackblast/slackblast/requirements.txt
+          # boto3 is on the Lambda runtime but needed for imports in slackblast tests
+          pip install pytest boto3 -r slackblast/slackblast/requirements.txt
           pytest -q slackblast/test/
       - name: pytest qsignups
         run: |
@@ -99,7 +149,7 @@ jobs:
   pip-audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
