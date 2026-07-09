@@ -134,7 +134,8 @@ jobs:
           set -euo pipefail
           python -m venv .venv-slackblast
           . .venv-slackblast/bin/activate
-          pip install pytest -r slackblast/slackblast/requirements.txt
+          # boto3 is on the Lambda runtime but needed for imports in slackblast tests
+          pip install pytest boto3 -r slackblast/slackblast/requirements.txt
           pytest -q slackblast/test/
       - name: pytest qsignups
         run: |
