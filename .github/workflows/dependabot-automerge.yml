@@ -14,7 +14,7 @@ jobs:
       # App token (not GITHUB_TOKEN) so the eventual merge triggers downstream
       # workflows (promote-main-to-prod / deploy). Requires the app id + key to be
       # present as Dependabot secrets (this workflow runs on Dependabot events).
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           app-id: ${{ secrets.AUTOMATION_APP_ID }}
