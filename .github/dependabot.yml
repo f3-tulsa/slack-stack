@@ -4,39 +4,79 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: docker
     directory: /PAXminer
     schedule:
       interval: weekly
+    groups:
+      minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: docker
     directory: /weaselbot
     schedule:
       interval: weekly
+    groups:
+      minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /PAXminer
     schedule:
       interval: weekly
+    groups:
+      minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /PAXminer/database_management
     schedule:
       interval: weekly
+    groups:
+      minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /weaselbot
     schedule:
       interval: weekly
+    groups:
+      minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /slackblast/slackblast
     schedule:
       interval: weekly
+    groups:
+      minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /qsignups/qsignups
     schedule:
       interval: weekly
+    groups:
+      minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /qsignups/weinkes
     schedule:
       interval: weekly
+    groups:
+      minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /migration
     schedule:
       interval: weekly
+    groups:
+      minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
