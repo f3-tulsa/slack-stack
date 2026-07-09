@@ -4,6 +4,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: saturday
+      time: "13:00"
+      timezone: America/Chicago
     groups:
       minor-patch:
         patterns: ["*"]
@@ -12,6 +15,9 @@ updates:
     directory: /PAXminer
     schedule:
       interval: weekly
+      day: saturday
+      time: "13:00"
+      timezone: America/Chicago
     groups:
       minor-patch:
         patterns: ["*"]
@@ -20,6 +26,9 @@ updates:
     directory: /weaselbot
     schedule:
       interval: weekly
+      day: saturday
+      time: "13:00"
+      timezone: America/Chicago
     groups:
       minor-patch:
         patterns: ["*"]
@@ -28,6 +37,9 @@ updates:
     directory: /PAXminer
     schedule:
       interval: weekly
+      day: saturday
+      time: "13:00"
+      timezone: America/Chicago
     groups:
       minor-patch:
         patterns: ["*"]
@@ -36,6 +48,9 @@ updates:
     directory: /PAXminer/database_management
     schedule:
       interval: weekly
+      day: saturday
+      time: "13:00"
+      timezone: America/Chicago
     groups:
       minor-patch:
         patterns: ["*"]
@@ -44,6 +59,9 @@ updates:
     directory: /weaselbot
     schedule:
       interval: weekly
+      day: saturday
+      time: "13:00"
+      timezone: America/Chicago
     groups:
       minor-patch:
         patterns: ["*"]
@@ -52,6 +70,9 @@ updates:
     directory: /slackblast/slackblast
     schedule:
       interval: weekly
+      day: saturday
+      time: "13:00"
+      timezone: America/Chicago
     groups:
       minor-patch:
         patterns: ["*"]
@@ -60,6 +81,9 @@ updates:
     directory: /qsignups/qsignups
     schedule:
       interval: weekly
+      day: saturday
+      time: "13:00"
+      timezone: America/Chicago
     groups:
       minor-patch:
         patterns: ["*"]
@@ -68,6 +92,9 @@ updates:
     directory: /qsignups/weinkes
     schedule:
       interval: weekly
+      day: saturday
+      time: "13:00"
+      timezone: America/Chicago
     groups:
       minor-patch:
         patterns: ["*"]
@@ -76,6 +103,9 @@ updates:
     directory: /migration
     schedule:
       interval: weekly
+      day: saturday
+      time: "13:00"
+      timezone: America/Chicago
     groups:
       minor-patch:
         patterns: ["*"]
