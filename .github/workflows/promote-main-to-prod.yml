@@ -12,18 +12,29 @@ jobs:
   promote:
     runs-on: ubuntu-latest
     steps:
+      # App token so the main->prod merge triggers deploy.yml on the prod push.
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
 
-      - name: Skip when main and prod are identical
+      - name: Skip when main is already contained in prod
         id: check
         run: |
           set -euo pipefail
           git fetch origin main prod
-          if [[ "$(git rev-parse origin/main)" == "$(git rev-parse origin/prod)" ]]; then
+          # Promotion uses merge commits, so main and prod are never byte-identical
+          # by SHA. Skip only when main is already an ancestor of prod (nothing new
+          # to promote) to avoid opening empty promotion PRs.
+          if git merge-base --is-ancestor origin/main origin/prod; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "main and prod are already aligned; nothing to promote."
+            echo "main is already contained in prod; nothing to promote."
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
@@ -31,7 +42,7 @@ jobs:
       - name: Open or refresh main to prod PR
         if: steps.check.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           EXISTING=$(gh pr list --base prod --head main --state open --json number -q '.[0].number // empty')
@@ -41,5 +52,4 @@ jobs:
               --body "Automated promotion from main. Merges when CI passes on prod."
           fi
           PR_URL=$(gh pr list --base prod --head main --state open --json url -q '.[0].url')
-          gh pr review --approve "$PR_URL"
           gh pr merge --auto --merge "$PR_URL"

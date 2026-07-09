@@ -16,14 +16,22 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'test'
     steps:
+      # App token so the branch push + merge to main trigger promote-main-to-prod.
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Find merged dependency-major PR for deploy commit
         id: pr
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
@@ -42,7 +50,7 @@ jobs:
       - name: Cherry-pick dependency commit to main
         if: steps.pr.outputs.found == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
@@ -61,5 +69,4 @@ jobs:
               --body "Cherry-picked from successful test deploy ${HEAD_SHA} (supersedes test PR #${PR_NUMBER})."
           fi
           PR_URL=$(gh pr view "$BRANCH" --json url -q .url)
-          gh pr review --approve "$PR_URL"
           gh pr merge --auto --squash "$PR_URL"
