@@ -1,0 +1,45 @@
+name: Promote main to prod
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Skip when main and prod are identical
+        id: check
+        run: |
+          set -euo pipefail
+          git fetch origin main prod
+          if [[ "$(git rev-parse origin/main)" == "$(git rev-parse origin/prod)" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "main and prod are already aligned; nothing to promote."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or refresh main to prod PR
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          EXISTING=$(gh pr list --base prod --head main --state open --json number -q '.[0].number // empty')
+          if [[ -z "$EXISTING" ]]; then
+            gh pr create --base prod --head main \
+              --title "chore: promote main to prod" \
+              --body "Automated promotion from main. Merges when CI passes on prod."
+          fi
+          PR_URL=$(gh pr list --base prod --head main --state open --json url -q '.[0].url')
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --merge "$PR_URL"

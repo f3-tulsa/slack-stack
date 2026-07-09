@@ -131,9 +131,12 @@ class DbManager:
             session.add(record)
             session.flush()
             session.expunge(record)
-            return record
-        finally:
             session.commit()
+            return record
+        except Exception:
+            session.rollback()
+            raise
+        finally:
             close_session(session)
 
     def create_records(records: List[BaseClass], schema=None):
@@ -141,8 +144,11 @@ class DbManager:
         try:
             session.add_all(records)
             session.flush()
-        finally:
             session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
             close_session(session)
 
     def delete_record(cls: T, id, schema=None):

@@ -2,7 +2,6 @@ version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
-    target-branch: test
     schedule:
       interval: weekly
     groups:
@@ -11,7 +10,6 @@ updates:
         update-types: ["minor", "patch"]
   - package-ecosystem: docker
     directory: /PAXminer
-    target-branch: test
     schedule:
       interval: weekly
     groups:
@@ -20,7 +18,6 @@ updates:
         update-types: ["minor", "patch"]
   - package-ecosystem: docker
     directory: /weaselbot
-    target-branch: test
     schedule:
       interval: weekly
     groups:
@@ -29,7 +26,6 @@ updates:
         update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /PAXminer
-    target-branch: test
     schedule:
       interval: weekly
     groups:
@@ -38,7 +34,6 @@ updates:
         update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /PAXminer/database_management
-    target-branch: test
     schedule:
       interval: weekly
     groups:
@@ -47,7 +42,6 @@ updates:
         update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /weaselbot
-    target-branch: test
     schedule:
       interval: weekly
     groups:
@@ -56,7 +50,6 @@ updates:
         update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /slackblast/slackblast
-    target-branch: test
     schedule:
       interval: weekly
     groups:
@@ -65,7 +58,6 @@ updates:
         update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /qsignups/qsignups
-    target-branch: test
     schedule:
       interval: weekly
     groups:
@@ -74,7 +66,6 @@ updates:
         update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /qsignups/weinkes
-    target-branch: test
     schedule:
       interval: weekly
     groups:
@@ -83,7 +74,6 @@ updates:
         update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /migration
-    target-branch: test
     schedule:
       interval: weekly
     groups:
