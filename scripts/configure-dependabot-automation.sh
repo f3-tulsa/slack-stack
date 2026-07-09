@@ -6,8 +6,8 @@ set -euo pipefail
 REPO="${1:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
 RULESET_ID="${TEST_RULESET_ID:-15405493}"
 LOW_SHA="${LOW_SHA:-ccdbdea}"
-AUTO_SHA="${AUTO_SHA:-fa01ce3}"
-MAJOR_SHA="${MAJOR_SHA:-}"
+AUTO_SHA="${AUTO_SHA:-dee6354}"
+MAJOR_SHA="${MAJOR_SHA:-0231994}"
 
 echo "Configuring ${REPO}..."
 
