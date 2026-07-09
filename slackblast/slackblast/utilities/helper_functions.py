@@ -409,6 +409,18 @@ def check_for_duplicate(
     """Check if there is already a backblast for this AO and Q on this date"""
     logger.debug(f"Checking for duplicate backblast for {q} at {ao} on {date}")
     if region_record.paxminer_schema:
+        # App/bot users (e.g. DRQ - Downrange Q) are shared placeholder identities.
+        # Multiple valid backblasts can exist for the same app user, AO, and date,
+        # so skip the duplicate check for them.
+        q_user_records = DbManager.find_records(
+            cls=PaxminerUser,
+            filters=[PaxminerUser.user_id == q],
+            schema=region_record.paxminer_schema,
+        )
+        if q_user_records and q_user_records[0].app:
+            logger.debug(f"Q user {q} is an app/bot user, skipping duplicate check")
+            return False
+
         backblast_dups = DbManager.find_records(
             cls=Backblast,
             filters=[Backblast.q_user_id == q, Backblast.ao_id == ao, Backblast.bd_date == date],
@@ -421,7 +433,12 @@ def check_for_duplicate(
         )
         logger.debug(f"Backblast dups: {backblast_dups}")
         logger.debug(f"og_ts: {og_ts}")
-        is_duplicate = (len(backblast_dups) > 0 or len(attendance_dups) > 0) and og_ts != backblast_dups[0].timestamp
+        has_dups = len(backblast_dups) > 0 or len(attendance_dups) > 0
+        # If the matching backblast record is the one being edited (og_ts matches),
+        # it is not a true duplicate. When only attendance dups exist (no backblast
+        # record), we cannot match og_ts and always treat it as a new duplicate.
+        is_same_backblast = len(backblast_dups) > 0 and og_ts == backblast_dups[0].timestamp
+        is_duplicate = has_dups and not is_same_backblast
     else:
         is_duplicate = False
 

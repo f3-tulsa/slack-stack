@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 # Match Lambda layout (CodeUri = slackblast/slackblast): imports are utilities.* not slackblast.utilities.*
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "slackblast"))
 import utilities.helper_functions as helper_functions
-from utilities.database.orm import Region
-from utilities.helper_functions import ensure_users_in_db, get_oauth_flow, safe_get
+from utilities.database.orm import PaxminerUser, Region
+from utilities.helper_functions import check_for_duplicate, ensure_users_in_db, get_oauth_flow, safe_get
 
 
 def _slack_user(
@@ -386,3 +386,154 @@ def test_ensure_users_in_db_no_email_logs_warning(mock_ge):
     assert len(calls) == 1
     logger.warning.assert_called_once()
     assert "users:read.email" in logger.warning.call_args[0][0]
+
+
+def _region_with_schema(schema="f3testregion"):
+    region = MagicMock(spec=Region)
+    region.paxminer_schema = schema
+    return region
+
+
+def _paxminer_user(user_id="U_APP", app=1):
+    user = MagicMock(spec=PaxminerUser)
+    user.user_id = user_id
+    user.app = app
+    return user
+
+
+def _backblast_record(timestamp="111.222"):
+    record = MagicMock()
+    record.timestamp = timestamp
+    return record
+
+
+@patch("utilities.helper_functions.DbManager")
+def test_check_for_duplicate_returns_false_for_app_user(mock_db):
+    """App/bot users (e.g. DRQ) should bypass duplicate detection."""
+    mock_db.find_records.side_effect = [
+        [_paxminer_user(user_id="U_DRQ", app=1)],  # user lookup
+    ]
+    region = _region_with_schema()
+    logger = MagicMock()
+
+    result = check_for_duplicate(
+        q="U_DRQ",
+        ao="C_DOWNRANGE",
+        date=date(2026, 3, 25),
+        region_record=region,
+        logger=logger,
+    )
+
+    assert result is False
+    # Should only query user table, not backblast/attendance
+    assert mock_db.find_records.call_count == 1
+
+
+@patch("utilities.helper_functions.DbManager")
+def test_check_for_duplicate_returns_true_for_regular_user_with_existing_backblast(mock_db):
+    """Regular users should still get the duplicate warning when a matching record exists."""
+    mock_db.find_records.side_effect = [
+        [_paxminer_user(user_id="U_REAL", app=0)],  # user lookup
+        [_backblast_record("111.222")],               # backblast dups
+        [],                                           # attendance dups
+    ]
+    region = _region_with_schema()
+    logger = MagicMock()
+
+    result = check_for_duplicate(
+        q="U_REAL",
+        ao="C_AO",
+        date=date(2026, 3, 25),
+        region_record=region,
+        logger=logger,
+        og_ts=None,
+    )
+
+    assert result is True
+
+
+@patch("utilities.helper_functions.DbManager")
+def test_check_for_duplicate_returns_false_when_og_ts_matches(mock_db):
+    """Editing an existing backblast should not flag itself as a duplicate."""
+    mock_db.find_records.side_effect = [
+        [_paxminer_user(user_id="U_REAL", app=0)],  # user lookup
+        [_backblast_record("111.222")],               # backblast dups
+        [],                                           # attendance dups
+    ]
+    region = _region_with_schema()
+    logger = MagicMock()
+
+    result = check_for_duplicate(
+        q="U_REAL",
+        ao="C_AO",
+        date=date(2026, 3, 25),
+        region_record=region,
+        logger=logger,
+        og_ts="111.222",
+    )
+
+    assert result is False
+
+
+@patch("utilities.helper_functions.DbManager")
+def test_check_for_duplicate_no_index_error_when_only_attendance_dup_exists(mock_db):
+    """Should not raise IndexError when only attendance dups exist (no backblast dups)."""
+    mock_db.find_records.side_effect = [
+        [_paxminer_user(user_id="U_REAL", app=0)],  # user lookup
+        [],                                           # backblast dups (empty)
+        [MagicMock()],                                # attendance dups
+    ]
+    region = _region_with_schema()
+    logger = MagicMock()
+
+    result = check_for_duplicate(
+        q="U_REAL",
+        ao="C_AO",
+        date=date(2026, 3, 25),
+        region_record=region,
+        logger=logger,
+        og_ts=None,
+    )
+
+    assert result is True
+
+
+@patch("utilities.helper_functions.DbManager")
+def test_check_for_duplicate_returns_false_when_no_schema(mock_db):
+    """Without a paxminer schema, duplicates cannot be checked and False is returned."""
+    region = MagicMock(spec=Region)
+    region.paxminer_schema = None
+    logger = MagicMock()
+
+    result = check_for_duplicate(
+        q="U_ANY",
+        ao="C_AO",
+        date=date(2026, 3, 25),
+        region_record=region,
+        logger=logger,
+    )
+
+    assert result is False
+    mock_db.find_records.assert_not_called()
+
+
+@patch("utilities.helper_functions.DbManager")
+def test_check_for_duplicate_returns_false_when_no_dups(mock_db):
+    """No existing records means no duplicate."""
+    mock_db.find_records.side_effect = [
+        [_paxminer_user(user_id="U_REAL", app=0)],  # user lookup
+        [],                                           # backblast dups
+        [],                                           # attendance dups
+    ]
+    region = _region_with_schema()
+    logger = MagicMock()
+
+    result = check_for_duplicate(
+        q="U_REAL",
+        ao="C_AO",
+        date=date(2026, 3, 25),
+        region_record=region,
+        logger=logger,
+    )
+
+    assert result is False

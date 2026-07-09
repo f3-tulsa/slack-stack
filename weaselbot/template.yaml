@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: Weaselbot — PAX achievements (daily) and Kotter reports (weekly), container-image Lambda.
+Description: Weaselbot — PAX achievements (daily) and Kotter reports (monthly), container-image Lambda.
 
 Globals:
   Function:
@@ -40,7 +40,7 @@ Parameters:
     Default: rate(1 day)
   KotterSchedule:
     Type: String
-    Default: cron(0 12 ? * MON *)
+    Default: cron(0 12 1 * ? *)
   HomeRegionDateTiers:
     Type: String
     Default: "30,60,90,120"
@@ -59,6 +59,11 @@ Parameters:
     NoEcho: true
     MinLength: 16
     Description: Weaselbot Slack bot token (encrypted into DB at cold start)
+  WbSlackSigningSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 16
+    Description: Weaselbot Slack signing secret for slash command/interactivity verification
   F3RegionSlackTeamId:
     Type: String
     Description: Slack workspace Team ID (e.g. T01234567); available to Lambdas as F3_REGION_SLACK_TEAM_ID (e.g. weaselbot.regions.team_id)
@@ -120,6 +125,14 @@ Resources:
           - handlers.kotter_handler
       MemorySize: 512
       Timeout: 900
+      Policies:
+        - Statement:
+            - Sid: SelfInvoke
+              Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*"
+      FunctionUrlConfig:
+        AuthType: NONE
       Events:
         WeeklyRun:
           Type: Schedule
@@ -139,6 +152,7 @@ Resources:
           STAGE: !Ref Stage
           F3_REGION_NAME: !Ref F3RegionName
           WB_SLACK_TOKEN: !Ref WbSlackToken
+          WB_SLACK_SIGNING_SECRET: !Ref WbSlackSigningSecret
           F3_REGION_SLACK_TEAM_ID: !Ref F3RegionSlackTeamId
     Metadata:
       DockerTag: weaselbot-kotter
@@ -156,3 +170,5 @@ Outputs:
     Value: !GetAtt AchievementsFunction.Arn
   KotterFunctionArn:
     Value: !GetAtt KotterFunction.Arn
+  KotterApi:
+    Value: !GetAtt KotterFunctionUrl.FunctionUrl
