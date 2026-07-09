@@ -1,0 +1,40 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.12
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: slackblast-requirements-sync
+        name: sync slackblast requirements.txt with poetry.lock
+        entry: bash -c 'cd slackblast/slackblast && poetry export -f requirements.txt --without-hashes -o requirements.txt && cd ../.. && git diff --quiet slackblast/slackblast/requirements.txt || { echo "slackblast/slackblast/requirements.txt is out of sync with poetry.lock"; exit 1; }'
+        language: system
+        files: ^slackblast/slackblast/(pyproject\.toml|poetry\.lock)$
+        pass_filenames: false
+
+      - id: weaselbot-requirements-sync
+        name: sync weaselbot requirements-lambda.txt with uv.lock
+        entry: bash -c 'cd weaselbot && uv export --format requirements-txt --no-hashes --only-group lambda -o requirements-lambda.txt && cd .. && git diff --quiet weaselbot/requirements-lambda.txt || { echo "weaselbot/requirements-lambda.txt is out of sync with uv.lock"; exit 1; }'
+        language: system
+        files: ^weaselbot/(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+
+      - id: pip-audit-changed
+        name: pip-audit changed requirements files
+        entry: bash scripts/pre-commit-pip-audit.sh
+        language: system
+        files: requirements.*\.txt$
+        pass_filenames: true
