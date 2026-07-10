@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # App token (not GITHUB_TOKEN) so the prod->test merge triggers test CI + deploy.
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           app-id: ${{ secrets.AUTOMATION_APP_ID }}
