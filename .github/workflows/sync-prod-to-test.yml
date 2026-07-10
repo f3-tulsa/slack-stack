@@ -1,0 +1,59 @@
+name: Sync prod to test
+
+# Keeps test current with everything that reaches prod, so test-targeted work
+# (feature branches, major dependency validation) builds on the latest shipped
+# code. This is the downstream counterpart to promote-main-to-prod: updates flow
+# main -> prod, then prod -> test. test's own commits are preserved (this opens a
+# merge PR, it never resets test).
+on:
+  push:
+    branches: [prod]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      # App token (not GITHUB_TOKEN) so the prod->test merge triggers test CI + deploy.
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Skip when prod is already contained in test
+        id: check
+        run: |
+          set -euo pipefail
+          git fetch origin prod test
+          # Nothing to sync if prod is already an ancestor of test.
+          if git merge-base --is-ancestor origin/prod origin/test; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "prod already contained in test; nothing to sync."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or refresh prod to test PR
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          EXISTING=$(gh pr list --base test --head prod --state open --json number -q '.[0].number // empty')
+          if [[ -z "$EXISTING" ]]; then
+            gh pr create --base test --head prod \
+              --title "chore: sync prod to test" \
+              --body "Automated sync from prod. Preserves test's own commits and merges once CI passes on test. If this PR shows conflicts, a test-only change touches the same files as a prod update - resolve manually."
+          fi
+          PR_URL=$(gh pr list --base test --head prod --state open --json url -q '.[0].url')
+          # Merge commit (not squash) so test's history and prod's history both stay intact.
+          gh pr merge --auto --merge "$PR_URL"
