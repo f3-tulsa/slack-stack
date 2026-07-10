@@ -17,7 +17,7 @@ jobs:
       github.event.workflow_run.head_branch == 'test'
     steps:
       # App token so the branch push + merge to main trigger promote-main-to-prod.
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           app-id: ${{ secrets.AUTOMATION_APP_ID }}
