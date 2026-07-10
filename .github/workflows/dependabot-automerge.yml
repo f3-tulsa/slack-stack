@@ -31,27 +31,67 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Only fast-track to main when we are CONFIDENT the update is minor/patch:
-      # either fetch-metadata says so, or it belongs to the minor-patch group.
-      # Everything else (semver-major, or ambiguous update-type: null that
-      # Dependabot reports for ">=" range requirements) routes to test for
-      # deploy validation first. Defaulting ambiguous updates to test is the
-      # safe choice - it never lets an unvalidated major reach prod.
+      # Fast-track to main only when the update is minor/patch; route majors and
+      # anything we can't confidently classify to test for deploy validation first.
+      #
+      # fetch-metadata reports a clean update-type for ==-pinned deps and lockfile
+      # apps, and dependency-group for grouped PRs. But for ">=" range requirements
+      # (used by the pip apps without lockfiles) it returns update-type: null and
+      # empty previous/new-version - so for those we parse the ">=" floor versions
+      # out of the Dependabot PR title and compute the semver level ourselves.
+      # Unparseable / floor-equal / downgrade cases fall through to test (safe).
       - name: Decide route
         id: route
         env:
           UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
           DEP_GROUP: ${{ steps.meta.outputs.dependency-group }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
+
+          # Extract the ">=" floor version (fallback: first version token), then
+          # keep only the leading numeric dotted parts (drops .post1/rc/etc.).
+          floor() {
+            local c="$1" v
+            v=$(grep -oE '>=[0-9][0-9.]*' <<< "$c" | head -1 | sed 's/>=//')
+            [ -z "$v" ] && v=$(grep -oE '[0-9]+(\.[0-9]+)+' <<< "$c" | head -1)
+            grep -oE '^[0-9]+(\.[0-9]+)*' <<< "$v"
+          }
+
+          # Classify from a title like:
+          #   "Update boto3 requirement from >=1.42.93 to >=1.43.44 in /dir"
+          #   "Update slack-sdk requirement from <4,>=3.27.0 to >=3.43.0,<4 in /dir"
+          classify_from_title() {
+            local title="$1" old_c new_c old_v new_v oM om op nM nm np
+            old_c=$(sed -E 's/.* from (.+) to (.+) in .*/\1/' <<< "$title")
+            new_c=$(sed -E 's/.* from (.+) to (.+) in .*/\2/' <<< "$title")
+            old_v=$(floor "$old_c"); new_v=$(floor "$new_c")
+            if [ -z "$old_v" ] || [ -z "$new_v" ]; then echo unknown; return 0; fi
+            IFS=. read -r oM om op _ <<< "$old_v"
+            IFS=. read -r nM nm np _ <<< "$new_v"
+            oM=${oM:-0}; om=${om:-0}; op=${op:-0}
+            nM=${nM:-0}; nm=${nm:-0}; np=${np:-0}
+            if   [ "$nM" -gt "$oM" ]; then echo major
+            elif [ "$nM" -eq "$oM" ] && [ "$nm" -gt "$om" ]; then echo minor
+            elif [ "$nM" -eq "$oM" ] && [ "$nm" -eq "$om" ] && [ "$np" -gt "$op" ]; then echo patch
+            else echo unknown
+            fi
+          }
+
+          target=test
           if [[ "$UPDATE_TYPE" == "version-update:semver-minor" \
              || "$UPDATE_TYPE" == "version-update:semver-patch" \
              || "$DEP_GROUP" == "minor-patch" ]]; then
-            echo "target=main" >> "$GITHUB_OUTPUT"
+            target=main
+          elif [[ "$UPDATE_TYPE" == "version-update:semver-major" ]]; then
+            target=test
           else
-            echo "target=test" >> "$GITHUB_OUTPUT"
+            level=$(classify_from_title "$PR_TITLE")
+            [[ "$level" == "minor" || "$level" == "patch" ]] && target=main || target=test
+            echo "Inferred level from title: '${level}'"
           fi
-          echo "Routing to: $(grep target "$GITHUB_OUTPUT") (update-type='${UPDATE_TYPE}', group='${DEP_GROUP}')"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "Routing to $target (update-type='${UPDATE_TYPE}', group='${DEP_GROUP}', title='${PR_TITLE}')"
 
       - name: Route major/unvalidated updates to test
         if: steps.route.outputs.target == 'test'
