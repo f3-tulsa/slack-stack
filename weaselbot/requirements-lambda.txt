@@ -2,18 +2,18 @@
 #    uv export --format requirements-txt --no-hashes --only-group lambda -o requirements-lambda.txt
 cffi==2.1.0 ; platform_python_implementation != 'PyPy'
     # via cryptography
-connectorx==0.4.5
+connectorx==0.4.3
 cryptography==49.0.0
 greenlet==3.2.2 ; (python_full_version < '3.14' and platform_machine == 'AMD64') or (python_full_version < '3.14' and platform_machine == 'WIN32') or (python_full_version < '3.14' and platform_machine == 'aarch64') or (python_full_version < '3.14' and platform_machine == 'amd64') or (python_full_version < '3.14' and platform_machine == 'ppc64le') or (python_full_version < '3.14' and platform_machine == 'win32') or (python_full_version < '3.14' and platform_machine == 'x86_64')
     # via sqlalchemy
-numpy==2.5.1
-polars==1.42.1
+numpy==2.2.6
+polars==1.30.0
 pyarrow==24.0.0
 pycparser==2.22 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
     # via cffi
-pymysql==1.2.0
+pymysql==1.1.1
 python-dotenv==1.2.2
-slack-sdk==3.43.0
-sqlalchemy==2.0.51
-typing-extensions==4.16.0
+slack-sdk==3.35.0
+sqlalchemy==2.0.41
+typing-extensions==4.13.2
     # via sqlalchemy
