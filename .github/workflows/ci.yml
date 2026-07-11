@@ -11,7 +11,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Single job so slackblast + weaselbot sync commits cannot race on the same PR tip.
   # App token (not GITHUB_TOKEN) for the push: commits made with GITHUB_TOKEN do not
   # re-trigger workflows, which leaves Dependabot auto-merge waiting on checks that
   # never run against the new HEAD.
@@ -37,15 +36,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@v6
-
       - name: Install Poetry and export plugin
         run: |
           python -m pip install --upgrade pip
           pip install poetry
           poetry self add poetry-plugin-export
 
-      - name: Sync lockfile exports (slackblast + weaselbot)
+      - name: Sync slackblast requirements.txt with poetry.lock
         env:
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
@@ -53,39 +50,20 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          synced=false
-
           (
             cd slackblast/slackblast
             poetry export -f requirements.txt --without-hashes -o requirements.txt
           )
-          if ! git diff --quiet slackblast/slackblast/requirements.txt; then
-            if [[ -n "${PR_HEAD_REPO}" && "${PR_HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]]; then
-              echo "::error::slackblast/slackblast/requirements.txt is out of sync with poetry.lock. Run: cd slackblast/slackblast && poetry export -f requirements.txt --without-hashes -o requirements.txt"
-              exit 1
-            fi
-            git add slackblast/slackblast/requirements.txt
-            synced=true
-          fi
-
-          (
-            cd weaselbot
-            uv export --format requirements-txt --no-hashes --only-group lambda -o requirements-lambda.txt
-          )
-          if ! git diff --quiet weaselbot/requirements-lambda.txt; then
-            if [[ -n "${PR_HEAD_REPO}" && "${PR_HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]]; then
-              echo "::error::weaselbot/requirements-lambda.txt is out of sync with uv.lock. Run: cd weaselbot && uv export --format requirements-txt --no-hashes --only-group lambda -o requirements-lambda.txt"
-              exit 1
-            fi
-            git add weaselbot/requirements-lambda.txt
-            synced=true
-          fi
-
-          if [[ "$synced" != "true" ]]; then
+          if git diff --quiet slackblast/slackblast/requirements.txt; then
             echo "Lockfile exports are already in sync."
             exit 0
           fi
+          if [[ -n "${PR_HEAD_REPO}" && "${PR_HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]]; then
+            echo "::error::slackblast/slackblast/requirements.txt is out of sync with poetry.lock. Run: cd slackblast/slackblast && poetry export -f requirements.txt --without-hashes -o requirements.txt"
+            exit 1
+          fi
 
+          git add slackblast/slackblast/requirements.txt
           git commit -m "chore: sync requirements exports with lockfiles"
           git push
           echo "::notice::Requirements exports were out of sync and have been auto-fixed (app-token push retriggers CI)."
@@ -96,7 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [requirements-sync]
     steps:
-      - run: echo "Covered by requirements-sync (combined lockfile export job)."
+      - run: echo "Weaselbot retired; covered by requirements-sync (slackblast only)."
 
   pre-commit:
     runs-on: ubuntu-latest
@@ -120,7 +98,6 @@ jobs:
       - name: Validate SAM templates
         run: |
           sam validate -t PAXminer/template.yaml --lint
-          sam validate -t weaselbot/template.yaml --lint
           sam validate -t slackblast/template.yaml --lint
           sam validate -t qsignups/template.yaml --lint
           sam validate -t infra/template.bootstrap.yaml --lint
@@ -128,7 +105,6 @@ jobs:
   test:
     runs-on: ubuntu-latest
     env:
-      # qsignups app import validates DB_ENCRYPTION_KEY at module load (handler routing test)
       DB_ENCRYPTION_KEY: ci-test-encryption-key-32chars!
     steps:
       - uses: actions/checkout@v7
@@ -137,20 +113,18 @@ jobs:
           python-version: "3.12"
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
-      # Separate venvs per app — combined requirements can conflict (e.g. pymysql pins).
-      - name: pytest weaselbot
+      - name: pytest PAXminer
         run: |
           set -euo pipefail
-          python -m venv .venv-weaselbot
-          . .venv-weaselbot/bin/activate
-          pip install pytest -r weaselbot/requirements-lambda.txt
-          cd weaselbot && pytest -q tests/
+          python -m venv .venv-paxminer
+          . .venv-paxminer/bin/activate
+          pip install pytest -r PAXminer/requirements-lambda.txt
+          cd PAXminer && pytest -q tests/test_achievements.py tests/test_handlers.py
       - name: pytest slackblast
         run: |
           set -euo pipefail
           python -m venv .venv-slackblast
           . .venv-slackblast/bin/activate
-          # boto3 is on the Lambda runtime but needed for imports in slackblast tests
           pip install pytest boto3 -r slackblast/slackblast/requirements.txt
           pytest -q slackblast/test/
       - name: pytest qsignups
@@ -158,7 +132,6 @@ jobs:
           set -euo pipefail
           python -m venv .venv-qsignups
           . .venv-qsignups/bin/activate
-          # boto3 is on Lambda runtime but needed for slack_bolt.aws_lambda imports in tests
           pip install pytest boto3 -r qsignups/qsignups/requirements.txt
           pytest -q qsignups/testing/
 
@@ -176,7 +149,6 @@ jobs:
           pip-audit -r PAXminer/requirements-lambda.txt
           pip-audit -r PAXminer/requirements.txt
           pip-audit -r PAXminer/database_management/requirements.txt
-          pip-audit -r weaselbot/requirements-lambda.txt
           pip-audit -r slackblast/slackblast/requirements.txt
           pip-audit -r qsignups/qsignups/requirements.txt
           pip-audit -r qsignups/weinkes/requirements.txt

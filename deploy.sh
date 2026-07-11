@@ -30,7 +30,7 @@ usage() {
 Usage: $0 --env test|prod [options]
 
 Options:
-  --stack paxminer|weaselbot|slackblast|qsignups   default: all
+  --stack paxminer|slackblast|qsignups   default: all
   --build-only
   --confirm              prompt for SAM changeset confirmation
   --bootstrap            deploy infra/template.bootstrap.yaml (OIDC + SAM artifact bucket), then continue
@@ -268,7 +268,7 @@ require_cmd python3
 
 needs_docker() {
   case "$STACK" in
-    all|paxminer|weaselbot) return 0 ;;
+    all|paxminer) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -292,7 +292,6 @@ if [[ "${#DB_ENCRYPTION_KEY}" -lt 16 ]]; then
   exit 1
 fi
 : "${PAXMINER_SCHEMA:?}"
-: "${WEASELBOT_SCHEMA:?}"
 : "${SLACKBLAST_SCHEMA:?}"
 : "${QSIGNUPS_SCHEMA:?}"
 : "${IMAGE_S3_BUCKET:?}"
@@ -310,7 +309,8 @@ fi
 
 : "${F3_REGION_NAME:?}"
 : "${PM_SLACK_TOKEN:?}"
-: "${WB_SLACK_TOKEN:?}"
+: "${PM_SLACK_SIGNING_SECRET:?}"
+: "${PAXMINER_SWEEP_SECRET:?}"
 : "${F3_REGION_SLACK_TEAM_ID:?}"
 
 export AWS_DEFAULT_REGION="${AWS_REGION}"
@@ -372,7 +372,6 @@ log_receipt() {
 
 # -1 = not run, 0 = success, >0 = failure
 PAX_RC=-1
-WEASEL_RC=-1
 SB_RC=-1
 QS_RC=-1
 
@@ -445,40 +444,17 @@ deploy_paxminer() {
       "Stage=${STAGE}" \
       "F3RegionName=${F3_REGION_NAME}" \
       "PmSlackToken=${PM_SLACK_TOKEN}" \
-    2>&1 | tee -a "$RECEIPT_FILE"
-  return "${PIPESTATUS[0]}"
-}
-
-deploy_weaselbot() {
-  sam build -t weaselbot/template.yaml ${SAM_BUILD_EXTRA[@]+"${SAM_BUILD_EXTRA[@]}"} 2>&1 | tee -a "$RECEIPT_FILE"
-  local brc="${PIPESTATUS[0]}"
-  if [[ "$brc" -ne 0 ]]; then return "$brc"; fi
-  [[ "$BUILD_ONLY" == true ]] && return 0
-  sam deploy \
-    --stack-name "weaselbot-${STAGE}" \
-    "${SAM_DEPLOY_EXTRA[@]}" \
-    --resolve-image-repos \
-    "${SAM_S3_BUCKET_ARGS[@]}" \
-    --parameter-overrides \
-      "DatabaseHost=${DATABASE_HOST}" \
-      "DatabasePort=${DATABASE_PORT}" \
-      "DatabaseUser=${DATABASE_USER}" \
-      "DatabasePassword=${DATABASE_PASSWORD}" \
-      "DatabaseTlsEnabled=${DATABASE_TLS_ENABLED}" \
-      "DbEncryptionKey=${DB_ENCRYPTION_KEY}" \
-      "PaxminerSchema=${PAXMINER_SCHEMA}_${STAGE}" \
-      "WeaselbotSchema=${WEASELBOT_SCHEMA}_${STAGE}" \
-      "Stage=${STAGE}" \
-      "F3RegionName=${F3_REGION_NAME}" \
-      "WbSlackToken=${WB_SLACK_TOKEN}" \
-      "WbSlackSigningSecret=${WB_SLACK_SIGNING_SECRET}" \
-      "F3RegionSlackTeamId=${F3_REGION_SLACK_TEAM_ID}" \
-      "WeaselbotPaxminerRegionalSchemas=${WEASELBOT_PAXMINER_REGIONAL_SCHEMAS:-}" \
+      "PmSlackSigningSecret=${PM_SLACK_SIGNING_SECRET}" \
+      "PaxminerSweepSecret=${PAXMINER_SWEEP_SECRET}" \
     2>&1 | tee -a "$RECEIPT_FILE"
   return "${PIPESTATUS[0]}"
 }
 
 deploy_slackblast() {
+  local achievements_url="${PAXMINER_ACHIEVEMENTS_URL:-}"
+  if [[ -z "$achievements_url" && "${PAX_RC:-1}" -eq 0 ]]; then
+    achievements_url="$(get_stack_output "paxminer-${STAGE}" "AchievementsFunctionUrl")"
+  fi
   sam build -t slackblast/template.yaml --use-container ${SAM_BUILD_EXTRA[@]+"${SAM_BUILD_EXTRA[@]}"} 2>&1 | tee -a "$RECEIPT_FILE"
   local brc="${PIPESTATUS[0]}"
   if [[ "$brc" -ne 0 ]]; then return "$brc"; fi
@@ -502,6 +478,8 @@ deploy_slackblast() {
       "DatabaseTlsEnabled=${DATABASE_TLS_ENABLED}" \
       "DatabaseSchema=${SLACKBLAST_SCHEMA}_${STAGE}" \
       "PaxminerSchema=${PAXMINER_SCHEMA}_${STAGE}" \
+      "PaxminerAchievementsUrl=${achievements_url}" \
+      "PaxminerSweepSecret=${PAXMINER_SWEEP_SECRET}" \
       "SlackToken=${SB_SLACK_TOKEN}" \
       "SlackSigningSecret=${SB_SLACK_SIGNING_SECRET}" \
       "SlackClientSecret=${SB_SLACK_CLIENT_SECRET}" \
@@ -556,18 +534,18 @@ deploy_qsignups() {
   return "${PIPESTATUS[0]}"
 }
 
+PAX_RC=-1
+SB_RC=-1
+QS_RC=-1
+
 case "$STACK" in
   all)
     deploy_paxminer; PAX_RC=$?
-    deploy_weaselbot; WEASEL_RC=$?
     deploy_slackblast; SB_RC=$?
     deploy_qsignups; QS_RC=$?
     ;;
   paxminer)
     deploy_paxminer; PAX_RC=$?
-    ;;
-  weaselbot)
-    deploy_weaselbot; WEASEL_RC=$?
     ;;
   slackblast)
     deploy_slackblast; SB_RC=$?
@@ -576,7 +554,7 @@ case "$STACK" in
     deploy_qsignups; QS_RC=$?
     ;;
   *)
-    echo "Unknown stack: $STACK"
+    echo "Unknown stack: $STACK (weaselbot retired — use paxminer)"
     usage
     ;;
 esac
@@ -596,7 +574,7 @@ fi
 
 log_receipt ""
 log_receipt "--- Stack outputs (CloudFormation) ---"
-for name in "paxminer-${STAGE}" "weaselbot-${STAGE}" "slackblast-${STAGE}" "qsignups-${STAGE}"; do
+for name in "paxminer-${STAGE}" "slackblast-${STAGE}" "qsignups-${STAGE}"; do
   if aws cloudformation describe-stacks --stack-name "$name" --region "$AWS_REGION" &>/dev/null; then
     log_receipt "# $name"
     aws cloudformation describe-stacks --stack-name "$name" --region "$AWS_REGION" \
@@ -606,16 +584,15 @@ done
 
 log_receipt ""
 log_receipt "--- Stage-specific Slack manifests ---"
-WB_API_URL=""
+PM_KOTTER_URL=""
 SB_API_URL=""
 QS_API_URL=""
-if [[ "$WEASEL_RC" -eq 0 ]]; then
-  WB_FULL="$(get_stack_output "weaselbot-${STAGE}" "KotterApi")"
-  WB_API_URL="$(api_base_from_events_url "$WB_FULL")"
-  if [[ -n "$WB_API_URL" ]]; then
-    write_stage_manifest_subst "weaselbot" "$WB_API_URL" || log_receipt "WARN: could not write weaselbot manifest-${STAGE}.json"
+if [[ "$PAX_RC" -eq 0 ]]; then
+  PM_KOTTER_URL="$(get_stack_output "paxminer-${STAGE}" "KotterFunctionUrl")"
+  if [[ -n "$PM_KOTTER_URL" ]]; then
+    write_stage_manifest_subst "PAXminer" "$PM_KOTTER_URL" || log_receipt "WARN: could not write PAXminer manifest-${STAGE}.json"
   else
-    log_receipt "WARN: KotterApi output missing; skip weaselbot manifest generation"
+    write_stage_manifest_copy "PAXminer" || log_receipt "WARN: could not write PAXminer manifest-${STAGE}.json"
   fi
 fi
 if [[ "$SB_RC" -eq 0 ]]; then
@@ -636,9 +613,6 @@ if [[ "$QS_RC" -eq 0 ]]; then
     log_receipt "WARN: QSignupsApi output missing; skip qsignups manifest generation"
   fi
 fi
-if [[ "$PAX_RC" -eq 0 ]]; then
-  write_stage_manifest_copy "PAXminer" || log_receipt "WARN: could not write PAXminer manifest-${STAGE}.json"
-fi
 
 log_receipt ""
 log_receipt "=== Deploy summary ==="
@@ -651,19 +625,18 @@ summarize_row() {
   printf '%-22s %s\n' "$label" "$st" | tee -a "$RECEIPT_FILE"
 }
 summarize_row "paxminer-${STAGE}" "$PAX_RC"
-summarize_row "weaselbot-${STAGE}" "$WEASEL_RC"
 summarize_row "slackblast-${STAGE}" "$SB_RC"
 summarize_row "qsignups-${STAGE}" "$QS_RC"
 log_receipt ""
 log_receipt "API base URLs (for Slack manifests):"
-log_receipt "  weaselbot: ${WB_API_URL:-n/a}"
+log_receipt "  paxminer kotter/config: ${PM_KOTTER_URL:-n/a}"
 log_receipt "  slackblast: ${SB_API_URL:-n/a}"
 log_receipt "  qsignups:   ${QS_API_URL:-n/a}"
 log_receipt ""
 log_receipt "Receipt file: ${RECEIPT_FILE}"
 
 ANY_FAIL=0
-for rc in "$PAX_RC" "$WEASEL_RC" "$SB_RC" "$QS_RC"; do
+for rc in "$PAX_RC" "$SB_RC" "$QS_RC"; do
   if [[ "$rc" -gt 0 ]]; then ANY_FAIL=1; break; fi
 done
 
@@ -709,12 +682,37 @@ run_smoke_test_lambdas() {
     echo "OK ${fn} statusCode=200"
     return 0
   }
+  invoke_one_payload() {
+    local fn="$1"
+    local payload="$2"
+    echo "--- Invoking ${fn} ---"
+    aws lambda invoke \
+      --function-name "$fn" \
+      --invocation-type RequestResponse \
+      --cli-binary-format raw-in-base64-out \
+      --payload "$payload" \
+      --log-type Tail \
+      /tmp/lambda-payload-deploy-sh.json > /tmp/lambda-meta-deploy-sh.json \
+      --region "$AWS_REGION" || return 1
+    local sc
+    sc=$(jq -r '.statusCode // empty' /tmp/lambda-payload-deploy-sh.json 2>/dev/null || echo "")
+    if [[ -z "$sc" || "$sc" == "null" ]]; then
+      sc=$(jq -r '.ok // empty' /tmp/lambda-payload-deploy-sh.json 2>/dev/null || echo "")
+      [[ "$sc" == "true" ]] && sc=200
+    fi
+    if [[ "$sc" != "200" ]]; then
+      echo "ERROR: Lambda ${fn} returned statusCode=${sc}"
+      return 1
+    fi
+    echo "OK ${fn} statusCode=200"
+    return 0
+  }
   local smoke_rc=0
   if [[ "$PAX_RC" -eq 0 ]]; then
     invoke_one "paxminer-${STAGE}-paxminer-sync" || smoke_rc=1
-  fi
-  if [[ "$WEASEL_RC" -eq 0 ]]; then
-    invoke_one "weaselbot-${STAGE}-weaselbot-achievements" || smoke_rc=1
+    invoke_one "paxminer-${STAGE}-paxminer-achievements" || smoke_rc=1
+    invoke_one_payload "paxminer-${STAGE}-paxminer-kotter" '{"source":"smoke"}' || smoke_rc=1
+    invoke_one_payload "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke","feature":"achievement_leaderboard"}' || smoke_rc=1
   fi
   return "$smoke_rc"
 }

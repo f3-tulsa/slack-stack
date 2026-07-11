@@ -5,7 +5,7 @@ Monorepo for four Slack applications used by F3 regions. They run on **AWS** (La
 | App | Role |
 |-----|------|
 | **[PAXminer](PAXminer/README.md)** | Backblast mining, attendance, monthly charts |
-| **[Weaselbot](weaselbot/README.md)** | Achievements and Kotter reports |
+| **[PAXMiner](PAXminer/README.md)** | Sync, charts, achievements, Kotter reports |
 | **[slackblast](slackblast/README.md)** | Preblasts, backblasts, Strava, email, welcome flows |
 | **[qsignups](qsignups/README.md)** | Region Q schedule and signups |
 
@@ -32,7 +32,7 @@ Each app has its own `template.yaml`; deploy order between stacks is flexible.
 
 ## App READMEs
 
-Per-app details: [PAXminer/README.md](PAXminer/README.md), [weaselbot/README.md](weaselbot/README.md), [slackblast/README.md](slackblast/README.md), [qsignups/README.md](qsignups/README.md).
+Per-app details: [PAXminer/README.md](PAXminer/README.md), [slackblast/README.md](slackblast/README.md), [qsignups/README.md](qsignups/README.md).
 
 ## License
 

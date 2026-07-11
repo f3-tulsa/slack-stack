@@ -4,11 +4,10 @@
 
 | Path | Purpose |
 |------|---------|
-| `PAXminer/` | Docker-packaged Lambdas; schedules; backblast scraping; charts |
-| `weaselbot/` | Docker-packaged Lambdas; achievements; Kotter |
+| `PAXminer/` | Docker-packaged Lambdas: sync, charts, achievements, Kotter (`/config-paxminer`, `/kotter-report`) |
 | `slackblast/` | Zip Lambda + Function URL; Bolt app |
 | `qsignups/` | Zip Lambda + Function URL; Bolt app; schedule extension |
-| `common/` | Shared `encryption.py`, `token_bootstrap.py` (Weaselbot image copies this; PAXminer uses `PAXminer/common/` in parallel) |
+| `common/` | Shared `encryption.py`, `token_bootstrap.py` (PAXminer image uses `PAXminer/common/`) |
 | `migration/` | One-off migration scripts and env templates |
 | `infra/` | Bootstrap CloudFormation (OIDC, SAM artifact bucket) |
 
@@ -16,12 +15,12 @@ Apps do **not** import each other’s Python packages; integration is via **shar
 
 ## Runtime shapes
 
-- **PAXminer / Weaselbot:** Container images, EventBridge schedules, no HTTP API in SAM (Slack posts only).
+- **PAXminer:** Container images, EventBridge schedules, Function URLs for Kotter/interactive and achievements sweep.
 - **slackblast / qsignups:** Zip Lambdas, **Lambda Function URLs**, Bolt with `process_before_response` and **lazy listeners** (self `lambda:InvokeFunction`).
 
 ## Database and schemas
 
-- **Per-app schemas** (suffix `_test` / `_prod`): `paxminer_*`, `weaselbot_*`, `slackblast_*`, `qsignups_*`.
+- **Per-app schemas** (suffix `_test` / `_prod`): `paxminer_*`, `slackblast_*`, `qsignups_*`. Legacy `weaselbot_*` is retired after migration.
 - **Per-region schemas** (PAXminer “regional” data): e.g. `f3ttown_prod` — tables such as `aos`, `beatdowns`, `bd_attendance`, `users`.
 - **Registry:** `paxminer_<stage>.regions` lists regions and points at regional schema names and encrypted Slack tokens.
 
@@ -31,7 +30,6 @@ Apps do **not** import each other’s Python packages; integration is via **shar
 flowchart LR
   subgraph app_schemas [App schemas]
     PM[paxminer_stage]
-    WB[weaselbot_stage]
     SB[slackblast_stage]
     QS[qsignups_stage]
   end
@@ -41,7 +39,7 @@ flowchart LR
     ATT[bd_attendance]
   end
   PM -->|regions.schema_name| regional
-  WB -->|regions.paxminer_schema| regional
+  SB -->|regions.paxminer_schema + sweep URL| PM
   SB -->|Slack config| regional
   QS -->|PAXMINER_REGIONAL_SCHEMA optional| AOS
   QS -->|schedule data| QSMASTER[qsignups_master weekly aos regions]

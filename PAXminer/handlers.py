@@ -1,15 +1,6 @@
 """
-AWS Lambda entry points for PAXminer user/channel sync and monthly charts.
-
-Environment variables (TiDB / SAM):
-  DATABASE_HOST, DATABASE_PORT, DATABASE_USER, DATABASE_PASSWORD
-  DATABASE_TLS_ENABLED (default true)
-  PAXMINER_SCHEMA (registry schema containing `regions` table)
-  PAXMINER_REGISTRY_DATABASE — optional pymysql db name; defaults to PAXMINER_SCHEMA
-  DATABASE_FULL_RUN — optional; truthy => full Slack user history pull (first-time style)
-  CHART_PLOT_DIR — optional; default /tmp/paxminer_plots
-  CHART_REGION_REGEX — optional; restrict PAX charts to region names matching ^[CHAR] (see PAXcharter_Monthly_Execution)
-  STAGE, F3_REGION_NAME, PM_SLACK_TOKEN — optional; when set, encrypted bot token is upserted into paxminer.regions at cold start
+AWS Lambda entry points for PAXminer user/channel sync, monthly charts,
+achievements (daily + sweep), Kotter reports, and Slack interactivity.
 """
 
 from __future__ import annotations
@@ -23,18 +14,29 @@ import sys
 import traceback
 from pathlib import Path
 
-# Configure root logging before cold-start bootstrap (token_bootstrap uses LOG.info).
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 _ROOT = Path(__file__).resolve().parent
 _CHART_DIR = Path(_ROOT, "monthly_charts")
 
-for _p in (_ROOT, _ROOT / "database_management"):
+for _p in (_ROOT, _ROOT / "database_management", _ROOT / "achievements", _ROOT / "kotter"):
     s = str(_p)
     if s not in sys.path:
         sys.path.insert(0, s)
 
 from common.encryption import decrypt_field, require_encryption_key
+from config_paxminer import CALLBACK_ID as CONFIG_CALLBACK_ID, handle_config_command, handle_config_submit
+from paxminer_db import connect_from_env, paxminer_schema_from_env
+from slack_http import (
+    KOTTER_SEND_ACTION_ID,
+    http_response,
+    is_http_request,
+    is_slack_admin,
+    parse_slack_body,
+    raw_body,
+    verify_slack_request,
+    verify_sweep_secret,
+)
 
 require_encryption_key()
 
@@ -49,7 +51,7 @@ def _registry_database() -> str:
 
 
 def _pm_schema() -> str:
-    return os.environ.get("PAXMINER_SCHEMA", "paxminer").strip() or "paxminer"
+    return paxminer_schema_from_env()
 
 
 def _try_bootstrap_pm_slack_token() -> None:
@@ -73,9 +75,7 @@ def _try_bootstrap_pm_slack_token() -> None:
 try:
     _try_bootstrap_pm_slack_token()
 except Exception:
-    logging.exception(
-        "Token bootstrap failed (non-fatal); paxminer.regions slack_token may need manual upsert"
-    )
+    logging.exception("Token bootstrap failed (non-fatal)")
 
 
 def _chart_plot_dir() -> str:
@@ -92,12 +92,44 @@ def _load_charter_module(module_file_stem: str):
     return mod
 
 
-def sync_handler(event, context):
-    """Daily user + channel sync for all active regions (Slackblast / TiDB env names)."""
-    logging.info(
-        "PAXminer sync_handler start request_id=%s",
-        getattr(context, "aws_request_id", None) if context else None,
+def _queue_manual_kotter(context) -> None:
+    import boto3
+
+    function_name = getattr(context, "invoked_function_arn", "") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "")
+    boto3.client("lambda").invoke(
+        FunctionName=function_name,
+        InvocationType="Event",
+        Payload=json.dumps({"source": "paxminer.kotter.manual"}).encode("utf-8"),
     )
+
+
+def _kotter_slash_response() -> dict:
+    return {
+        "response_type": "ephemeral",
+        "text": "Kotter report controls",
+        "blocks": [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "*Kotter Reports*\nSend this month's Kotter report now."},
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Send Monthly Kotter Now"},
+                        "style": "primary",
+                        "action_id": KOTTER_SEND_ACTION_ID,
+                        "value": "send",
+                    }
+                ],
+            },
+        ],
+    }
+
+
+def sync_handler(event, context):
+    logging.info("PAXminer sync_handler start")
     os.environ.setdefault("host", os.environ.get("DATABASE_HOST", ""))
     os.environ.setdefault("user", os.environ.get("DATABASE_USER", ""))
     os.environ.setdefault("password", os.environ.get("DATABASE_PASSWORD", ""))
@@ -108,18 +140,11 @@ def sync_handler(event, context):
         return {"statusCode": 200, "body": json.dumps({"ok": True, "mode": "sync"})}
     except Exception:
         logging.exception("PAXminer sync failed")
-        return {
-            "statusCode": 500,
-            "body": json.dumps({"ok": False, "error": traceback.format_exc()}),
-        }
+        return {"statusCode": 500, "body": json.dumps({"ok": False, "error": traceback.format_exc()})}
 
 
 def chart_handler(event, context):
-    """Monthly charts: PAX, Q, region leaderboard, AO leaderboard per `regions` flags."""
-    logging.info(
-        "PAXminer chart_handler start request_id=%s",
-        getattr(context, "aws_request_id", None) if context else None,
-    )
+    logging.info("PAXminer chart_handler start")
     from paxminer_db import connect_from_env
 
     pm = _pm_schema()
@@ -151,56 +176,155 @@ def chart_handler(event, context):
                 logging.warning("Skipping region %s: cannot decrypt token: %s", region, e)
                 continue
             if not key or not schema_name:
-                logging.warning("Skipping region missing token or schema: %s", region)
                 continue
-
             regional = None
             try:
                 regional = connect_from_env(schema_name)
-
                 if row.get("send_pax_charts") and firstf:
                     if region_regex:
                         pat = rf"^[{region_regex}]"
-                        if not re.match(pat, str(region or ""), re.I):
-                            logging.info("Skip PAX charts (regex): %s", region)
-                        else:
+                        if re.match(pat, str(region or ""), re.I):
                             r = pax_mod.run_pax_charter(regional, key, schema_name, plot_dir=plot_dir)
                             results.append({"region": region, "pax_charts": r})
                     else:
                         r = pax_mod.run_pax_charter(regional, key, schema_name, plot_dir=plot_dir)
                         results.append({"region": region, "pax_charts": r})
-
                 if row.get("send_q_charts") and firstf:
                     r = q_mod.run_q_charter(regional, key, schema_name, region, firstf, plot_dir=plot_dir)
                     results.append({"region": region, "q_charts": r})
-
                 if row.get("send_region_leaderboard") and firstf:
                     r = lb_mod.run_region_leaderboard(regional, key, schema_name, region, firstf, plot_dir=plot_dir)
                     results.append({"region": region, "region_leaderboard": r})
-
                 if row.get("send_ao_leaderboard") and firstf:
                     r = lb_ao_mod.run_ao_leaderboard(regional, key, schema_name, region, firstf, plot_dir=plot_dir)
                     results.append({"region": region, "ao_leaderboard": r})
+                if row.get("send_achievement_leaderboard") and row.get("achievement_channel"):
+                    from achievements.leaderboard import run_leaderboard_for_region
+
+                    lb = run_leaderboard_for_region(registry, pm, row)
+                    results.append({"region": region, "achievement_leaderboard": lb})
             except Exception as e:
                 logging.exception("Chart error for region %s: %s", region, e)
                 results.append({"region": region, "error": str(e)})
             finally:
                 if regional:
-                    try:
-                        regional.close()
-                    except Exception:
-                        logging.debug("regional.close() failed (non-fatal)", exc_info=True)
-
+                    regional.close()
         return {"statusCode": 200, "body": json.dumps({"ok": True, "results": results})}
     except Exception:
         logging.exception("PAXminer chart_handler failed")
-        return {
-            "statusCode": 500,
-            "body": json.dumps({"ok": False, "error": traceback.format_exc()}),
-        }
+        return {"statusCode": 500, "body": json.dumps({"ok": False, "error": traceback.format_exc()})}
     finally:
         if registry:
-            try:
-                registry.close()
-            except Exception:
-                logging.debug("registry.close() failed (non-fatal)", exc_info=True)
+            registry.close()
+
+
+def achievements_handler(event, context):
+    logging.info("PAXminer achievements_handler start")
+    from achievements.leaderboard import run_leaderboard
+    from achievements.runner import run_achievements_for_region, run_daily
+
+    pm = _pm_schema()
+    registry_db = _registry_database()
+
+    if is_http_request(event):
+        headers = (event or {}).get("headers") or {}
+        if not verify_sweep_secret(headers):
+            return http_response(401, {"ok": False, "error": "Unauthorized"})
+        try:
+            body = json.loads(raw_body(event) or "{}")
+        except json.JSONDecodeError:
+            return http_response(400, {"ok": False, "error": "Invalid JSON"})
+        schema = body.get("schema")
+        pax_ids = set(body.get("pax_user_ids") or [])
+        post_to_ao = bool(body.get("post_to_ao"))
+        ao_channel_id = body.get("ao_channel_id")
+        conn = connect_from_env(registry_db)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT * FROM `{pm}`.`regions` WHERE schema_name=%s LIMIT 1", (schema,))
+                region_row = cur.fetchone()
+            if not region_row:
+                return http_response(404, {"ok": False, "error": "Region not found"})
+            result = run_achievements_for_region(
+                conn,
+                pm_schema=pm,
+                regional_schema=schema,
+                region_row=region_row,
+                pax_user_ids=pax_ids or None,
+                post_to_ao=post_to_ao,
+                ao_channel_id=ao_channel_id,
+            )
+            return http_response(200, {"ok": True, "result": result})
+        finally:
+            conn.close()
+
+    event = event or {}
+    if event.get("source") == "smoke" and event.get("feature") == "achievement_leaderboard":
+        conn = connect_from_env(registry_db)
+        try:
+            results = run_leaderboard(conn, pm, dry_run=True)
+            return {"statusCode": 200, "body": json.dumps({"ok": True, "results": results})}
+        finally:
+            conn.close()
+
+    dry_run = event.get("source") == "smoke"
+    conn = connect_from_env(registry_db)
+    try:
+        results = run_daily(conn, pm)
+        return {"statusCode": 200, "body": json.dumps({"ok": True, "results": results})}
+    except Exception:
+        logging.exception("achievements failed")
+        return {"statusCode": 500, "body": json.dumps({"ok": False, "error": traceback.format_exc()})}
+    finally:
+        conn.close()
+
+
+def kotter_handler(event, context):
+    logging.info("PAXminer kotter_handler start")
+    from kotter.kotter_report import run_kotter
+
+    pm = _pm_schema()
+    registry_db = _registry_database()
+
+    if is_http_request(event):
+        headers = (event or {}).get("headers") or {}
+        body_str = raw_body(event)
+        if not verify_slack_request(headers, body_str):
+            return http_response(401, {"ok": False, "error": "Unauthorized"})
+        payload_type, payload = parse_slack_body(body_str)
+        if payload_type == "command":
+            cmd = payload.get("command", "")
+            user_id = payload.get("user_id", "")
+            team_id = payload.get("team_id", "")
+            trigger_id = payload.get("trigger_id", "")
+            if cmd == "/config-paxminer":
+                return handle_config_command(team_id, user_id, trigger_id)
+            if not is_slack_admin(user_id):
+                return http_response(200, {"response_type": "ephemeral", "text": "Admin required."})
+            return http_response(200, _kotter_slash_response())
+        if payload_type == "interactive":
+            cb = (payload.get("view") or {}).get("callback_id")
+            if cb == CONFIG_CALLBACK_ID:
+                return handle_config_submit(payload)
+            user_id = (payload.get("user") or {}).get("id", "")
+            action_id = (((payload.get("actions") or [{}])[0]).get("action_id") or "").strip()
+            if action_id == KOTTER_SEND_ACTION_ID:
+                if not is_slack_admin(user_id):
+                    return http_response(200, {"response_type": "ephemeral", "text": "Admin required."})
+                _queue_manual_kotter(context)
+                return http_response(
+                    200,
+                    {"response_type": "ephemeral", "text": "Manual Kotter send queued."},
+                )
+        return http_response(400, {"ok": False, "error": "Unsupported payload"})
+
+    dry_run = (event or {}).get("source") == "smoke"
+    conn = connect_from_env(registry_db)
+    try:
+        results = run_kotter(conn, pm, dry_run=dry_run)
+        return http_response(200, {"ok": True, "results": results})
+    except Exception:
+        logging.exception("kotter failed")
+        return http_response(500, {"ok": False, "error": traceback.format_exc()})
+    finally:
+        conn.close()

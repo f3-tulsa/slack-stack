@@ -20,7 +20,6 @@ on:
         options:
           - all
           - paxminer
-          - weaselbot
           - slackblast
           - qsignups
 
@@ -37,7 +36,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       run_paxminer: ${{ steps.pick.outputs.run_paxminer }}
-      run_weaselbot: ${{ steps.pick.outputs.run_weaselbot }}
       run_slackblast: ${{ steps.pick.outputs.run_slackblast }}
       run_qsignups: ${{ steps.pick.outputs.run_qsignups }}
     steps:
@@ -52,8 +50,6 @@ jobs:
           filters: |
             paxminer:
               - 'PAXminer/**'
-            weaselbot:
-              - 'weaselbot/**'
               - 'common/**'
             slackblast:
               - 'slackblast/**'
@@ -68,35 +64,30 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             STACK="${{ github.event.inputs.stack }}"
             [[ -z "$STACK" ]] && STACK="all"
-            PM=false WB=false SB=false QS=false
+            PM=false SB=false QS=false
             if [[ "$STACK" == "all" ]]; then
-              PM=true WB=true SB=true QS=true
+              PM=true SB=true QS=true
             else
               case "$STACK" in
                 paxminer) PM=true ;;
-                weaselbot) WB=true ;;
                 slackblast) SB=true ;;
                 qsignups) QS=true ;;
               esac
             fi
             echo "run_paxminer=$PM" >> "$GITHUB_OUTPUT"
-            echo "run_weaselbot=$WB" >> "$GITHUB_OUTPUT"
             echo "run_slackblast=$SB" >> "$GITHUB_OUTPUT"
             echo "run_qsignups=$QS" >> "$GITHUB_OUTPUT"
           else
             INFRA="${{ steps.filter.outputs.infra }}"
             if [[ "$INFRA" == "true" ]]; then
               echo "run_paxminer=true" >> "$GITHUB_OUTPUT"
-              echo "run_weaselbot=true" >> "$GITHUB_OUTPUT"
               echo "run_slackblast=true" >> "$GITHUB_OUTPUT"
               echo "run_qsignups=true" >> "$GITHUB_OUTPUT"
             else
               pm="${{ steps.filter.outputs.paxminer }}"
-              wb="${{ steps.filter.outputs.weaselbot }}"
               sb="${{ steps.filter.outputs.slackblast }}"
               qs="${{ steps.filter.outputs.qsignups }}"
               [[ "$pm" == "true" ]] && echo "run_paxminer=true" >> "$GITHUB_OUTPUT" || echo "run_paxminer=false" >> "$GITHUB_OUTPUT"
-              [[ "$wb" == "true" ]] && echo "run_weaselbot=true" >> "$GITHUB_OUTPUT" || echo "run_weaselbot=false" >> "$GITHUB_OUTPUT"
               [[ "$sb" == "true" ]] && echo "run_slackblast=true" >> "$GITHUB_OUTPUT" || echo "run_slackblast=false" >> "$GITHUB_OUTPUT"
               [[ "$qs" == "true" ]] && echo "run_qsignups=true" >> "$GITHUB_OUTPUT" || echo "run_qsignups=false" >> "$GITHUB_OUTPUT"
             fi
@@ -166,7 +157,6 @@ jobs:
         run: |
           set -euo pipefail
           sam validate -t PAXminer/template.yaml --lint
-          sam validate -t weaselbot/template.yaml --lint
           sam validate -t slackblast/template.yaml --lint
           sam validate -t qsignups/template.yaml --lint
           sam validate -t infra/template.bootstrap.yaml --lint
@@ -206,48 +196,9 @@ jobs:
               PaxminerSchema=${{ vars.PAXMINER_SCHEMA }}_${{ vars.STAGE }} \
               Stage=${{ vars.STAGE }} \
               F3RegionName=${{ vars.F3_REGION_NAME }} \
-              PmSlackToken=${{ secrets.PM_SLACK_TOKEN }}
-
-  deploy-weaselbot:
-    runs-on: ubuntu-latest
-    needs: [detect-changes, setup]
-    if: needs.detect-changes.outputs.run_weaselbot == 'true'
-    environment: ${{ github.event.inputs.environment || github.ref_name }}
-    env:
-      SAM_S3_BUCKET: ${{ needs.setup.outputs.sam_s3_bucket }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-      - name: Build Weaselbot
-        run: |
-          set -euo pipefail
-          sam build -t weaselbot/template.yaml --no-cached
-      - name: Deploy Weaselbot
-        run: |
-          sam deploy \
-            --stack-name weaselbot-${{ vars.STAGE }} \
-            --no-confirm-changeset --no-fail-on-empty-changeset \
-            --resolve-image-repos \
-            --s3-bucket ${{ env.SAM_S3_BUCKET }} \
-            --capabilities CAPABILITY_IAM \
-            --parameter-overrides \
-              DatabaseHost=${{ secrets.DATABASE_HOST }} \
-              DatabasePort=${{ secrets.DATABASE_PORT }} \
-              DatabaseUser=${{ secrets.DATABASE_USER }} \
-              DatabasePassword=${{ secrets.DATABASE_PASSWORD }} \
-              DatabaseTlsEnabled=${{ vars.DATABASE_TLS_ENABLED }} \
-              DbEncryptionKey=${{ secrets.DB_ENCRYPTION_KEY }} \
-              PaxminerSchema=${{ vars.PAXMINER_SCHEMA }}_${{ vars.STAGE }} \
-              WeaselbotSchema=${{ vars.WEASELBOT_SCHEMA }}_${{ vars.STAGE }} \
-              Stage=${{ vars.STAGE }} \
-              F3RegionName=${{ vars.F3_REGION_NAME }} \
-              WbSlackToken=${{ secrets.WB_SLACK_TOKEN }} \
-              WbSlackSigningSecret=${{ secrets.WB_SLACK_SIGNING_SECRET }} \
-              F3RegionSlackTeamId=${{ vars.F3_REGION_SLACK_TEAM_ID }} \
-              WeaselbotPaxminerRegionalSchemas=${{ vars.WEASELBOT_PAXMINER_REGIONAL_SCHEMAS }}
+              PmSlackToken=${{ secrets.PM_SLACK_TOKEN }} \
+              PmSlackSigningSecret=${{ secrets.PM_SLACK_SIGNING_SECRET }} \
+              PaxminerSweepSecret=${{ secrets.PAXMINER_SWEEP_SECRET }}
 
   deploy-slackblast:
     runs-on: ubuntu-latest
@@ -274,6 +225,9 @@ jobs:
           SB_CREATE_OAUTH_TABLES: ${{ vars.SB_CREATE_OAUTH_TABLES }}
         run: |
           set -euo pipefail
+          ACH_URL="$(aws cloudformation describe-stacks --stack-name paxminer-${{ vars.STAGE }} \
+            --query "Stacks[0].Outputs[?OutputKey=='AchievementsFunctionUrl'].OutputValue | [0]" --output text 2>/dev/null || true)"
+          [[ "$ACH_URL" == "None" ]] && ACH_URL=""
           OVERRIDES=(
             "Stage=${{ vars.STAGE }}"
             "DatabaseHost=${{ secrets.DATABASE_HOST }}"
@@ -283,6 +237,8 @@ jobs:
             "DatabaseTlsEnabled=${{ vars.DATABASE_TLS_ENABLED }}"
             "DatabaseSchema=${{ vars.SLACKBLAST_SCHEMA }}_${{ vars.STAGE }}"
             "PaxminerSchema=${{ vars.PAXMINER_SCHEMA }}_${{ vars.STAGE }}"
+            "PaxminerAchievementsUrl=${ACH_URL}"
+            "PaxminerSweepSecret=${{ secrets.PAXMINER_SWEEP_SECRET }}"
             "SlackToken=${{ secrets.SB_SLACK_TOKEN }}"
             "SlackSigningSecret=${{ secrets.SB_SLACK_SIGNING_SECRET }}"
             "SlackClientSecret=${{ secrets.SB_SLACK_CLIENT_SECRET }}"
@@ -362,12 +318,11 @@ jobs:
 
   post-deploy:
     runs-on: ubuntu-latest
-    needs: [detect-changes, setup, deploy-paxminer, deploy-weaselbot, deploy-slackblast, deploy-qsignups]
+    needs: [detect-changes, setup, deploy-paxminer, deploy-slackblast, deploy-qsignups]
     if: >-
       always() && !cancelled() &&
       needs.setup.result == 'success' &&
       needs.deploy-paxminer.result != 'failure' &&
-      needs.deploy-weaselbot.result != 'failure' &&
       needs.deploy-slackblast.result != 'failure' &&
       needs.deploy-qsignups.result != 'failure'
     environment: ${{ github.event.inputs.environment || github.ref_name }}
@@ -384,7 +339,6 @@ jobs:
           STAGE: ${{ vars.STAGE }}
           AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
           RUN_PM: ${{ needs.detect-changes.outputs.run_paxminer }}
-          RUN_WB: ${{ needs.detect-changes.outputs.run_weaselbot }}
         run: |
           set -euo pipefail
           invoke_one() {
@@ -418,13 +372,15 @@ jobs:
           }
           if [[ "${RUN_PM}" == "true" ]]; then
             invoke_one "paxminer-${STAGE}-paxminer-sync"
+            invoke_one "paxminer-${STAGE}-paxminer-achievements"
+            aws lambda invoke --function-name "paxminer-${STAGE}-paxminer-kotter" \
+              --invocation-type RequestResponse --cli-binary-format raw-in-base64-out \
+              --payload '{"source":"smoke"}' /tmp/lambda-payload.json
+            aws lambda invoke --function-name "paxminer-${STAGE}-paxminer-achievements" \
+              --invocation-type RequestResponse --cli-binary-format raw-in-base64-out \
+              --payload '{"source":"smoke","feature":"achievement_leaderboard"}' /tmp/lambda-payload.json
           else
             echo "Skipping PAXminer smoke test (stack not deployed this run)"
-          fi
-          if [[ "${RUN_WB}" == "true" ]]; then
-            invoke_one "weaselbot-${STAGE}-weaselbot-achievements"
-          else
-            echo "Skipping Weaselbot smoke test (stack not deployed this run)"
           fi
 
       - name: Deploy summary, receipt, and stage Slack manifests
@@ -442,7 +398,7 @@ jobs:
             echo "AWS region: ${AWS_DEFAULT_REGION}"
             echo ""
             echo "--- Stack outputs ---"
-            for s in paxminer weaselbot slackblast qsignups; do
+            for s in paxminer slackblast qsignups; do
               name="${s}-${STAGE}"
               echo "# ${name}"
               aws cloudformation describe-stacks --stack-name "$name" \
@@ -479,12 +435,12 @@ jobs:
               "$ROOT/$app/manifest.json" "$ROOT/$app/manifest-${STAGE}.json" "$base"
             echo "Wrote $app/manifest-${STAGE}.json"
           }
-          WB_FULL="$(get_out "weaselbot-${STAGE}" KotterApi)"
-          WB_BASE="$(api_base "$WB_FULL")"
-          if [[ -n "$WB_BASE" ]]; then
-            write_subst weaselbot "$WB_BASE"
+          PM_KOTTER="$(get_out "paxminer-${STAGE}" KotterFunctionUrl)"
+          if [[ -n "$PM_KOTTER" && "$PM_KOTTER" != "None" ]]; then
+            write_subst PAXminer "$PM_KOTTER"
           else
-            echo "WARN: KotterApi missing; skip weaselbot manifest"
+            cp "$ROOT/PAXminer/manifest.json" "$ROOT/PAXminer/manifest-${STAGE}.json"
+            echo "WARN: KotterFunctionUrl missing; copied PAXminer manifest"
           fi
           SB_FULL="$(get_out "slackblast-${STAGE}" SlackblastApi)"
           SB_BASE="$(api_base "$SB_FULL")"
@@ -500,9 +456,9 @@ jobs:
           else
             echo "WARN: QSignupsApi missing; skip qsignups manifest"
           fi
-          for app in PAXminer; do
-            cp "$ROOT/$app/manifest.json" "$ROOT/$app/manifest-${STAGE}.json"
-            echo "Wrote $app/manifest-${STAGE}.json (copy)"
+          for app in slackblast qsignups; do
+            [[ -f "$ROOT/$app/manifest-${STAGE}.json" ]] && continue
+            cp "$ROOT/$app/manifest.json" "$ROOT/$app/manifest-${STAGE}.json" 2>/dev/null || true
           done
           echo "Receipt: ${RECEIPT}"
 
@@ -514,7 +470,6 @@ jobs:
           path: |
             receipts/
             PAXminer/manifest-${{ vars.STAGE }}.json
-            weaselbot/manifest-${{ vars.STAGE }}.json
             slackblast/manifest-${{ vars.STAGE }}.json
             qsignups/manifest-${{ vars.STAGE }}.json
           if-no-files-found: warn
