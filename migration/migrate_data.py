@@ -484,6 +484,16 @@ CREATE TABLE IF NOT EXISTS `{schema}`.`regions` (
   `send_q_charts` tinyint DEFAULT 0,
   `send_region_leaderboard` tinyint DEFAULT 0,
   `scrape_backblasts` tinyint DEFAULT 0,
+  `send_achievements` tinyint DEFAULT 1,
+  `send_aoq_reports` tinyint DEFAULT 1,
+  `send_achievement_leaderboard` tinyint DEFAULT 1,
+  `achievement_channel` varchar(100) DEFAULT NULL,
+  `kotter_channel` varchar(100) DEFAULT NULL,
+  `NO_POST_THRESHOLD` int DEFAULT 2,
+  `REMINDER_WEEKS` int DEFAULT 2,
+  `HOME_AO_CAPTURE` int DEFAULT 8,
+  `NO_Q_THRESHOLD_WEEKS` int DEFAULT 4,
+  `NO_Q_THRESHOLD_POSTS` int DEFAULT 4,
   `comments` text,
   PRIMARY KEY (`region`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -516,15 +526,7 @@ CREATE TABLE IF NOT EXISTS `{schema}`.`regions` (
   `welcome_dm_template` json DEFAULT NULL,
   `welcome_channel_enable` tinyint DEFAULT NULL,
   `welcome_channel` varchar(100) DEFAULT NULL,
-  `send_achievements` tinyint(1) DEFAULT 1,
-  `send_aoq_reports` tinyint(1) DEFAULT 1,
-  `achievement_channel` varchar(100) DEFAULT NULL,
-  `default_siteq` varchar(45) DEFAULT NULL,
-  `NO_POST_THRESHOLD` int DEFAULT 2,
-  `REMINDER_WEEKS` int DEFAULT 2,
-  `HOME_AO_CAPTURE` int DEFAULT 8,
-  `NO_Q_THRESHOLD_WEEKS` int DEFAULT 4,
-  `NO_Q_THRESHOLD_POSTS` int DEFAULT 4,
+  `post_achievements_to_ao` tinyint(1) DEFAULT 0,
   `created` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`)
@@ -591,13 +593,13 @@ CREATE TABLE IF NOT EXISTS `{schema}`.`slackblast_users` (
 """
 
 
-def _seed_slackblast_weaselbot_regions(cur, conn: Any, sb_s: str, wb_s: str, stage: str) -> None:
-    """Optional rows in slackblast/weaselbot regions (team_id + paxminer_schema)."""
+def _seed_slackblast_regions(cur, conn: Any, sb_s: str, stage: str) -> None:
+    """Optional rows in slackblast regions (team_id + paxminer_schema)."""
     tt_tid = (os.environ.get("MIGRATION_SEED_TEAM_F3TTOWN") or "").strip()
     sci_tid = (os.environ.get("MIGRATION_SEED_TEAM_F3SCISSORTAIL") or "").strip()
     if not tt_tid and not sci_tid:
         LOG.info(
-            "Skipping slackblast/weaselbot regions seed (set MIGRATION_SEED_TEAM_F3TTOWN and/or MIGRATION_SEED_TEAM_F3SCISSORTAIL)"
+            "Skipping slackblast regions seed (set MIGRATION_SEED_TEAM_F3TTOWN and/or MIGRATION_SEED_TEAM_F3SCISSORTAIL)"
         )
         return
     f3ttown = f"f3ttown_{stage}"
@@ -608,47 +610,45 @@ def _seed_slackblast_weaselbot_regions(cur, conn: Any, sb_s: str, wb_s: str, sta
     if sci_tid:
         pairs.append((sci_tid, f3sci))
     for team_id, pax_schema in pairs:
-        for admin_schema in (sb_s, wb_s):
-            cur.execute(
-                f"SELECT COUNT(*) AS c FROM `{admin_schema}`.`regions` "
-                "WHERE `team_id`=%s AND `paxminer_schema`=%s",
-                (team_id, pax_schema),
-            )
-            row = cur.fetchone()
-            n = int(_row_get(row, "c", "C") or 0)
-            if n > 0:
-                LOG.info(
-                    "Skip seed %s.regions (team_id=%s paxminer_schema=%s already present)",
-                    admin_schema,
-                    team_id,
-                    pax_schema,
-                )
-                continue
-            cur.execute(
-                f"INSERT INTO `{admin_schema}`.`regions` (`team_id`, `paxminer_schema`) VALUES (%s, %s)",
-                (team_id, pax_schema),
-            )
+        cur.execute(
+            f"SELECT COUNT(*) AS c FROM `{sb_s}`.`regions` "
+            "WHERE `team_id`=%s AND `paxminer_schema`=%s",
+            (team_id, pax_schema),
+        )
+        row = cur.fetchone()
+        n = int(_row_get(row, "c", "C") or 0)
+        if n > 0:
             LOG.info(
-                "Seeded %s.regions team_id=%s paxminer_schema=%s",
-                admin_schema,
+                "Skip seed %s.regions (team_id=%s paxminer_schema=%s already present)",
+                sb_s,
                 team_id,
                 pax_schema,
             )
+            continue
+        cur.execute(
+            f"INSERT INTO `{sb_s}`.`regions` (`team_id`, `paxminer_schema`) VALUES (%s, %s)",
+            (team_id, pax_schema),
+        )
+        LOG.info(
+            "Seeded %s.regions team_id=%s paxminer_schema=%s",
+            sb_s,
+            team_id,
+            pax_schema,
+        )
     conn.commit()
 
 
 def pre_migration_bootstrap_schemas(conn: Any, stage: str) -> None:
-    pm_s, sb_s, wb_s, _ = target_admin_schema_names(stage)
+    pm_s, sb_s, _, _ = target_admin_schema_names(stage)
     f3ttown = f"f3ttown_{stage}"
     f3sci = f"f3scissortail_{stage}"
     with conn.cursor() as cur:
-        for db in (pm_s, sb_s, wb_s):
+        for db in (pm_s, sb_s):
             cur.execute(f"CREATE DATABASE IF NOT EXISTS `{db}`")
         conn.commit()
         cur.execute(_ddl_paxminer_regions(pm_s))
         cur.execute(_ddl_slackblast_regions(sb_s))
         cur.execute(_ddl_slackblast_users(sb_s))
-        cur.execute(_ddl_weaselbot_regions(wb_s))
         conn.commit()
         cur.execute(
             f"SELECT COUNT(*) AS seed_cnt FROM `{pm_s}`.`regions` WHERE `schema_name` IN (%s, %s)",
@@ -671,8 +671,8 @@ def pre_migration_bootstrap_schemas(conn: Any, stage: str) -> None:
         else:
             LOG.info("Skipping seed: paxminer.regions already has rows for target schemas")
         conn.commit()
-        _seed_slackblast_weaselbot_regions(cur, conn, sb_s, wb_s, stage)
-    LOG.info("Bootstrap complete: %s, %s, %s", pm_s, sb_s, wb_s)
+        _seed_slackblast_regions(cur, conn, sb_s, stage)
+    LOG.info("Bootstrap complete: %s, %s", pm_s, sb_s)
 
 
 def _q_signups(schema: str, name: str) -> str:

@@ -87,15 +87,7 @@ class Region(BaseClass, GetDBClass):
     welcome_dm_template: Mapped[Optional[dict[str, Any]]]
     welcome_channel_enable: Mapped[Optional[tinyint]]
     welcome_channel: Mapped[Optional[str100]]
-    send_achievements: Mapped[Optional[tinyint1]]
-    send_aoq_reports: Mapped[Optional[tinyint1]]
-    achievement_channel: Mapped[Optional[str100]]
-    default_siteq: Mapped[Optional[str45]]
-    NO_POST_THRESHOLD: Mapped[Optional[int]] = mapped_column(Integer, default=2)
-    REMINDER_WEEKS: Mapped[Optional[int]] = mapped_column(Integer, default=2)
-    HOME_AO_CAPTURE: Mapped[Optional[int]] = mapped_column(Integer, default=8)
-    NO_Q_THRESHOLD_WEEKS: Mapped[Optional[int]] = mapped_column(Integer, default=4)
-    NO_Q_THRESHOLD_POSTS: Mapped[Optional[int]] = mapped_column(Integer, default=4)
+    post_achievements_to_ao: Mapped[Optional[tinyint0]]
     created: Mapped[dt_create]
     updated: Mapped[dt_update]
 
@@ -187,6 +179,10 @@ class AchievementsList(BaseClass, GetDBClass):
     description: Mapped[str255]
     verb: Mapped[str255]
     code: Mapped[str255]
+    metric: Mapped[Optional[str255]]
+    activity: Mapped[Optional[str255]]
+    period: Mapped[Optional[str255]]
+    threshold: Mapped[Optional[int]]
 
     def get_id():
         return AchievementsList.id
@@ -219,8 +215,18 @@ paxminer_region = Table(
     Column("send_ao_leaderboard", TINYINT),
     Column("send_q_charts", TINYINT),
     Column("send_region_leaderboard", TINYINT),
-    Column("comments", TEXT),
     Column("scrape_backblasts", TINYINT),
+    Column("send_achievements", TINYINT),
+    Column("send_aoq_reports", TINYINT),
+    Column("send_achievement_leaderboard", TINYINT),
+    Column("achievement_channel", String(100)),
+    Column("kotter_channel", String(100)),
+    Column("NO_POST_THRESHOLD", Integer),
+    Column("REMINDER_WEEKS", Integer),
+    Column("HOME_AO_CAPTURE", Integer),
+    Column("NO_Q_THRESHOLD_WEEKS", Integer),
+    Column("NO_Q_THRESHOLD_POSTS", Integer),
+    Column("comments", TEXT),
     schema=_PAXMINER_SCHEMA,
 )
 
