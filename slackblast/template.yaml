@@ -59,11 +59,11 @@ Parameters:
     Type: String
     Default: "paxminer"
   PaxminerAchievementsUrl:
-    Description: PAXMiner achievements Function URL for post-backblast sweep (optional)
+    Description: PAXMiner achievements Function URL for post-backblast webhook (optional)
     Type: String
     Default: ""
-  PaxminerSweepSecret:
-    Description: Shared secret header for PAXMiner achievements sweep (optional)
+  PaxminerAchievementsWebhookSecret:
+    Description: Shared secret header for PAXMiner achievements webhook (optional)
     Type: String
     Default: ""
     NoEcho: true
@@ -201,7 +201,7 @@ Resources:
           ADMIN_DATABASE_SCHEMA: !Ref DatabaseSchema
           PAXMINER_SCHEMA: !Ref PaxminerSchema
           PAXMINER_ACHIEVEMENTS_URL: !Ref PaxminerAchievementsUrl
-          PAXMINER_SWEEP_SECRET: !Ref PaxminerSweepSecret
+          PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET: !Ref PaxminerAchievementsWebhookSecret
           DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
           TIMEZONE: !Ref Timezone
           IMAGE_S3_BUCKET: !Ref ImageBucketName

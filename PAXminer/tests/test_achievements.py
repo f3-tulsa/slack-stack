@@ -24,12 +24,16 @@ def test_period_bucket_for_date():
     assert period_bucket_for_date(date(2026, 3, 15), "year") == 2026
 
 
-def test_verify_sweep_secret():
-    from slack_http import verify_sweep_secret
+def test_verify_achievements_webhook_secret():
+    from slack_http import verify_achievements_webhook_secret
 
-    os.environ["PAXMINER_SWEEP_SECRET"] = "sweep-secret-value"
-    assert verify_sweep_secret({"X-Paxminer-Sweep-Secret": "sweep-secret-value"})
-    assert not verify_sweep_secret({"X-Paxminer-Sweep-Secret": "wrong"})
+    os.environ["PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET"] = "webhook-secret-value"
+    assert verify_achievements_webhook_secret(
+        {"X-Paxminer-Achievements-Webhook-Secret": "webhook-secret-value"}
+    )
+    assert not verify_achievements_webhook_secret(
+        {"X-Paxminer-Achievements-Webhook-Secret": "wrong"}
+    )
 
 
 def test_build_kotter_message_monthly_copy():

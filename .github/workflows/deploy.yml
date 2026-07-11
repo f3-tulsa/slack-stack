@@ -198,7 +198,7 @@ jobs:
               F3RegionName=${{ vars.F3_REGION_NAME }} \
               PmSlackToken=${{ secrets.PM_SLACK_TOKEN }} \
               PmSlackSigningSecret=${{ secrets.PM_SLACK_SIGNING_SECRET }} \
-              PaxminerSweepSecret=${{ secrets.PAXMINER_SWEEP_SECRET }}
+              PaxminerAchievementsWebhookSecret=${{ secrets.PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET }}
 
   deploy-slackblast:
     runs-on: ubuntu-latest
@@ -238,7 +238,7 @@ jobs:
             "DatabaseSchema=${{ vars.SLACKBLAST_SCHEMA }}_${{ vars.STAGE }}"
             "PaxminerSchema=${{ vars.PAXMINER_SCHEMA }}_${{ vars.STAGE }}"
             "PaxminerAchievementsUrl=${ACH_URL}"
-            "PaxminerSweepSecret=${{ secrets.PAXMINER_SWEEP_SECRET }}"
+            "PaxminerAchievementsWebhookSecret=${{ secrets.PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET }}"
             "SlackToken=${{ secrets.SB_SLACK_TOKEN }}"
             "SlackSigningSecret=${{ secrets.SB_SLACK_SIGNING_SECRET }}"
             "SlackClientSecret=${{ secrets.SB_SLACK_CLIENT_SECRET }}"

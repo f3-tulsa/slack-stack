@@ -52,7 +52,7 @@ Parameters:
   HomeRegionDateTiers:
     Type: String
     Default: "30,60,90,120"
-  PaxminerSweepSecret:
+  PaxminerAchievementsWebhookSecret:
     Type: String
     NoEcho: true
     MinLength: 16
@@ -202,7 +202,7 @@ Resources:
           PAXMINER_REGISTRY_DATABASE: !Ref PaxminerRegistryDatabase
           DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
           HOME_REGION_DATE_TIERS: !Ref HomeRegionDateTiers
-          PAXMINER_SWEEP_SECRET: !Ref PaxminerSweepSecret
+          PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET: !Ref PaxminerAchievementsWebhookSecret
           STAGE: !Ref Stage
           F3_REGION_NAME: !Ref F3RegionName
           PM_SLACK_TOKEN: !Ref PmSlackToken

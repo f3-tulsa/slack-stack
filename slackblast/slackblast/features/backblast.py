@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from utilities import constants, sendmail
 from utilities.database import DbManager
 from utilities.database.orm import Attendance, Backblast, PaxminerUser, Region
-from utilities.paxminer_sweep import trigger_achievement_sweep
+from utilities.paxminer_achievements_webhook import trigger_achievement_webhook
 from utilities.field_encryption import decrypt_field
 from utilities.helper_functions import (
     app_timezone,
@@ -717,10 +717,10 @@ COUNT: {count}
                 )
             )
             current_pax_ids = {u for u in [the_q, *(the_coq or []), *pax] if u}
-            sweep_pax = current_pax_ids | prior_pax_ids
-            trigger_achievement_sweep(
+            webhook_pax = current_pax_ids | prior_pax_ids
+            trigger_achievement_webhook(
                 region_record=region_record,
-                pax_user_ids=sweep_pax,
+                pax_user_ids=webhook_pax,
                 bd_date=str(the_date),
                 ao_channel_id=ao or chan,
                 post_to_ao=bool(getattr(region_record, "post_achievements_to_ao", 0)),

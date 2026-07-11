@@ -310,7 +310,7 @@ fi
 : "${F3_REGION_NAME:?}"
 : "${PM_SLACK_TOKEN:?}"
 : "${PM_SLACK_SIGNING_SECRET:?}"
-: "${PAXMINER_SWEEP_SECRET:?}"
+: "${PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET:?}"
 : "${F3_REGION_SLACK_TEAM_ID:?}"
 
 export AWS_DEFAULT_REGION="${AWS_REGION}"
@@ -445,7 +445,7 @@ deploy_paxminer() {
       "F3RegionName=${F3_REGION_NAME}" \
       "PmSlackToken=${PM_SLACK_TOKEN}" \
       "PmSlackSigningSecret=${PM_SLACK_SIGNING_SECRET}" \
-      "PaxminerSweepSecret=${PAXMINER_SWEEP_SECRET}" \
+      "PaxminerAchievementsWebhookSecret=${PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET}" \
     2>&1 | tee -a "$RECEIPT_FILE"
   return "${PIPESTATUS[0]}"
 }
@@ -479,7 +479,7 @@ deploy_slackblast() {
       "DatabaseSchema=${SLACKBLAST_SCHEMA}_${STAGE}" \
       "PaxminerSchema=${PAXMINER_SCHEMA}_${STAGE}" \
       "PaxminerAchievementsUrl=${achievements_url}" \
-      "PaxminerSweepSecret=${PAXMINER_SWEEP_SECRET}" \
+      "PaxminerAchievementsWebhookSecret=${PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET}" \
       "SlackToken=${SB_SLACK_TOKEN}" \
       "SlackSigningSecret=${SB_SLACK_SIGNING_SECRET}" \
       "SlackClientSecret=${SB_SLACK_CLIENT_SECRET}" \

@@ -1,6 +1,6 @@
 """
 AWS Lambda entry points for PAXminer user/channel sync, monthly charts,
-achievements (daily + sweep), Kotter reports, and Slack interactivity.
+achievements (daily + webhook), Kotter reports, and Slack interactivity.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from slack_http import (
     parse_slack_body,
     raw_body,
     verify_slack_request,
-    verify_sweep_secret,
+    verify_achievements_webhook_secret,
 )
 
 require_encryption_key()
@@ -228,7 +228,7 @@ def achievements_handler(event, context):
 
     if is_http_request(event):
         headers = (event or {}).get("headers") or {}
-        if not verify_sweep_secret(headers):
+        if not verify_achievements_webhook_secret(headers):
             return http_response(401, {"ok": False, "error": "Unauthorized"})
         try:
             body = json.loads(raw_body(event) or "{}")

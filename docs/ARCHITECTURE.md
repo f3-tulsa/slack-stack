@@ -15,7 +15,7 @@ Apps do **not** import each other’s Python packages; integration is via **shar
 
 ## Runtime shapes
 
-- **PAXminer:** Container images, EventBridge schedules, Function URLs for Kotter/interactive and achievements sweep.
+- **PAXminer:** Container images, EventBridge schedules, Function URLs for Kotter/interactive and achievements webhook.
 - **slackblast / qsignups:** Zip Lambdas, **Lambda Function URLs**, Bolt with `process_before_response` and **lazy listeners** (self `lambda:InvokeFunction`).
 
 ## Database and schemas
@@ -39,7 +39,7 @@ flowchart LR
     ATT[bd_attendance]
   end
   PM -->|regions.schema_name| regional
-  SB -->|regions.paxminer_schema + sweep URL| PM
+  SB -->|regions.paxminer_schema + achievements webhook URL| PM
   SB -->|Slack config| regional
   QS -->|PAXMINER_REGIONAL_SCHEMA optional| AOS
   QS -->|schedule data| QSMASTER[qsignups_master weekly aos regions]
