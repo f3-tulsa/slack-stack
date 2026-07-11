@@ -207,15 +207,12 @@ CONFIG_FORM = orm.BlockView(
                     label=":speech_balloon: Welcomebot Settings",
                     action=actions.CONFIG_WELCOME_MESSAGE,
                 ),
-                # orm.ButtonElement(
-                #     label=":robot_face: Weaselbot Settings",
-                #     action=actions.CONFIG_WEASELBOT,
-                # ),
-                orm.ButtonElement(
-                    label=":pick: Paxminer Settings",
-                    action=actions.CONFIG_PAXMINER,
-                ),
             ],
+        ),
+        orm.ContextBlock(
+            element=orm.ContextElement(
+                initial_value="Not seeing something? PAXMiner options (achievements, Kotter, charts) are in `/config-paxminer`.",
+            ),
         ),
     ]
 )
@@ -349,6 +346,20 @@ CONFIG_GENERAL_FORM = orm.BlockView(
             action=actions.CONFIG_PREBLAST_MOLESKINE_TEMPLATE,
             optional=True,
             element=orm.RichTextInputElement(),
+        ),
+        orm.InputBlock(
+            label="Also post achievement unlocks to the AO channel?",
+            action=actions.CONFIG_POST_ACHIEVEMENTS_TO_AO,
+            optional=False,
+            element=orm.RadioButtonsElement(
+                initial_value="no",
+                options=orm.as_selector_options(names=["Yes", "No"], values=["yes", "no"]),
+            ),
+        ),
+        orm.ContextBlock(
+            element=orm.ContextElement(
+                initial_value="Requires PAXMiner linked to this workspace. Achievement catalog and channels are configured in `/config-paxminer`.",
+            ),
         ),
     ]
 )

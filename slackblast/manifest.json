@@ -24,11 +24,6 @@
         "command": "/config-slackblast",
         "url": "__HOSTNAME__/slack/events",
         "description": "Region settings"
-      },
-      {
-        "command": "/tag-achievement",
-        "url": "__HOSTNAME__/slack/events",
-        "description": "Tag achievement"
       }
     ]
   },

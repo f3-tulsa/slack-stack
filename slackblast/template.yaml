@@ -58,6 +58,15 @@ Parameters:
     Description: PAXminer registry database (schema) name
     Type: String
     Default: "paxminer"
+  PaxminerAchievementsUrl:
+    Description: PAXMiner achievements Function URL for post-backblast sweep (optional)
+    Type: String
+    Default: ""
+  PaxminerSweepSecret:
+    Description: Shared secret header for PAXMiner achievements sweep (optional)
+    Type: String
+    Default: ""
+    NoEcho: true
   DbEncryptionKey:
     Description: Required passphrase for DB field encryption (tokens, email password, Strava); maps to DB_ENCRYPTION_KEY. Min 16 chars.
     Type: String
@@ -191,6 +200,8 @@ Resources:
           ADMIN_DATABASE_PASSWORD: !Ref DatabasePassword
           ADMIN_DATABASE_SCHEMA: !Ref DatabaseSchema
           PAXMINER_SCHEMA: !Ref PaxminerSchema
+          PAXMINER_ACHIEVEMENTS_URL: !Ref PaxminerAchievementsUrl
+          PAXMINER_SWEEP_SECRET: !Ref PaxminerSweepSecret
           DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
           TIMEZONE: !Ref Timezone
           IMAGE_S3_BUCKET: !Ref ImageBucketName

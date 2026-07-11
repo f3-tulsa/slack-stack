@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from utilities import constants, sendmail
 from utilities.database import DbManager
 from utilities.database.orm import Attendance, Backblast, PaxminerUser, Region
+from utilities.paxminer_sweep import trigger_achievement_sweep
 from utilities.field_encryption import decrypt_field
 from utilities.helper_functions import (
     app_timezone,
@@ -379,6 +380,7 @@ def handle_backblast_post(body: dict, client: WebClient, logger: Logger, context
     else:
         message_channel = chan
         message_ts = None
+        prior_pax_ids = set()
 
     auto_count = len(set([the_q] + (the_coq or []) + pax))
     pax_names_list = get_user_names(pax, logger, client, return_urls=False, user_records=user_records) or [""]
@@ -619,6 +621,12 @@ COUNT: {count}
         logger.info(json.dumps({"event_type": "successful_slack_edit", "team_name": region_record.workspace_name}))
 
         if message_ts:
+            prior_attendance = DbManager.find_records(
+                cls=Attendance,
+                schema=region_record.paxminer_schema,
+                filters=[Attendance.timestamp == message_ts],
+            )
+            prior_pax_ids = {a.user_id for a in prior_attendance}
             DbManager.delete_records(
                 cls=Backblast,
                 schema=region_record.paxminer_schema,
@@ -707,6 +715,16 @@ COUNT: {count}
                         "team_name": region_record.workspace_name,
                     }
                 )
+            )
+            current_pax_ids = {u for u in [the_q, *(the_coq or []), *pax] if u}
+            sweep_pax = current_pax_ids | prior_pax_ids
+            trigger_achievement_sweep(
+                region_record=region_record,
+                pax_user_ids=sweep_pax,
+                bd_date=str(the_date),
+                ao_channel_id=ao or chan,
+                post_to_ao=bool(getattr(region_record, "post_achievements_to_ao", 0)),
+                logger=logger,
             )
         except IntegrityError as e:
             logger.error("Duplicate backblast: %s", e, exc_info=True)

@@ -83,6 +83,9 @@ def build_config_general_form(body: dict, client: WebClient, logger: Logger, con
             actions.CONFIG_PREBLAST_MOLESKINE_TEMPLATE: region_record.preblast_moleskin_template
             or constants.DEFAULT_PREBLAST_MOLESKINE_TEMPLATE,
             actions.CONFIG_ENABLE_STRAVA: "enable" if region_record.strava_enabled == 1 else "disable",
+            actions.CONFIG_POST_ACHIEVEMENTS_TO_AO: "yes"
+            if getattr(region_record, "post_achievements_to_ao", 0) == 1 and region_record.paxminer_schema
+            else "no",
         }
     )
 
@@ -138,6 +141,10 @@ def handle_config_general_post(body: dict, client: WebClient, logger: Logger, co
         Region.preblast_moleskin_template: safe_get(config_data, actions.CONFIG_PREBLAST_MOLESKINE_TEMPLATE),
         Region.strava_enabled: 1 if safe_get(config_data, actions.CONFIG_ENABLE_STRAVA) == "enable" else 0,
     }
+    if region_record.paxminer_schema:
+        fields[Region.post_achievements_to_ao] = (
+            1 if safe_get(config_data, actions.CONFIG_POST_ACHIEVEMENTS_TO_AO) == "yes" else 0
+        )
 
     DbManager.update_record(
         cls=Region,
