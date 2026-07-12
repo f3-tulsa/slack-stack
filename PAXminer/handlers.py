@@ -25,7 +25,16 @@ for _p in (_ROOT, _ROOT / "database_management", _ROOT / "achievements", _ROOT /
         sys.path.insert(0, s)
 
 from common.encryption import decrypt_field, require_encryption_key
-from config_paxminer import CALLBACK_ID as CONFIG_CALLBACK_ID, handle_config_command, handle_config_submit
+from config_paxminer import (
+    ACHIEVEMENT_EDIT_CALLBACK_ID,
+    ACHIEVEMENTS_LIST_CALLBACK_ID,
+    CALLBACK_ID as CONFIG_CALLBACK_ID,
+    handle_achievement_edit_submit,
+    handle_achievements_list_submit,
+    handle_config_block_actions,
+    handle_config_command,
+    handle_config_submit,
+)
 from paxminer_db import connect_from_env, paxminer_schema_from_env
 from slack_http import (
     KOTTER_SEND_ACTION_ID,
@@ -303,9 +312,15 @@ def kotter_handler(event, context):
                 return http_response(200, {"response_type": "ephemeral", "text": "Admin required."})
             return http_response(200, _kotter_slash_response())
         if payload_type == "interactive":
+            if payload.get("type") == "block_actions":
+                return handle_config_block_actions(payload)
             cb = (payload.get("view") or {}).get("callback_id")
             if cb == CONFIG_CALLBACK_ID:
                 return handle_config_submit(payload)
+            if cb == ACHIEVEMENTS_LIST_CALLBACK_ID:
+                return handle_achievements_list_submit(payload)
+            if cb == ACHIEVEMENT_EDIT_CALLBACK_ID:
+                return handle_achievement_edit_submit(payload)
             user_id = (payload.get("user") or {}).get("id", "")
             action_id = (((payload.get("actions") or [{}])[0]).get("action_id") or "").strip()
             if action_id == KOTTER_SEND_ACTION_ID:
