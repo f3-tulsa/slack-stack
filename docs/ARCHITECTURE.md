@@ -18,6 +18,8 @@ Apps do **not** import each other’s Python packages; integration is via **shar
 - **PAXminer:** Container images, EventBridge schedules, Function URLs for Kotter/interactive and achievements webhook.
 - **slackblast / qsignups:** Zip Lambdas, **Lambda Function URLs**, Bolt with `process_before_response` and **lazy listeners** (self `lambda:InvokeFunction`).
 
+- **Future (brother-region Nation attendance):** A shared `external_attendance` table per regional schema could union attendance from partner regions once a Nation API sync exists; Kotter and achievements would read through the same helper as `achievements/attendance.py`.
+
 ## Database and schemas
 
 - **Per-app schemas** (suffix `_test` / `_prod`): `paxminer_*`, `slackblast_*`, `qsignups_*`. Legacy `weaselbot_*` is retired after migration.

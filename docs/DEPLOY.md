@@ -10,7 +10,7 @@ This document covers first-time setup, environment variables, Slack OAuth, datab
 - [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 - [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
 - Python **3.12** (matches Lambda runtimes) and **Python 3** on your PATH (used by `deploy.sh` for manifest substitution)
-- **Docker** (required to build **PAXminer** and **Weaselbot** container images when deploying `paxminer`, `weaselbot`, or `all`)
+- **Docker** (required to build **PAXminer** container images when deploying `paxminer` or `all`)
 - AWS account with permissions for Lambda (including **Function URLs**), CloudFormation, IAM, S3, ECR, EventBridge
 - [GitHub CLI `gh`](https://cli.github.com/) (optional; required only for `./deploy.sh --setup-github`)
 
@@ -31,14 +31,14 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 | `DATABASE_TLS_ENABLED` | `true` for TiDB Cloud and other TLS-required hosts; `false` for local MySQL or RDS without TLS |
 | `DB_ENCRYPTION_KEY` | **Required.** Any random string (min **16** characters) used as a passphrase for DB field encryption (see **Database encryption**). Must be the **same value** in `.env.deploy.*` and `migration/.env.migration.*` for a given stage. |
 | `PAXMINER_SCHEMA` | **Bare** base name for PAXminer (e.g. `paxminer`). Deploy appends `_${STAGE}` → `paxminer_test` / `paxminer_prod` |
-| `WEASELBOT_SCHEMA` | **Bare** base name for Weaselbot (e.g. `weaselbot`). Same auto-suffix |
 | `SLACKBLAST_SCHEMA` | **Bare** base name for slackblast (e.g. `slackblast`). Same auto-suffix |
 | `QSIGNUPS_SCHEMA` | **Bare** base name for qsignups (e.g. `qsignups`). Same auto-suffix |
 | `IMAGE_S3_BUCKET` | Globally unique S3 bucket name for slackblast backblast images and **qsignups weinke** calendar PNGs under `weinkes/` (the slackblast stack creates this bucket) |
 | `F3_REGION_NAME` | F3 region key stored in `paxminer_<stage>.regions.region` (e.g. `f3ttown`); regional DB schema is `{F3_REGION_NAME}_{STAGE}` |
-| `PM_SLACK_TOKEN` | PAXminer Slack **bot** token for that region; SAM passes to Lambdas, which **encrypt** and **upsert** into `paxminer_<stage>.regions.slack_token` on cold start |
-| `WB_SLACK_TOKEN` | Weaselbot Slack **bot** token (separate app); encrypted and upserted into `weaselbot_<stage>.regions` on cold start |
-| `F3_REGION_SLACK_TEAM_ID` | Slack workspace Team ID (e.g. `T01234567`); passed to Lambdas (e.g. `weaselbot.regions.team_id` when inserting a new row) |
+| `PM_SLACK_TOKEN` | PAXMiner Slack **bot** token; SAM passes to Lambdas, which **encrypt** and **upsert** into `paxminer_<stage>.regions.slack_token` on cold start |
+| `PM_SLACK_SIGNING_SECRET` | PAXMiner Slack **signing secret** for Function URL slash commands and modals (`/config-paxminer`, `/kotter-report`) |
+| `PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET` | Shared secret for Slackblast → PAXMiner achievements Function URL (`X-Paxminer-Achievements-Webhook-Secret` header) |
+| `F3_REGION_SLACK_TEAM_ID` | Slack workspace Team ID (e.g. `T01234567`) |
 
 ### Bootstrap (optional; for `--bootstrap`)
 
@@ -55,9 +55,9 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 | `AWS_ROLE_ARN` | OIDC deploy role ARN for `--setup-github` if not reading from the bootstrap stack outputs |
 | `DEPLOYMENT_S3_BUCKET` | SAM deploy artifact bucket override (bootstrap output `DeploymentBucketName`). If unset, `deploy.sh` reads `DeploymentBucketName` from the bootstrap stack (same as GitHub Actions). Falls back to `--resolve-s3` only as a last resort — the OIDC deploy role may lack `s3:PutObject` on SAM’s default bucket. |
 
-### PAXminer / Weaselbot and Slack
+### PAXMiner and Slack
 
-**PAXminer** and **Weaselbot** use **`PM_SLACK_TOKEN`** and **`WB_SLACK_TOKEN`** in `.env.deploy.*` (separate Slack apps). Deploy passes them to SAM; on **Lambda cold start** each stack encrypts with **`DB_ENCRYPTION_KEY`** and **upserts** into **`paxminer_<stage>.regions`** and **`weaselbot_<stage>.regions`**. At runtime they still **read** tokens from the DB (decrypted). **`F3_REGION_NAME`** and **`F3_REGION_SLACK_TEAM_ID`** identify the region row and workspace.
+**PAXMiner** uses **`PM_SLACK_TOKEN`** and **`PM_SLACK_SIGNING_SECRET`**. Deploy passes them to SAM; on **Lambda cold start** the sync/charts/achievements/kotter stack encrypts with **`DB_ENCRYPTION_KEY`** and **upserts** into **`paxminer_<stage>.regions`**. Achievements webhook auth uses **`PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET`** on both PAXMiner and slackblast Lambdas.
 
 **slackblast** (`SB_*`) and **qsignups** (`QS_*`) use their own Slack (and Google) env vars as below.
 
@@ -111,26 +111,26 @@ Bolt resolves the workspace bot token from the **`slack_installations`** table (
 
 If you skip this, slash commands and modals can fail (e.g. missing auth, `expired_trigger_id` on cold starts, or `lambda:InvokeFunction` errors until the lazy listener can run with a valid client).
 
-### Weaselbot `regions` row
+### PAXMiner `regions` row and Slackblast coupling
 
-Scheduled Weaselbot Lambdas read **`slack_token`** from **`weaselbot_<stage>.regions`** for each PAXminer regional schema (see `weaselbot/weaselbot/pax_achievements.py`). For your workspace to receive achievement/Kotter Slack messages:
+Scheduled PAXMiner Lambdas read **`slack_token`**, channel IDs, and feature toggles from **`paxminer_<stage>.regions`**. Slackblast links via **`slackblast_<stage>.regions.paxminer_schema`** and invokes the achievements Function URL after backblast writes when URL + webhook secret are configured.
 
-- Ensure **`WB_SLACK_TOKEN`**, **`F3_REGION_NAME`**, **`STAGE`**, **`WEASELBOT_SCHEMA`**, and **`F3_REGION_SLACK_TEAM_ID`** are set on the Weaselbot Lambda (via deploy). On cold start, [`weaselbot/handlers.py`](../weaselbot/handlers.py) can bootstrap an encrypted token into **`weaselbot_<stage>.regions`** when all of those are present.
-- The row’s **`paxminer_schema`** must match the regional schema name (e.g. `f3ttown_test` for `F3_REGION_NAME=f3ttown` and `STAGE=test`).
-- Set **`achievement_channel`** (and other Weaselbot fields) via slackblast’s Weaselbot config UI or direct SQL if achievements should post to a channel.
+- Ensure **`PM_SLACK_TOKEN`**, **`PM_SLACK_SIGNING_SECRET`**, **`PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET`**, **`F3_REGION_NAME`**, and **`STAGE`** are set on deploy.
+- Configure channels, Kotter thresholds, charts, and achievement catalog via **`/config-paxminer`** (workspace admin).
+- Optional AO celebration: **`/config-slackblast` → General** when PAXMiner is linked.
 
-### Manual Lambda invocation (PAXminer / Weaselbot)
+### Manual Lambda invocation (PAXMiner)
 
-**PAXminer** and **Weaselbot** upsert encrypted bot tokens into the DB at **cold start** (see `common/token_bootstrap.py`). EventBridge schedules may run only daily, so after deploy the first cold start might not happen for hours.
+**PAXMiner** upserts encrypted bot tokens into the DB at **cold start** (`common/token_bootstrap.py`). EventBridge schedules may run only daily, so after deploy the first cold start might not happen for hours.
 
-The **GitHub Actions** deploy workflow runs a **smoke-test** step that synchronously invokes (only when that stack was **deployed in that workflow run**):
+The **GitHub Actions** deploy workflow runs a **smoke-test** step that synchronously invokes (only when PAXMiner was **deployed in that workflow run**), checking **`statusCode: 200`** on each response:
 
-- `paxminer-<stage>-paxminer-sync`
-- `weaselbot-<stage>-weaselbot-achievements`
+- `paxminer-<stage>-paxminer-sync` — `{}`
+- `paxminer-<stage>-paxminer-achievements` — `{}`
+- `paxminer-<stage>-paxminer-kotter` — `{"source":"smoke"}`
+- `paxminer-<stage>-paxminer-achievements` — `{"source":"smoke","feature":"achievement_leaderboard"}`
 
-so token bootstrap runs immediately after those deploys (selective pushes skip invokes for stacks that did not change).
-
-To **manually trigger** the same Lambdas (replace `test` with your stage: `test` or `prod`; set `AWS_REGION` as needed):
+To **manually trigger** the same Lambdas (replace `test` with your stage):
 
 ```bash
 export AWS_REGION=us-east-1   # or your stack region
@@ -143,26 +143,42 @@ aws lambda invoke \
   /tmp/pm-sync.json && cat /tmp/pm-sync.json
 
 aws lambda invoke \
-  --function-name weaselbot-test-weaselbot-achievements \
+  --function-name paxminer-test-paxminer-achievements \
   --cli-binary-format raw-in-base64-out \
   --payload '{}' \
   --log-type Tail \
-  /tmp/wb-ach.json && cat /tmp/wb-ach.json
+  /tmp/pm-ach.json && cat /tmp/pm-ach.json
+
+aws lambda invoke \
+  --function-name paxminer-test-paxminer-kotter \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{"source":"smoke"}' \
+  /tmp/pm-kotter.json && cat /tmp/pm-kotter.json
 ```
 
-Optional: run the other scheduled functions (charts / Kotter):
+Optional: monthly charts:
 
 ```bash
 aws lambda invoke --function-name paxminer-test-paxminer-charts \
   --cli-binary-format raw-in-base64-out --payload '{}' /tmp/pm-charts.json && cat /tmp/pm-charts.json
-
-aws lambda invoke --function-name weaselbot-test-weaselbot-kotter \
-  --cli-binary-format raw-in-base64-out --payload '{}' /tmp/wb-kotter.json && cat /tmp/wb-kotter.json
 ```
 
-For Weaselbot Kotter, admins can manually send from Slack via `/kotter-report` and the **Send Monthly Kotter Now** button (uses `KotterApi` Function URL behind the app manifest URL substitution).
+Admins can manually send Kotter from Slack via **`/kotter-report`** (uses **`KotterFunctionUrl`** from the PAXMiner manifest).
 
-With `--log-type Tail`, the CLI prints metadata to **stdout** (including base64 `LogResult`); decode with `jq -r '.LogResult' | base64 -d` if you need the tail of CloudWatch logs inline.
+With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if needed.
+
+### Weaselbot → PAXMiner cutover checklist
+
+1. Run **`migration/migrate_weaselbot_to_paxminer.py --env <stage>`** (copy config + achievement rule columns).
+2. Deploy **PAXMiner** then **slackblast** (CI waits for PAXMiner when both run so **`AchievementsFunctionUrl`** is available).
+3. Update **PAXMiner** Slack app from **`PAXminer/manifest-<stage>.json`** (Function URLs, `reactions:write`).
+4. Re-install or verify **slackblast** OAuth if needed; confirm achievement webhook env on slackblast Lambda.
+5. Configure **`/config-paxminer`** (channels, toggles, achievement catalog).
+6. Smoke-invoke the four PAXMiner Lambdas (see above).
+7. **Uninstall** the legacy WeaselBot Slack app from the workspace.
+8. When stable, drop **`weaselbot_<stage>`** schema and delete any remaining **weaselbot** CloudFormation stack (optional `--drop-weaselbot-schema` on migration script).
+
+**Free tier note:** Four container Lambdas plus Function URLs and EventBridge schedules fit typical light regional usage, but monitor Lambda invocations, log storage, and ECR if you run multiple stages.
 
 ### Manual Lambda invocation (qsignups)
 
@@ -205,7 +221,7 @@ Use this when migrating data from an existing MySQL/RDS instance to a new TiDB o
 
 ### What `migrate_data.py` does
 
-- **Target bootstrap (no source read):** creates `paxminer_{STAGE}`, `slackblast_{STAGE}`, `weaselbot_{STAGE}` with core admin tables and seeds `paxminer.regions` rows for `f3ttown_{STAGE}` / `f3scissortail_{STAGE}` with **empty** `slack_token` (first deploy/Lambda cold start fills encrypted tokens from **`PM_SLACK_TOKEN`** / **`WB_SLACK_TOKEN`**). Optionally set **`MIGRATION_SEED_TEAM_F3TTOWN`** / **`MIGRATION_SEED_TEAM_F3SCISSORTAIL`** to seed matching rows in `slackblast` / `weaselbot` `regions` (`team_id` + `paxminer_schema`).
+- **Target bootstrap (no source read):** creates `paxminer_{STAGE}`, `slackblast_{STAGE}` with core admin tables and seeds `paxminer.regions` rows with **empty** `slack_token` (first deploy/Lambda cold start fills encrypted tokens from **`PM_SLACK_TOKEN`**). Optionally set **`MIGRATION_SEED_TEAM_*`** to seed matching rows in `slackblast` `regions` (`team_id` + `paxminer_schema`).
 - **Source copy:** `f3ttown`, `f3scissortail`, and `f3stcharles` → regional schemas on the target; **`f3stcharles`** only copies base tables named `qsignups_*` (regional PAXminer objects in that schema are skipped). Set **`QSIGNUPS_TEAM_IDS`** in `migration/.env.migration.<env>` to comma-separated Slack **source** team IDs so only those rows are copied from the shared national `f3stcharles` qsignups tables (avoids importing other regions’ tokens). Use the team ID as it appears in the source DB (often prod), not the test workspace ID.
 - **Qsignups views:** after copy, recreates **`vw_weekly_events`**, **`vw_aos_sort`**, and **`vw_master_events`** on `{QSIGNUPS_SCHEMA}_{STAGE}` (same definitions as `qsignups/db/views/*.sql`).
 - **Encryption prep:** widens token columns to `VARCHAR(512)` and `qsignups_regions.google_auth_data` to `LONGTEXT` where needed, verifies each widen, and logs results under **`column_widens`** in the JSON report. If **`DB_ENCRYPTION_KEY`** is set (min 16 characters, not a placeholder), the script encrypts secrets in place; otherwise this step is skipped (Lambdas still require the key at runtime after deploy).
@@ -237,7 +253,7 @@ Reports/checkpoints are written under `migration/` (gitignored). After `migrate_
 3. Deploy:
 
 ```bash
-./deploy.sh --env test                    # all four stacks
+./deploy.sh --env test                    # all stacks (paxminer, slackblast, qsignups)
 ./deploy.sh --env test --stack paxminer   # single stack
 ./deploy.sh --env test --build-only       # build only (no deploy)
 ./deploy.sh --env prod --confirm          # prompt for SAM changeset confirmation
@@ -279,15 +295,14 @@ Manual deploy: *Actions → Deploy Slack Stack → Run workflow*. Choose **envir
 
 ### Selective deploys (push only)
 
-On **push** to `test` or `prod`, only apps whose paths changed are built and deployed (jobs run **in parallel**):
+On **push** to `test` or `prod`, only apps whose paths changed are built and deployed. When **both** PAXMiner and slackblast run in the same workflow, **slackblast waits for PAXMiner** so the achievements Function URL is available.
 
 | Deploy job | Paths that trigger it (or always when “infra” changed) |
 |------------|--------------------------------------------------------|
-| PAXminer | `PAXminer/**` |
-| Weaselbot | `weaselbot/**`, `common/**` |
+| PAXminer | `PAXminer/**`, `common/**` |
 | slackblast | `slackblast/**` |
 | qsignups | `qsignups/**` |
-| **All four** | `infra/**` (bootstrap-related templates only; workflow file changes do **not** force a full deploy) |
+| **All three** | `infra/**` |
 
 Bootstrap stack deployment is **not** automated in Actions; run `./deploy.sh --env <env> --bootstrap` locally when needed. CI still **lints** `infra/template.bootstrap.yaml` in the deploy **setup** job and in **`ci.yml`**.
 
@@ -302,7 +317,7 @@ Same names as in `.env.deploy.*` for `deploy.sh` (where applicable):
 - **`RUN_EXTEND_SCHEDULE=true`** — QSignups extend-schedule nonce (only affects **qsignups** when that job runs).
 - **`ENABLE_XRAY=true`** — X-Ray on slackblast and qsignups (when those jobs run).
 
-CI and `deploy.sh` always run `sam build` with **`--no-cached`**. Post-deploy **smoke tests** invoke PAXminer sync and Weaselbot achievements **only for stacks that were deployed in that run** (not for apps that were skipped by path detection).
+CI and `deploy.sh` always run `sam build` with **`--no-cached`**. Post-deploy **smoke tests** invoke PAXMiner sync, achievements, kotter, and leaderboard dry-run **only when PAXMiner was deployed in that run**.
 
 ### After deploy
 
@@ -310,7 +325,7 @@ When the workflow finishes without deploy failures, the **post-deploy** job appe
 
 ### Dependabot
 
-[`.github/dependabot.yml`](../.github/dependabot.yml) opens weekly PRs to update **GitHub Actions**, **Docker** base images (`PAXminer/`, `weaselbot/`), and **pip** requirements under each app directory (`PAXminer/`, `weaselbot/`, `slackblast/slackblast/`, `qsignups/`, `migration/`, etc.). Auto-merge and branch promotion are described under **Workflows** above and in [DEVELOPMENT.md](DEVELOPMENT.md).
+[`.github/dependabot.yml`](../.github/dependabot.yml) opens weekly PRs to update **GitHub Actions**, **Docker** base images (`PAXminer/`), and **pip** requirements under each app directory (`PAXminer/`, `slackblast/slackblast/`, `qsignups/`, `migration/`, etc.). Auto-merge and branch promotion are described under **Workflows** above and in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ### GitHub Environments
 
@@ -326,8 +341,9 @@ Create environments **`test`** and **`prod`** in your repo settings (or run `./d
 | `DATABASE_USER` | All |
 | `DATABASE_PASSWORD` | All |
 | `DB_ENCRYPTION_KEY` | All (min 16 characters) |
-| `PM_SLACK_TOKEN` | PAXminer |
-| `WB_SLACK_TOKEN` | Weaselbot |
+| `PM_SLACK_TOKEN` | PAXMiner |
+| `PM_SLACK_SIGNING_SECRET` | PAXMiner |
+| `PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET` | PAXMiner + slackblast |
 | `SB_SLACK_TOKEN` | slackblast |
 | `SB_SLACK_SIGNING_SECRET` | slackblast |
 | `SB_SLACK_CLIENT_SECRET` | slackblast |
@@ -347,12 +363,12 @@ Create environments **`test`** and **`prod`** in your repo settings (or run `./d
 | `AWS_REGION` | `us-east-2` | |
 | `DATABASE_TLS_ENABLED` | `true` | Passed to all four stacks as `DatabaseTlsEnabled`; use `false` if your DB has no TLS |
 | `PAXMINER_SCHEMA` | `paxminer` | Bare name; workflow appends `_${STAGE}` to match migrated DB |
-| `WEASELBOT_SCHEMA` | `weaselbot` | Same |
 | `SLACKBLAST_SCHEMA` | `slackblast` | Same |
 | `QSIGNUPS_SCHEMA` | `qsignups` | Same |
+| `PAXMINER_REGIONAL_SCHEMAS` | `f3ttown_prod` | Optional; QSignups Site Q sync (first schema if comma-separated). Legacy alias: `WEASELBOT_PAXMINER_REGIONAL_SCHEMAS` |
 | `IMAGE_S3_BUCKET` | `slack-stack-images-prod` | Globally unique |
 | `F3_REGION_NAME` | `f3ttown` | Region key in `paxminer.regions`; regional schema `{F3_REGION_NAME}_${STAGE}` |
-| `F3_REGION_SLACK_TEAM_ID` | `T01234567` | Slack workspace Team ID (available to any app that needs it; Weaselbot uses it for `weaselbot.regions`) |
+| `F3_REGION_SLACK_TEAM_ID` | `T01234567` | Slack workspace Team ID |
 | `SB_SLACK_CLIENT_ID` | `10773766677089.xxx` | Slack OAuth Client ID for slackblast (public app id; use a variable, not a secret) |
 | `QS_SLACK_CLIENT_ID` | `10773766677089.xxx` | Slack OAuth Client ID for qsignups (public app id; use a variable, not a secret) |
 | `SB_CREATE_OAUTH_TABLES` | *(omit)* | Optional; set to `true` for one deploy to create OAuth tables (see **Slack OAuth (database)**) |

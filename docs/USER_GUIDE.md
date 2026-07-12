@@ -20,17 +20,20 @@ If your region does not set the PAXminer regional link for QSignups, only Slack 
 - **Strava:** Link activities when enabled.
 - **Email / Postie:** Optional outbound email flows where configured.
 - **`/config-slackblast`**, **`/config-welcome-message`:** Admin-style configuration for region and welcome content.
+- **Achievements coupling:** When PAXMiner is linked, saving a backblast can trigger achievement evaluation for affected PAX. In **General Settings**, admins can enable **Also post achievement unlocks to the AO channel** (only shown when PAXMiner is linked).
 
-## PAXminer
+## PAXMiner
 
-- Runs in the background: mines backblasts, tracks attendance, builds monthly charts and stats.
-- Data flows from Slack channels into the regional database; you usually interact via posted charts or region-specific commands (see [PAXminer README](../PAXminer/README.md)).
+PAXMiner runs in the background and in Slack admin flows:
 
-## Weaselbot
+- **Sync & charts:** Daily user/channel sync; monthly PAX/Q charts and leaderboards (when enabled).
+- **Achievements:** Data-driven rules grant and revoke awards. Unlocks post to the configured achievement channel and DM the PAX; optional AO channel posts come from Slackblast when enabled.
+- **Leaderboard / almost-there:** Monthly YTD top-10 and “almost there” nudges in the achievement channel (when enabled).
+- **Kotter reports:** Monthly posting/Q reminders to the Kotter channel.
+- **`/config-paxminer`** (workspace admins): Channels, feature toggles, Kotter thresholds, monthly chart options, and **achievement catalog CRUD** (add / edit / delete rules).
+- **`/kotter-report`:** Admins can queue a manual Kotter send.
 
-- **Achievements:** Badges and milestones based on attendance and activity rules.
-- **Kotter reports:** Summaries for Kotter channels or admins.
-- **Configuration:** Achievement channels and tiers are set per region (see [weaselbot README](../weaselbot/README.md)).
+There is no `/tag-achievement` command; awards are computed from attendance data, not manual tags.
 
 ## Getting help
 

@@ -6,11 +6,15 @@ Use this when copying data from an existing MySQL/RDS (or similar) host to a new
 
 The main script is **`migration/migrate_data.py`**. It can:
 
-- **Bootstrap** target admin schemas `paxminer_{STAGE}`, `slackblast_{STAGE}`, `weaselbot_{STAGE}` and seed registry rows (tokens filled later by Lambdas).
-- **Copy** regional schemas (e.g. `f3ttown`, `f3scissortail`) and selective **qsignups** data from a shared source schema (`f3stcharles` / `qsignups_*` tables) when **`QSIGNUPS_TEAM_IDS`** is set.
+- **Bootstrap** target admin schemas `paxminer_{STAGE}`, `slackblast_{STAGE}` and seed registry rows (tokens filled later by Lambdas).
+- **Copy** regional schemas (e.g. `f3ttown`, `f3scissortail`) and selective **qsignups** data from a shared source schema when **`QSIGNUPS_TEAM_IDS`** is set.
 - **Recreate** QSignups views (`vw_weekly_events`, `vw_aos_sort`, `vw_master_events`).
 - **Widen** encrypted token columns and optionally **encrypt** fields in place when **`DB_ENCRYPTION_KEY`** is set (must match deploy).
 - Optionally copy **S3 images** when **`IMAGE_S3_BUCKET`** is set, or run **`migration/migrate_images.py`** after the bucket exists.
+
+### Weaselbot → PAXMiner cutover
+
+Run **`migration/migrate_weaselbot_to_paxminer.py --env <stage>`** to copy Weaselbot config columns into `paxminer_<stage>.regions`, add achievement rule columns on regional `achievements_list`, and seed default rules. After deploy and Slack manifest update, uninstall the legacy WeaselBot Slack app and (when ready) drop `weaselbot_<stage>` schema / CloudFormation stack. See **[DEPLOY.md](DEPLOY.md)** cutover checklist.
 
 ## Setup
 
@@ -21,9 +25,10 @@ The main script is **`migration/migrate_data.py`**. It can:
 ## Recommended order
 
 1. `python migration/migrate_data.py --env test` (or `--env prod`).
-2. **(Test only, optional)** `python migration/remap_qsignups.py --env test --csv path/to/mapping.csv` if channel/team IDs differ from source.
-3. **Deploy** — `./deploy.sh --env test|prod` so the image bucket exists (slackblast stack).
-4. **`python migration/migrate_images.py --env test|prod`** if the bucket was not available during step 1.
+2. `python migration/migrate_weaselbot_to_paxminer.py --env test` (if migrating from Weaselbot).
+3. **(Test only, optional)** `python migration/remap_qsignups.py --env test --csv path/to/mapping.csv` if channel/team IDs differ from source.
+4. **Deploy** — `./deploy.sh --env test|prod` so the image bucket exists (slackblast stack).
+5. **`python migration/migrate_images.py --env test|prod`** if the bucket was not available during step 1.
 
 ## Artifacts
 
