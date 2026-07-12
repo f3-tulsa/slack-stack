@@ -270,8 +270,10 @@ aws s3 cp slackblast/assets/ s3://YOUR_IMAGE_BUCKET/ --recursive
 
 | Workflow | When it runs |
 |----------|----------------|
-| **[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)** | Pull requests and pushes to **`main`**, **`test`**, and **`prod`**: **`requirements-sync`** (regenerates `slackblast/slackblast/requirements.txt` from `poetry.lock` if drifted; auto-commit on same-repo branches), SAM lint, Python tests, and **`pip-audit`** on every app `requirements*.txt`. No AWS credentials. |
+| **[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)** | Pull requests and pushes to **`main`**, **`test`**, and **`prod`**: **`requirements-sync`** (re-exports slackblast/weaselbot lockfiles when drifted; pushes with the automation App token so Dependabot auto-merge gets a fresh CI run), SAM lint, Python tests, and **`pip-audit`**. No AWS credentials. |
 | **[`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)** | Pushes to **`test`** and **`prod`** only, plus manual *Run workflow*. **`main`** stays PR-only for merges. |
+| **[`.github/workflows/dependabot-automerge.yml`](../.github/workflows/dependabot-automerge.yml)** | Minor/patch → auto-merge to **`main`**; majors retarget to **`test`**. |
+| **[`.github/workflows/promote-main-to-prod.yml`](../.github/workflows/promote-main-to-prod.yml)** / **[`sync-prod-to-test.yml`](../.github/workflows/sync-prod-to-test.yml)** | After main merges: promote to prod, then sync to test via `chore/sync-prod-to-test` (auto-resolves dependency-pin conflicts preferring prod). |
 
 Manual deploy: *Actions → Deploy Slack Stack → Run workflow*. Choose **environment** (`test` / `prod`) and optional **stack** (`all` or a single app). On **push**, path-based detection is used (the stack input is ignored).
 
@@ -308,7 +310,7 @@ When the workflow finishes without deploy failures, the **post-deploy** job appe
 
 ### Dependabot
 
-[`.github/dependabot.yml`](../.github/dependabot.yml) opens weekly PRs to update **GitHub Actions**, **Docker** base images (`PAXminer/`, `weaselbot/`), and **pip** requirements under each app directory (`PAXminer/`, `weaselbot/`, `slackblast/slackblast/`, `qsignups/`, `migration/`, etc.).
+[`.github/dependabot.yml`](../.github/dependabot.yml) opens weekly PRs to update **GitHub Actions**, **Docker** base images (`PAXminer/`, `weaselbot/`), and **pip** requirements under each app directory (`PAXminer/`, `weaselbot/`, `slackblast/slackblast/`, `qsignups/`, `migration/`, etc.). Auto-merge and branch promotion are described under **Workflows** above and in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ### GitHub Environments
 
