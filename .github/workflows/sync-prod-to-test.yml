@@ -99,9 +99,7 @@ jobs:
           if [[ -z "$EXISTING" ]]; then
             gh pr create --base test --head "$SYNC_BRANCH" \
               --title "chore: sync prod to test" \
-              --body "Automated sync from prod onto a dedicated branch (preserves test-only commits).
-
-Dependency-file conflicts (\`requirements*.txt\`, \`poetry.lock\`, \`uv.lock\`) are auto-resolved preferring **prod**. Any other conflict fails this workflow so a human can fix it."
+              --body "Automated sync from prod onto a dedicated branch (preserves test-only commits). Dependency-file conflicts (requirements*.txt, poetry.lock, uv.lock) are auto-resolved preferring prod. Any other conflict fails this workflow so a human can fix it."
           fi
           PR_URL=$(gh pr list --base test --head "$SYNC_BRANCH" --state open --json url -q '.[0].url')
           # Merge commit (not squash) so test's history and prod's history both stay intact.
