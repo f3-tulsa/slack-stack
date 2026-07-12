@@ -5,12 +5,16 @@ name: Sync prod to test
 # code. This is the downstream counterpart to promote-main-to-prod: updates flow
 # main -> prod, then prod -> test. test's own commits are preserved (this opens a
 # merge PR, it never resets test).
+#
+# Always sync via branch chore/sync-prod-to-test (not head=prod) so conflict
+# resolutions can be pushed. Dependency-file conflicts auto-resolve preferring
+# prod; other conflicts fail the job with a clear error.
 on:
   push:
     branches: [prod]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
@@ -42,18 +46,61 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Open or refresh prod to test PR
+      - name: Build sync branch and open PR
         if: steps.check.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
-          EXISTING=$(gh pr list --base test --head prod --state open --json number -q '.[0].number // empty')
-          if [[ -z "$EXISTING" ]]; then
-            gh pr create --base test --head prod \
-              --title "chore: sync prod to test" \
-              --body "Automated sync from prod. Preserves test's own commits and merges once CI passes on test. If this PR shows conflicts, a test-only change touches the same files as a prod update - resolve manually."
+          SYNC_BRANCH="chore/sync-prod-to-test"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Close a dirty direct prod→test PR if one is still open from older automation.
+          LEGACY=$(gh pr list --base test --head prod --state open --json number -q '.[0].number // empty')
+          if [[ -n "$LEGACY" ]]; then
+            gh pr close "$LEGACY" --comment "Superseded by automated sync via \`${SYNC_BRANCH}\` (supports conflict resolution)."
           fi
-          PR_URL=$(gh pr list --base test --head prod --state open --json url -q '.[0].url')
+
+          git checkout -B "$SYNC_BRANCH" origin/test
+
+          if git merge --no-edit origin/prod; then
+            echo "Clean merge of prod into ${SYNC_BRANCH}."
+          else
+            echo "Merge conflicts detected; attempting auto-resolve for dependency pins (prefer prod)."
+            mapfile -t CONFLICTS < <(git diff --name-only --diff-filter=U)
+            remaining=()
+            for f in "${CONFLICTS[@]}"; do
+              base=$(basename "$f")
+              case "$base" in
+                requirements.txt|requirements-lambda.txt|poetry.lock|uv.lock|Pipfile.lock)
+                  # Merging prod *into* test: --theirs is prod.
+                  git checkout --theirs -- "$f"
+                  git add -- "$f"
+                  echo "Resolved $f using prod version."
+                  ;;
+                *)
+                  remaining+=("$f")
+                  ;;
+              esac
+            done
+            if ((${#remaining[@]} > 0)); then
+              echo "::error::Non-dependency conflicts require a human: ${remaining[*]}"
+              git merge --abort
+              exit 1
+            fi
+            git commit --no-edit -m "chore: sync prod into test (auto-resolve dependency pins)"
+          fi
+
+          git push --force-with-lease origin "HEAD:refs/heads/${SYNC_BRANCH}"
+
+          EXISTING=$(gh pr list --base test --head "$SYNC_BRANCH" --state open --json number -q '.[0].number // empty')
+          if [[ -z "$EXISTING" ]]; then
+            gh pr create --base test --head "$SYNC_BRANCH" \
+              --title "chore: sync prod to test" \
+              --body "Automated sync from prod onto a dedicated branch (preserves test-only commits). Dependency-file conflicts (requirements*.txt, poetry.lock, uv.lock) are auto-resolved preferring prod. Any other conflict fails this workflow so a human can fix it."
+          fi
+          PR_URL=$(gh pr list --base test --head "$SYNC_BRANCH" --state open --json url -q '.[0].url')
           # Merge commit (not squash) so test's history and prod's history both stay intact.
           gh pr merge --auto --merge "$PR_URL"
