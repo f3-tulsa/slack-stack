@@ -30,6 +30,7 @@ checks = [
     {"context": "pip-audit"},
     {"context": "sam-lint"},
     {"context": "requirements-sync"},
+    # Kept until Weaselbot is removed from main; CI emits a no-op job with this name.
     {"context": "weaselbot-requirements-sync"},
     {"context": "pre-commit"},
 ]
