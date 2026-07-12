@@ -11,76 +11,92 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Single job so slackblast + weaselbot sync commits cannot race on the same PR tip.
+  # App token (not GITHUB_TOKEN) for the push: commits made with GITHUB_TOKEN do not
+  # re-trigger workflows, which leaves Dependabot auto-merge waiting on checks that
+  # never run against the new HEAD.
   requirements-sync:
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          app-id: ${{ secrets.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.head_ref || github.ref_name }}
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v6
+
       - name: Install Poetry and export plugin
         run: |
           python -m pip install --upgrade pip
           pip install poetry
           poetry self add poetry-plugin-export
-      - name: Sync slackblast requirements.txt with poetry.lock
+
+      - name: Sync lockfile exports (slackblast + weaselbot)
         env:
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-        working-directory: slackblast/slackblast
         run: |
-          poetry export -f requirements.txt --without-hashes -o requirements.txt
-          cd ../..
-          if git diff --quiet slackblast/slackblast/requirements.txt; then
-            echo "requirements.txt is already in sync with poetry.lock."
-          elif [[ -n "${PR_HEAD_REPO}" && "${PR_HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]]; then
-            echo "::error::slackblast/slackblast/requirements.txt is out of sync with poetry.lock. Run: cd slackblast/slackblast && poetry export -f requirements.txt --without-hashes -o requirements.txt"
-            exit 1
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          synced=false
+
+          (
+            cd slackblast/slackblast
+            poetry export -f requirements.txt --without-hashes -o requirements.txt
+          )
+          if ! git diff --quiet slackblast/slackblast/requirements.txt; then
+            if [[ -n "${PR_HEAD_REPO}" && "${PR_HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]]; then
+              echo "::error::slackblast/slackblast/requirements.txt is out of sync with poetry.lock. Run: cd slackblast/slackblast && poetry export -f requirements.txt --without-hashes -o requirements.txt"
+              exit 1
+            fi
             git add slackblast/slackblast/requirements.txt
-            git commit -m "chore: sync slackblast requirements.txt with poetry.lock"
-            git push
-            echo "::notice::slackblast/slackblast/requirements.txt was out of sync and has been auto-fixed."
+            synced=true
           fi
 
+          (
+            cd weaselbot
+            uv export --format requirements-txt --no-hashes --only-group lambda -o requirements-lambda.txt
+          )
+          if ! git diff --quiet weaselbot/requirements-lambda.txt; then
+            if [[ -n "${PR_HEAD_REPO}" && "${PR_HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]]; then
+              echo "::error::weaselbot/requirements-lambda.txt is out of sync with uv.lock. Run: cd weaselbot && uv export --format requirements-txt --no-hashes --only-group lambda -o requirements-lambda.txt"
+              exit 1
+            fi
+            git add weaselbot/requirements-lambda.txt
+            synced=true
+          fi
+
+          if [[ "$synced" != "true" ]]; then
+            echo "Lockfile exports are already in sync."
+            exit 0
+          fi
+
+          git commit -m "chore: sync requirements exports with lockfiles"
+          git push
+          echo "::notice::Requirements exports were out of sync and have been auto-fixed (app-token push retriggers CI)."
+
+  # Keep the legacy check name so branch rulesets that still require
+  # weaselbot-requirements-sync stay green without a ruleset edit.
   weaselbot-requirements-sync:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    needs: [requirements-sync]
     steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          fetch-depth: 0
-      - uses: astral-sh/setup-uv@v6
-      - name: Sync weaselbot requirements-lambda.txt with uv.lock
-        env:
-          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-        working-directory: weaselbot
-        run: |
-          uv export --format requirements-txt --no-hashes --only-group lambda -o requirements-lambda.txt
-          cd ..
-          if git diff --quiet weaselbot/requirements-lambda.txt; then
-            echo "requirements-lambda.txt is already in sync with uv.lock."
-          elif [[ -n "${PR_HEAD_REPO}" && "${PR_HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]]; then
-            echo "::error::weaselbot/requirements-lambda.txt is out of sync with uv.lock. Run: cd weaselbot && uv export --format requirements-txt --no-hashes --no-dev -o requirements-lambda.txt"
-            exit 1
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add weaselbot/requirements-lambda.txt
-            git commit -m "chore: sync weaselbot requirements-lambda.txt with uv.lock"
-            git push
-            echo "::notice::weaselbot/requirements-lambda.txt was out of sync and has been auto-fixed."
-          fi
+      - run: echo "Covered by requirements-sync (combined lockfile export job)."
 
   pre-commit:
     runs-on: ubuntu-latest
