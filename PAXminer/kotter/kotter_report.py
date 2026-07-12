@@ -15,6 +15,10 @@ LOG = logging.getLogger(__name__)
 
 
 def _kotter_nation_sql(schema: str) -> str:
+    """Load Kotter attendance for one regional schema.
+
+    TODO: union external_attendance from brother regions when Nation API sync exists.
+    """
     return f"""
     SELECT u.email, u.user_id, a.ao_id, ao.ao, b.bd_date AS date,
            CASE WHEN (a.user_id = b.q_user_id OR a.user_id = b.coq_user_id) THEN 1 ELSE 0 END AS q_flag

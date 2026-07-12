@@ -56,7 +56,13 @@ def build_leaderboard_message(awarded: pd.DataFrame, users: pd.DataFrame) -> str
     if awarded.empty:
         return "*Achievement leaderboard (YTD)*\n\nNo awards yet this year."
     counts = awarded.groupby("pax_id", as_index=False).agg(cnt=("id", "count"))
-    counts = counts.sort_values(["cnt", "pax_id"], ascending=[False, True]).head(CAP)
+    if not users.empty:
+        users_df = users.rename(columns={"user_name": "display_name", "user_id": "pax_id"})
+        counts = counts.merge(users_df[["pax_id", "display_name"]], on="pax_id", how="left")
+        counts["display_name"] = counts["display_name"].fillna(counts["pax_id"])
+    else:
+        counts["display_name"] = counts["pax_id"]
+    counts = counts.sort_values(["cnt", "display_name", "pax_id"], ascending=[False, True, True]).head(CAP)
     lines = ["*Achievement leaderboard (YTD)*\n"]
     for _, row in counts.iterrows():
         lines.append(f"\n- <@{row['pax_id']}>: {int(row['cnt'])} awards")
@@ -133,16 +139,19 @@ def run_leaderboard_for_region(conn, pm_schema: str, region_row: dict, *, dry_ru
 
     msg = build_leaderboard_message(awarded, users)
     almost = build_almost_there_message(nation, rules, awarded, schema, users)
-    full = msg + almost
 
     if dry_run:
+        full = msg + almost
         return {"chars": len(full), "dry_run": True}
 
     token = decrypt_field(token_enc)
     client = slack_client(token)
-    post_message(client, channel, full)
-    if len(full) > 3900 and almost:
-        post_message(client, channel, almost.strip())
+    if almost and len(msg) + len(almost) <= 3900:
+        post_message(client, channel, msg + almost)
+    else:
+        post_message(client, channel, msg)
+        if almost:
+            post_message(client, channel, almost.strip())
     return {"posted": True}
 
 

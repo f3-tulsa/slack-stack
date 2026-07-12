@@ -131,13 +131,12 @@ def run_achievements_for_region(
             )
             existing.add(key)
 
-        if scope is not None:
-            for _, row in awarded[awarded["achievement_id"] == aid].iterrows():
-                if row["pax_id"] not in scope:
-                    continue
-                bucket = awarded_period_bucket(row["date_awarded"], period)
-                if (row["pax_id"], aid, bucket) not in qual_keys:
-                    revokes.append({"id": row["id"], "pax_id": row["pax_id"], "rule": rule})
+        for _, row in awarded[awarded["achievement_id"] == aid].iterrows():
+            if scope is not None and row["pax_id"] not in scope:
+                continue
+            bucket = awarded_period_bucket(row["date_awarded"], period)
+            if (row["pax_id"], aid, bucket) not in qual_keys:
+                revokes.append({"id": row["id"], "pax_id": row["pax_id"], "rule": rule})
 
     counts: dict[str, Counter] = defaultdict(Counter)
     for _, row in awarded.iterrows():
