@@ -38,6 +38,7 @@
         "groups:read",
         "im:write",
         "incoming-webhook",
+        "reactions:write",
         "users.profile:read",
         "users:read.email",
         "users:read"

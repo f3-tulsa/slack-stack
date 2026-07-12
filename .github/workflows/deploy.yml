@@ -202,8 +202,12 @@ jobs:
 
   deploy-slackblast:
     runs-on: ubuntu-latest
-    needs: [detect-changes, setup]
-    if: needs.detect-changes.outputs.run_slackblast == 'true'
+    needs: [detect-changes, setup, deploy-paxminer]
+    if: >-
+      always() &&
+      needs.detect-changes.outputs.run_slackblast == 'true' &&
+      needs.setup.result == 'success' &&
+      (needs.deploy-paxminer.result == 'success' || needs.deploy-paxminer.result == 'skipped')
     environment: ${{ github.event.inputs.environment || github.ref_name }}
     env:
       ENABLE_XRAY: ${{ vars.ENABLE_XRAY }}
@@ -296,7 +300,7 @@ jobs:
             "DatabasePassword=${{ secrets.DATABASE_PASSWORD }}"
             "DatabaseTlsEnabled=${{ vars.DATABASE_TLS_ENABLED }}"
             "DatabaseSchema=${{ vars.QSIGNUPS_SCHEMA }}_${{ vars.STAGE }}"
-            "PaxminerRegionalSchema=${{ vars.WEASELBOT_PAXMINER_REGIONAL_SCHEMAS }}"
+            "PaxminerRegionalSchema=${{ vars.PAXMINER_REGIONAL_SCHEMAS || vars.WEASELBOT_PAXMINER_REGIONAL_SCHEMAS }}"
             "SlackToken=${{ secrets.QS_SLACK_TOKEN }}"
             "SlackSigningSecret=${{ secrets.QS_SLACK_SIGNING_SECRET }}"
             "SlackClientSecret=${{ secrets.QS_SLACK_CLIENT_SECRET }}"
@@ -343,12 +347,13 @@ jobs:
           set -euo pipefail
           invoke_one() {
             local fn="$1"
+            local payload="${2:-{}}"
             echo "--- Invoking ${fn} ---"
             aws lambda invoke \
               --function-name "$fn" \
               --invocation-type RequestResponse \
               --cli-binary-format raw-in-base64-out \
-              --payload '{}' \
+              --payload "$payload" \
               --log-type Tail \
               /tmp/lambda-payload.json > /tmp/lambda-meta.json
             if jq -e '.LogResult' /tmp/lambda-meta.json >/dev/null 2>&1; then
@@ -373,12 +378,8 @@ jobs:
           if [[ "${RUN_PM}" == "true" ]]; then
             invoke_one "paxminer-${STAGE}-paxminer-sync"
             invoke_one "paxminer-${STAGE}-paxminer-achievements"
-            aws lambda invoke --function-name "paxminer-${STAGE}-paxminer-kotter" \
-              --invocation-type RequestResponse --cli-binary-format raw-in-base64-out \
-              --payload '{"source":"smoke"}' /tmp/lambda-payload.json
-            aws lambda invoke --function-name "paxminer-${STAGE}-paxminer-achievements" \
-              --invocation-type RequestResponse --cli-binary-format raw-in-base64-out \
-              --payload '{"source":"smoke","feature":"achievement_leaderboard"}' /tmp/lambda-payload.json
+            invoke_one "paxminer-${STAGE}-paxminer-kotter" '{"source":"smoke"}'
+            invoke_one "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke","feature":"achievement_leaderboard"}'
           else
             echo "Skipping PAXminer smoke test (stack not deployed this run)"
           fi

@@ -131,7 +131,7 @@ Parameters:
   PaxminerRegionalSchema:
     Description: >
       PAXminer regional DB schema containing aos.site_q_user_id (e.g. f3ttown_prod).
-      Same value as WEASELBOT_PAXMINER_REGIONAL_SCHEMAS (first schema if comma-separated). Leave empty to skip Site Q sync.
+      Same value as PAXMINER_REGIONAL_SCHEMAS (first schema if comma-separated). Leave empty to skip Site Q sync.
     Type: String
     Default: ""
   # PasswordEncryptKey:

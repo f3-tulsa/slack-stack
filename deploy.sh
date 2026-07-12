@@ -228,9 +228,11 @@ run_setup_github() {
   gh variable set STAGE --env "$STAGE" --body "$STAGE" -R "$repo"
   gh variable set AWS_REGION --env "$STAGE" --body "$AWS_REGION" -R "$repo"
   gh variable set PAXMINER_SCHEMA --env "$STAGE" --body "$PAXMINER_SCHEMA" -R "$repo"
-  gh variable set WEASELBOT_SCHEMA --env "$STAGE" --body "$WEASELBOT_SCHEMA" -R "$repo"
   gh variable set SLACKBLAST_SCHEMA --env "$STAGE" --body "$SLACKBLAST_SCHEMA" -R "$repo"
   gh variable set QSIGNUPS_SCHEMA --env "$STAGE" --body "$QSIGNUPS_SCHEMA" -R "$repo"
+  [[ -n "${PAXMINER_REGIONAL_SCHEMAS:-${WEASELBOT_PAXMINER_REGIONAL_SCHEMAS:-}}" ]] && \
+    gh variable set PAXMINER_REGIONAL_SCHEMAS --env "$STAGE" \
+      --body "${PAXMINER_REGIONAL_SCHEMAS:-${WEASELBOT_PAXMINER_REGIONAL_SCHEMAS:-}}" -R "$repo"
   gh variable set IMAGE_S3_BUCKET --env "$STAGE" --body "$IMAGE_S3_BUCKET" -R "$repo"
   gh variable set DATABASE_TLS_ENABLED --env "$STAGE" --body "$DATABASE_TLS_ENABLED" -R "$repo"
   gh variable set F3_REGION_NAME --env "$STAGE" --body "$F3_REGION_NAME" -R "$repo"
@@ -246,7 +248,8 @@ run_setup_github() {
   gh secret set DATABASE_PASSWORD --env "$STAGE" --body "$DATABASE_PASSWORD" -R "$repo"
   gh secret set DB_ENCRYPTION_KEY --env "$STAGE" --body "$DB_ENCRYPTION_KEY" -R "$repo"
   gh secret set PM_SLACK_TOKEN --env "$STAGE" --body "$PM_SLACK_TOKEN" -R "$repo"
-  gh secret set WB_SLACK_TOKEN --env "$STAGE" --body "$WB_SLACK_TOKEN" -R "$repo"
+  gh secret set PM_SLACK_SIGNING_SECRET --env "$STAGE" --body "$PM_SLACK_SIGNING_SECRET" -R "$repo"
+  gh secret set PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET --env "$STAGE" --body "$PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET" -R "$repo"
   gh secret set SB_SLACK_TOKEN --env "$STAGE" --body "$SB_SLACK_TOKEN" -R "$repo"
   gh secret set SB_SLACK_SIGNING_SECRET --env "$STAGE" --body "$SB_SLACK_SIGNING_SECRET" -R "$repo"
   gh secret set SB_SLACK_CLIENT_SECRET --env "$STAGE" --body "$SB_SLACK_CLIENT_SECRET" -R "$repo"
@@ -519,7 +522,7 @@ deploy_qsignups() {
       "DatabasePassword=${DATABASE_PASSWORD}" \
       "DatabaseTlsEnabled=${DATABASE_TLS_ENABLED}" \
       "DatabaseSchema=${QSIGNUPS_SCHEMA}_${STAGE}" \
-      "PaxminerRegionalSchema=${WEASELBOT_PAXMINER_REGIONAL_SCHEMAS:-}" \
+      "PaxminerRegionalSchema=${PAXMINER_REGIONAL_SCHEMAS:-${WEASELBOT_PAXMINER_REGIONAL_SCHEMAS:-}}" \
       "SlackToken=${QS_SLACK_TOKEN}" \
       "SlackSigningSecret=${QS_SLACK_SIGNING_SECRET}" \
       "SlackClientSecret=${QS_SLACK_CLIENT_SECRET}" \
