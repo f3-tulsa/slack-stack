@@ -112,7 +112,7 @@ prereq_hint() {
       echo "Install AWS SAM CLI: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html"
       ;;
     docker)
-      echo "Install Docker (required for PAXminer and Weaselbot image builds): https://docs.docker.com/get-docker/"
+      echo "Install Docker (required for PAXMiner image builds): https://docs.docker.com/get-docker/"
       ;;
     python3)
       echo "Install Python 3 (used for manifest URL substitution)."
@@ -713,7 +713,7 @@ run_smoke_test_lambdas() {
   local smoke_rc=0
   if [[ "$PAX_RC" -eq 0 ]]; then
     invoke_one "paxminer-${STAGE}-paxminer-sync" || smoke_rc=1
-    invoke_one "paxminer-${STAGE}-paxminer-achievements" || smoke_rc=1
+    invoke_one_payload "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke"}' || smoke_rc=1
     invoke_one_payload "paxminer-${STAGE}-paxminer-kotter" '{"source":"smoke"}' || smoke_rc=1
     invoke_one_payload "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke","feature":"achievement_leaderboard"}' || smoke_rc=1
   fi

@@ -279,7 +279,7 @@ def achievements_handler(event, context):
     dry_run = event.get("source") == "smoke"
     conn = connect_from_env(registry_db)
     try:
-        results = run_daily(conn, pm)
+        results = run_daily(conn, pm, dry_run=dry_run)
         return {"statusCode": 200, "body": json.dumps({"ok": True, "results": results})}
     except Exception:
         logging.exception("achievements failed")

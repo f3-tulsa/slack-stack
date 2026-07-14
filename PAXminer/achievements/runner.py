@@ -183,7 +183,7 @@ def run_achievements_for_region(
     return {"grants": len(grants), "revokes": len(revokes)}
 
 
-def run_daily(conn, pm_schema: str) -> list[dict]:
+def run_daily(conn, pm_schema: str, *, dry_run: bool = False) -> list[dict]:
     results = []
     with conn.cursor() as cur:
         cur.execute(f"SELECT * FROM `{pm_schema}`.`regions` WHERE active=1")
@@ -193,7 +193,13 @@ def run_daily(conn, pm_schema: str) -> list[dict]:
         if not schema:
             continue
         try:
-            r = run_achievements_for_region(conn, pm_schema=pm_schema, regional_schema=schema, region_row=row)
+            r = run_achievements_for_region(
+                conn,
+                pm_schema=pm_schema,
+                regional_schema=schema,
+                region_row=row,
+                dry_run=dry_run,
+            )
             results.append({"region": row["region"], **r})
         except Exception as e:
             LOG.exception("achievements region=%s", row.get("region"))

@@ -377,7 +377,7 @@ jobs:
           }
           if [[ "${RUN_PM}" == "true" ]]; then
             invoke_one "paxminer-${STAGE}-paxminer-sync"
-            invoke_one "paxminer-${STAGE}-paxminer-achievements"
+            invoke_one "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke"}'
             invoke_one "paxminer-${STAGE}-paxminer-kotter" '{"source":"smoke"}'
             invoke_one "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke","feature":"achievement_leaderboard"}'
           else
