@@ -292,6 +292,66 @@ def test_run_achievements_scoped_revoke_only_for_webhook_pax():
     assert result["revokes"] == 1
 
 
+def test_run_achievements_grants_and_posts():
+    from achievements.runner import run_achievements_for_region
+
+    rule = {
+        "id": 1,
+        "name": "Test",
+        "verb": "testing",
+        "metric": "posts",
+        "activity": "beatdown",
+        "period": "year",
+        "threshold": 1,
+    }
+    region_row = {
+        "send_achievements": 1,
+        "achievement_channel": "C1",
+        "slack_token": "enc",
+        "region": "test",
+    }
+    qual = pd.DataFrame(
+        {
+            "pax_id": ["U1"],
+            "achievement_id": [1],
+            "date_awarded": [date(2026, 7, 1)],
+            "period_bucket": [2026],
+        }
+    )
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [
+        [rule],
+        [],
+        [{"schema_name": "f3test"}],
+    ]
+
+    with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.load_nation_attendance", return_value=pd.DataFrame()):
+                with patch("achievements.runner.attach_home_regions", side_effect=lambda _c, n, _s: n):
+                    with patch("achievements.runner.evaluate_rule", return_value=qual):
+                        with patch("achievements.runner.post_message") as mock_post:
+                            with patch("achievements.runner.open_dm_channel", return_value="D1"):
+                                result = run_achievements_for_region(
+                                    mock_conn,
+                                    pm_schema="paxminer_test",
+                                    regional_schema="f3test",
+                                    region_row=region_row,
+                                    dry_run=False,
+                                )
+
+    assert result["grants"] == 1
+    assert result["revokes"] == 0
+    insert_calls = [c for c in mock_cur.execute.call_args_list if "INSERT INTO" in str(c)]
+    assert insert_calls
+    assert mock_post.call_count >= 2  # channel + DM
+    mock_conn.commit.assert_called_once()
+
+
 def test_validate_achievement_code():
     from config_paxminer import _validate_achievement
 
@@ -310,6 +370,35 @@ def test_validate_achievement_code():
     assert "code" in errors
 
 
+def test_config_modal_initial_options_match_option_labels():
+    from config_paxminer import _config_modal
+
+    modal = _config_modal(
+        {
+            "send_achievements": 1,
+            "send_aoq_reports": 1,
+            "send_achievement_leaderboard": 0,
+            "send_pax_charts": 1,
+            "send_q_charts": 0,
+            "send_region_leaderboard": 1,
+            "send_ao_leaderboard": 0,
+            "achievement_channel": "C1",
+            "kotter_channel": "C2",
+            "firstf_channel": "C3",
+            "team_id": "T1",
+            "schema_name": "f3test",
+        }
+    )
+    by_id = {b["block_id"]: b for b in modal["blocks"] if "block_id" in b}
+    for block_id in ("features", "charts"):
+        element = by_id[block_id]["element"]
+        options = element["options"]
+        initial = element.get("initial_options") or []
+        assert initial
+        for opt in initial:
+            assert opt in options
+
+
 def test_achievements_handler_webhook_unauthorized():
     from handlers import achievements_handler
 
@@ -322,3 +411,52 @@ def test_achievements_handler_webhook_unauthorized():
         None,
     )
     assert resp["statusCode"] == 401
+
+
+def test_achievements_handler_webhook_success():
+    import json
+
+    os.environ["PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET"] = "webhook-secret-value"
+    region_row = {
+        "send_achievements": 1,
+        "achievement_channel": "C1",
+        "slack_token": "enc",
+        "region": "test",
+        "schema_name": "f3test",
+    }
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchone.return_value = region_row
+
+    with patch("handlers.connect_from_env", return_value=mock_conn):
+        with patch(
+            "achievements.runner.run_achievements_for_region",
+            return_value={"grants": 1, "revokes": 0},
+        ) as mock_run:
+            from handlers import achievements_handler
+
+            resp = achievements_handler(
+                {
+                    "requestContext": {"http": {"method": "POST"}},
+                    "headers": {"X-Paxminer-Achievements-Webhook-Secret": "webhook-secret-value"},
+                    "body": json.dumps(
+                        {
+                            "schema": "f3test",
+                            "pax_user_ids": ["U1", "U2"],
+                            "post_to_ao": True,
+                            "ao_channel_id": "C_AO",
+                        }
+                    ),
+                },
+                None,
+            )
+
+    assert resp["statusCode"] == 200
+    body = json.loads(resp["body"])
+    assert body["ok"] is True
+    assert mock_run.call_args.kwargs["regional_schema"] == "f3test"
+    assert mock_run.call_args.kwargs["pax_user_ids"] == {"U1", "U2"}
+    assert mock_run.call_args.kwargs["post_to_ao"] is True
+    assert mock_run.call_args.kwargs["ao_channel_id"] == "C_AO"
