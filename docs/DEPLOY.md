@@ -125,10 +125,12 @@ Scheduled PAXMiner Lambdas read **`slack_token`**, channel IDs, and feature togg
 
 The **GitHub Actions** deploy workflow runs a **smoke-test** step that synchronously invokes (only when PAXMiner was **deployed in that workflow run**), checking **`statusCode: 200`** on each response:
 
-- `paxminer-<stage>-paxminer-sync` — `{}`
-- `paxminer-<stage>-paxminer-achievements` — `{}`
-- `paxminer-<stage>-paxminer-kotter` — `{"source":"smoke"}`
-- `paxminer-<stage>-paxminer-achievements` — `{"source":"smoke","feature":"achievement_leaderboard"}`
+- `paxminer-<stage>-paxminer-sync` — `{}` (**live** sync — intended)
+- `paxminer-<stage>-paxminer-achievements` — `{"source":"smoke"}` (**dry-run** — no awards/Slack posts)
+- `paxminer-<stage>-paxminer-kotter` — `{"source":"smoke"}` (**dry-run**)
+- `paxminer-<stage>-paxminer-achievements` — `{"source":"smoke","feature":"achievement_leaderboard"}` (**dry-run**)
+
+Any invoke with `"source":"smoke"` evaluates only and returns counts; bare `{}` remains the live EventBridge/scheduled path for achievements and Kotter.
 
 To **manually trigger** the same Lambdas (replace `test` with your stage):
 
@@ -145,7 +147,7 @@ aws lambda invoke \
 aws lambda invoke \
   --function-name paxminer-test-paxminer-achievements \
   --cli-binary-format raw-in-base64-out \
-  --payload '{}' \
+  --payload '{"source":"smoke"}' \
   --log-type Tail \
   /tmp/pm-ach.json && cat /tmp/pm-ach.json
 
@@ -154,6 +156,12 @@ aws lambda invoke \
   --cli-binary-format raw-in-base64-out \
   --payload '{"source":"smoke"}' \
   /tmp/pm-kotter.json && cat /tmp/pm-kotter.json
+
+aws lambda invoke \
+  --function-name paxminer-test-paxminer-achievements \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{"source":"smoke","feature":"achievement_leaderboard"}' \
+  /tmp/pm-lb.json && cat /tmp/pm-lb.json
 ```
 
 Optional: monthly charts:
@@ -286,7 +294,7 @@ aws s3 cp slackblast/assets/ s3://YOUR_IMAGE_BUCKET/ --recursive
 
 | Workflow | When it runs |
 |----------|----------------|
-| **[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)** | Pull requests and pushes to **`main`**, **`test`**, and **`prod`**: **`requirements-sync`** (re-exports slackblast/weaselbot lockfiles when drifted; pushes with the automation App token so Dependabot auto-merge gets a fresh CI run), SAM lint, Python tests, and **`pip-audit`**. No AWS credentials. |
+| **[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)** | Pull requests and pushes to **`main`**, **`test`**, and **`prod`**: **`requirements-sync`** (re-exports slackblast lockfile when drifted; pushes with the automation App token so Dependabot auto-merge gets a fresh CI run), SAM lint, Python tests, and **`pip-audit`**. No AWS credentials. |
 | **[`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)** | Pushes to **`test`** and **`prod`** only, plus manual *Run workflow*. **`main`** stays PR-only for merges. |
 | **[`.github/workflows/dependabot-automerge.yml`](../.github/workflows/dependabot-automerge.yml)** | Minor/patch → auto-merge to **`main`**; majors retarget to **`test`**. |
 | **[`.github/workflows/promote-main-to-prod.yml`](../.github/workflows/promote-main-to-prod.yml)** / **[`sync-prod-to-test.yml`](../.github/workflows/sync-prod-to-test.yml)** | After main merges: promote to prod, then sync to test via `chore/sync-prod-to-test` (auto-resolves dependency-pin conflicts preferring prod). |
@@ -317,7 +325,7 @@ Same names as in `.env.deploy.*` for `deploy.sh` (where applicable):
 - **`RUN_EXTEND_SCHEDULE=true`** — QSignups extend-schedule nonce (only affects **qsignups** when that job runs).
 - **`ENABLE_XRAY=true`** — X-Ray on slackblast and qsignups (when those jobs run).
 
-CI and `deploy.sh` always run `sam build` with **`--no-cached`**. Post-deploy **smoke tests** invoke PAXMiner sync, achievements, kotter, and leaderboard dry-run **only when PAXMiner was deployed in that run**.
+CI and `deploy.sh` always run `sam build` with **`--no-cached`**. Post-deploy **smoke tests** (only when PAXMiner was deployed in that run) invoke live sync plus dry-run achievements, Kotter, and leaderboard (`"source":"smoke"` — no Slack posts or award writes).
 
 ### After deploy
 

@@ -13,7 +13,7 @@ cd PAXminer && python3.12 -m venv .venv && source .venv/bin/activate && pip inst
 
 **slackblast** runtime deps are maintained with **Poetry** under [`slackblast/slackblast/`](../slackblast/slackblast/) (`pyproject.toml`, `poetry.lock`). The committed [`requirements.txt`](../slackblast/slackblast/requirements.txt) is generated for SAM (`poetry export`). Use **Python 3.12** with Poetry locally (`poetry env use python3.12`) so builds match Lambda. After editing `pyproject.toml`, run `poetry update` then `poetry export -f requirements.txt --without-hashes -o requirements.txt`.
 
-CI’s **`requirements-sync`** job re-exports slackblast (and weaselbot) lockfiles when they drift and pushes with the **automation GitHub App** token so Dependabot PRs get a fresh CI run on the new HEAD (a `GITHUB_TOKEN` push would not re-trigger checks and would stall auto-merge).
+CI’s **`requirements-sync`** job re-exports the slackblast lockfile export when it drifts and pushes with the **automation GitHub App** token so Dependabot PRs get a fresh CI run on the new HEAD (a `GITHUB_TOKEN` push would not re-trigger checks and would stall auto-merge).
 
 ## Dependabot automation (overview)
 
