@@ -79,6 +79,25 @@ def _achievement_summary(row: dict) -> str:
     )
 
 
+FEATURE_OPTIONS = [
+    {"text": {"type": "plain_text", "text": "Achievements"}, "value": "achievements"},
+    {"text": {"type": "plain_text", "text": "Kotter reports"}, "value": "kotter"},
+    {"text": {"type": "plain_text", "text": "Achievement leaderboard"}, "value": "leaderboard"},
+]
+
+CHART_OPTIONS = [
+    {"text": {"type": "plain_text", "text": "PAX charts"}, "value": "pax"},
+    {"text": {"type": "plain_text", "text": "Q charts"}, "value": "q"},
+    {"text": {"type": "plain_text", "text": "Region leaderboard"}, "value": "region_lb"},
+    {"text": {"type": "plain_text", "text": "AO leaderboard"}, "value": "ao_lb"},
+]
+
+
+def _selected_options(all_options: list[dict], selected_values: list[str]) -> list[dict]:
+    selected = set(selected_values)
+    return [opt for opt in all_options if opt["value"] in selected]
+
+
 def _config_modal(region: dict) -> dict:
     features = []
     if region.get("send_achievements"):
@@ -96,8 +115,26 @@ def _config_modal(region: dict) -> dict:
         charts.append("region_lb")
     if region.get("send_ao_leaderboard"):
         charts.append("ao_lb")
+    feature_options = list(FEATURE_OPTIONS)
+    chart_options = list(CHART_OPTIONS)
+    feature_initial = _selected_options(feature_options, features)
+    chart_initial = _selected_options(chart_options, charts)
     team_id = region.get("team_id") or ""
     regional_schema = region.get("schema_name") or ""
+    features_element: dict = {
+        "type": "checkboxes",
+        "action_id": "features",
+        "options": feature_options,
+    }
+    if feature_initial:
+        features_element["initial_options"] = feature_initial
+    charts_element: dict = {
+        "type": "checkboxes",
+        "action_id": "charts",
+        "options": chart_options,
+    }
+    if chart_initial:
+        charts_element["initial_options"] = chart_initial
     return {
         "type": "modal",
         "callback_id": CALLBACK_ID,
@@ -109,19 +146,7 @@ def _config_modal(region: dict) -> dict:
                 "type": "input",
                 "block_id": "features",
                 "label": {"type": "plain_text", "text": "Enabled features"},
-                "element": {
-                    "type": "checkboxes",
-                    "action_id": "features",
-                    "options": [
-                        {"text": {"type": "plain_text", "text": "Achievements"}, "value": "achievements"},
-                        {"text": {"type": "plain_text", "text": "Kotter reports"}, "value": "kotter"},
-                        {"text": {"type": "plain_text", "text": "Achievement leaderboard"}, "value": "leaderboard"},
-                    ],
-                    "initial_options": [
-                        {"text": {"type": "plain_text", "text": v.title()}, "value": v}
-                        for v in features
-                    ],
-                },
+                "element": features_element,
             },
             {
                 "type": "input",
@@ -157,19 +182,7 @@ def _config_modal(region: dict) -> dict:
                 "type": "input",
                 "block_id": "charts",
                 "label": {"type": "plain_text", "text": "Monthly charts"},
-                "element": {
-                    "type": "checkboxes",
-                    "action_id": "charts",
-                    "options": [
-                        {"text": {"type": "plain_text", "text": "PAX charts"}, "value": "pax"},
-                        {"text": {"type": "plain_text", "text": "Q charts"}, "value": "q"},
-                        {"text": {"type": "plain_text", "text": "Region leaderboard"}, "value": "region_lb"},
-                        {"text": {"type": "plain_text", "text": "AO leaderboard"}, "value": "ao_lb"},
-                    ],
-                    "initial_options": [
-                        {"text": {"type": "plain_text", "text": "x"}, "value": v} for v in charts
-                    ],
-                },
+                "element": charts_element,
             },
             {
                 "type": "input",
