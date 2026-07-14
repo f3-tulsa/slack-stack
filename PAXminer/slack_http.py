@@ -64,9 +64,9 @@ def verify_slack_request(headers: dict, body: str) -> bool:
 
 
 def verify_achievements_webhook_secret(headers: dict) -> bool:
-    expected = os.environ.get("PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET", "").strip()
+    expected = os.environ.get("PM_ACHIEVEMENTS_WEBHOOK_SECRET", "").strip()
     if not expected:
-        LOG.error("PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET is not configured")
+        LOG.error("PM_ACHIEVEMENTS_WEBHOOK_SECRET is not configured")
         return False
     got = header_value(headers, "X-Paxminer-Achievements-Webhook-Secret")
     return hmac.compare_digest(expected, got)

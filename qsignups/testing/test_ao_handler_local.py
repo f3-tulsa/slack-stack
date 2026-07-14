@@ -114,7 +114,7 @@ def test_edit_set_site_q_none_when_unset() -> None:
 def test_get_site_q_reads_when_schema_set() -> None:
     from slack.handlers.ao import get_site_q
 
-    with patch.dict(os.environ, {"PAXMINER_REGIONAL_SCHEMA": "f3ttown_prod"}):
+    with patch.dict(os.environ, {"PM_REGIONAL_SCHEMA": "f3ttown_prod"}):
         mock_conn = MagicMock()
         mock_result = MagicMock()
         mock_result.first.return_value = ("U123",)
@@ -136,7 +136,7 @@ def test_get_site_q_returns_none_without_schema() -> None:
     from slack.handlers.ao import get_site_q
 
     with patch.dict(os.environ, {}, clear=False):
-        os.environ.pop("PAXMINER_REGIONAL_SCHEMA", None)
+        os.environ.pop("PM_REGIONAL_SCHEMA", None)
         with patch("slack.handlers.ao.get_engine") as ge:
             out = get_site_q("C999")
     assert out is None

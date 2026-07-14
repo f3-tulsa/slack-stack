@@ -28,7 +28,7 @@ def test_period_bucket_for_date():
 def test_verify_achievements_webhook_secret():
     from slack_http import verify_achievements_webhook_secret
 
-    os.environ["PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET"] = "webhook-secret-value"
+    os.environ["PM_ACHIEVEMENTS_WEBHOOK_SECRET"] = "webhook-secret-value"
     assert verify_achievements_webhook_secret(
         {"X-Paxminer-Achievements-Webhook-Secret": "webhook-secret-value"}
     )
@@ -416,7 +416,7 @@ def test_achievements_handler_webhook_unauthorized():
 def test_achievements_handler_webhook_success():
     import json
 
-    os.environ["PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET"] = "webhook-secret-value"
+    os.environ["PM_ACHIEVEMENTS_WEBHOOK_SECRET"] = "webhook-secret-value"
     region_row = {
         "send_achievements": 1,
         "achievement_channel": "C1",

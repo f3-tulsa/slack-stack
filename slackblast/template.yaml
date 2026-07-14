@@ -58,11 +58,11 @@ Parameters:
     Description: PAXminer registry database (schema) name
     Type: String
     Default: "paxminer"
-  PaxminerAchievementsUrl:
+  PmAchievementsUrl:
     Description: PAXMiner achievements Function URL for post-backblast webhook (optional)
     Type: String
     Default: ""
-  PaxminerAchievementsWebhookSecret:
+  PmAchievementsWebhookSecret:
     Description: Shared secret header for PAXMiner achievements webhook (optional)
     Type: String
     Default: ""
@@ -200,8 +200,8 @@ Resources:
           ADMIN_DATABASE_PASSWORD: !Ref DatabasePassword
           ADMIN_DATABASE_SCHEMA: !Ref DatabaseSchema
           PAXMINER_SCHEMA: !Ref PaxminerSchema
-          PAXMINER_ACHIEVEMENTS_URL: !Ref PaxminerAchievementsUrl
-          PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET: !Ref PaxminerAchievementsWebhookSecret
+          PM_ACHIEVEMENTS_URL: !Ref PmAchievementsUrl
+          PM_ACHIEVEMENTS_WEBHOOK_SECRET: !Ref PmAchievementsWebhookSecret
           DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
           TIMEZONE: !Ref Timezone
           IMAGE_S3_BUCKET: !Ref ImageBucketName

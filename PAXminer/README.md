@@ -6,7 +6,7 @@ Part of the **[slack-stack](../README.md)** monorepo. Deploy with SAM (`PAXminer
 
 PAXminer pulls workout (“backblast”) data from regional Slack workspaces, normalizes it, and stores it in a shared MySQL/TiDB database. It also generates charts and stats, runs **data-driven achievements** (grant, revoke, leaderboard, almost-there), and sends **Kotter** reports.
 
-Each region has its own **schema** in the same database; registry rows in `paxminer.regions` point Lambdas at the right schema, channels, toggles, and encrypted Slack token. Deploy passes **`PM_SLACK_TOKEN`**, **`PM_SLACK_SIGNING_SECRET`**, **`PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET`**, **`F3_REGION_NAME`**, and **`STAGE`** via SAM; the Lambda **encrypts** the bot token with **`DB_ENCRYPTION_KEY`** and **upserts** it into `paxminer.regions` on cold start.
+Each region has its own **schema** in the same database; registry rows in `paxminer.regions` point Lambdas at the right schema, channels, toggles, and encrypted Slack token. Deploy passes **`PM_SLACK_TOKEN`**, **`PM_SLACK_SIGNING_SECRET`**, **`PM_ACHIEVEMENTS_WEBHOOK_SECRET`**, **`F3_REGION_NAME`**, and **`STAGE`** via SAM; the Lambda **encrypts** the bot token with **`DB_ENCRYPTION_KEY`** and **upserts** it into `paxminer.regions` on cold start.
 
 ## Lambdas (four functions)
 
@@ -17,7 +17,7 @@ Each region has its own **schema** in the same database; registry rows in `paxmi
 | **achievements** | Daily schedule + Function URL webhook from Slackblast | Grant/revoke awards; leaderboard smoke path |
 | **kotter** | Monthly schedule + Function URL | Kotter reports; `/config-paxminer` and `/kotter-report` Slack interactivity |
 
-Function URL outputs: **`KotterFunctionUrl`**, **`AchievementsFunctionUrl`** (passed to slackblast as `PAXMINER_ACHIEVEMENTS_URL`).
+Function URL outputs: **`KotterFunctionUrl`**, **`AchievementsFunctionUrl`** (passed to slackblast as `PM_ACHIEVEMENTS_URL`).
 
 ## Slack app manifest
 

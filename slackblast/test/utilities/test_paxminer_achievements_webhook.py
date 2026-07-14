@@ -19,8 +19,8 @@ def test_coupling_guard_requires_schema_url_and_secret():
     with patch.dict(
         os.environ,
         {
-            "PAXMINER_ACHIEVEMENTS_URL": "https://example.com",
-            "PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET": "secret",
+            "PM_ACHIEVEMENTS_URL": "https://example.com",
+            "PM_ACHIEVEMENTS_WEBHOOK_SECRET": "secret",
         },
         clear=False,
     ):
@@ -48,8 +48,8 @@ def test_trigger_posts_when_coupled():
     from utilities.paxminer_achievements_webhook import trigger_achievement_webhook
 
     env = {
-        "PAXMINER_ACHIEVEMENTS_URL": "https://example.com/hook",
-        "PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET": "secret-value",
+        "PM_ACHIEVEMENTS_URL": "https://example.com/hook",
+        "PM_ACHIEVEMENTS_WEBHOOK_SECRET": "secret-value",
     }
     with patch.dict(os.environ, env, clear=False):
         with patch("utilities.paxminer_achievements_webhook.requests.post") as post:

@@ -37,7 +37,8 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 | `F3_REGION_NAME` | F3 region key stored in `paxminer_<stage>.regions.region` (e.g. `f3ttown`); regional DB schema is `{F3_REGION_NAME}_{STAGE}` |
 | `PM_SLACK_TOKEN` | PAXMiner Slack **bot** token; SAM passes to Lambdas, which **encrypt** and **upsert** into `paxminer_<stage>.regions.slack_token` on cold start |
 | `PM_SLACK_SIGNING_SECRET` | PAXMiner Slack **signing secret** for Function URL slash commands and modals (`/config-paxminer`, `/kotter-report`) |
-| `PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET` | Shared secret for Slackblast → PAXMiner achievements Function URL (`X-Paxminer-Achievements-Webhook-Secret` header) |
+| `PM_ACHIEVEMENTS_WEBHOOK_SECRET` | Shared secret for Slackblast → PAXMiner achievements Function URL (`X-Paxminer-Achievements-Webhook-Secret` header). Same rules as **`DB_ENCRYPTION_KEY`**: any random string, **min 16 characters** (see **Database encryption** for generate commands). |
+| `PM_REGIONAL_SCHEMA` | Optional; QSignups Site Q sync (first schema if comma-separated, e.g. `f3ttown_test`) |
 | `F3_REGION_SLACK_TEAM_ID` | Slack workspace Team ID (e.g. `T01234567`) |
 
 ### Bootstrap (optional; for `--bootstrap`)
@@ -57,7 +58,7 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 
 ### PAXMiner and Slack
 
-**PAXMiner** uses **`PM_SLACK_TOKEN`** and **`PM_SLACK_SIGNING_SECRET`**. Deploy passes them to SAM; on **Lambda cold start** the sync/charts/achievements/kotter stack encrypts with **`DB_ENCRYPTION_KEY`** and **upserts** into **`paxminer_<stage>.regions`**. Achievements webhook auth uses **`PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET`** on both PAXMiner and slackblast Lambdas.
+**PAXMiner** uses **`PM_SLACK_TOKEN`** and **`PM_SLACK_SIGNING_SECRET`**. Deploy passes them to SAM; on **Lambda cold start** the sync/charts/achievements/kotter stack encrypts with **`DB_ENCRYPTION_KEY`** and **upserts** into **`paxminer_<stage>.regions`**. Achievements webhook auth uses **`PM_ACHIEVEMENTS_WEBHOOK_SECRET`** on both PAXMiner and slackblast Lambdas.
 
 **slackblast** (`SB_*`) and **qsignups** (`QS_*`) use their own Slack (and Google) env vars as below.
 
@@ -115,7 +116,7 @@ If you skip this, slash commands and modals can fail (e.g. missing auth, `expire
 
 Scheduled PAXMiner Lambdas read **`slack_token`**, channel IDs, and feature toggles from **`paxminer_<stage>.regions`**. Slackblast links via **`slackblast_<stage>.regions.paxminer_schema`** and invokes the achievements Function URL after backblast writes when URL + webhook secret are configured.
 
-- Ensure **`PM_SLACK_TOKEN`**, **`PM_SLACK_SIGNING_SECRET`**, **`PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET`**, **`F3_REGION_NAME`**, and **`STAGE`** are set on deploy.
+- Ensure **`PM_SLACK_TOKEN`**, **`PM_SLACK_SIGNING_SECRET`**, **`PM_ACHIEVEMENTS_WEBHOOK_SECRET`**, **`F3_REGION_NAME`**, and **`STAGE`** are set on deploy.
 - Configure channels, Kotter thresholds, charts, and achievement catalog via **`/config-paxminer`** (workspace admin).
 - Optional AO celebration: **`/config-slackblast` → General** when PAXMiner is linked.
 
@@ -351,7 +352,7 @@ Create environments **`test`** and **`prod`** in your repo settings (or run `./d
 | `DB_ENCRYPTION_KEY` | All (min 16 characters) |
 | `PM_SLACK_TOKEN` | PAXMiner |
 | `PM_SLACK_SIGNING_SECRET` | PAXMiner |
-| `PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET` | PAXMiner + slackblast |
+| `PM_ACHIEVEMENTS_WEBHOOK_SECRET` | PAXMiner + slackblast |
 | `SB_SLACK_TOKEN` | slackblast |
 | `SB_SLACK_SIGNING_SECRET` | slackblast |
 | `SB_SLACK_CLIENT_SECRET` | slackblast |
@@ -373,7 +374,7 @@ Create environments **`test`** and **`prod`** in your repo settings (or run `./d
 | `PAXMINER_SCHEMA` | `paxminer` | Bare name; workflow appends `_${STAGE}` to match migrated DB |
 | `SLACKBLAST_SCHEMA` | `slackblast` | Same |
 | `QSIGNUPS_SCHEMA` | `qsignups` | Same |
-| `PAXMINER_REGIONAL_SCHEMAS` | `f3ttown_prod` | Optional; QSignups Site Q sync (first schema if comma-separated). Legacy alias: `WEASELBOT_PAXMINER_REGIONAL_SCHEMAS` |
+| `PM_REGIONAL_SCHEMA` | `f3ttown_prod` | Optional; QSignups Site Q sync (first schema if comma-separated) |
 | `IMAGE_S3_BUCKET` | `slack-stack-images-prod` | Globally unique |
 | `F3_REGION_NAME` | `f3ttown` | Region key in `paxminer.regions`; regional schema `{F3_REGION_NAME}_${STAGE}` |
 | `F3_REGION_SLACK_TEAM_ID` | `T01234567` | Slack workspace Team ID |
@@ -403,7 +404,7 @@ All four apps share one key per environment. The key is **required** for every d
 
 **Migration and deploy must match:** use the **exact same** `DB_ENCRYPTION_KEY` in `migration/.env.migration.test` (or `.prod`) and in `.env.deploy.test` / `.env.deploy.prod` for that stage. If migration encrypts data with one passphrase and deploy uses another, decrypts will fail.
 
-Ways to generate a strong random passphrase (pick one):
+Ways to generate a strong random passphrase (pick one) — use the same style for **`PM_ACHIEVEMENTS_WEBHOOK_SECRET`**:
 
 ```bash
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

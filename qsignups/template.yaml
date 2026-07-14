@@ -128,10 +128,10 @@ Parameters:
     AllowedValues:
       - "true"
       - "false"
-  PaxminerRegionalSchema:
+  PmRegionalSchema:
     Description: >
       PAXminer regional DB schema containing aos.site_q_user_id (e.g. f3ttown_prod).
-      Same value as PAXMINER_REGIONAL_SCHEMAS (first schema if comma-separated). Leave empty to skip Site Q sync.
+      Same value as PM_REGIONAL_SCHEMA (first schema if comma-separated). Leave empty to skip Site Q sync.
     Type: String
     Default: ""
   # PasswordEncryptKey:
@@ -239,7 +239,7 @@ Resources:
           ENV_SLACK_CLIENT_ID: !Ref SlackClientId
           CREATE_OAUTH_TABLES: !Ref CreateOauthTables
           IMAGE_S3_BUCKET: !Ref ImageBucketName
-          PAXMINER_REGIONAL_SCHEMA: !Ref PaxminerRegionalSchema
+          PM_REGIONAL_SCHEMA: !Ref PmRegionalSchema
           # STRAVA_CLIENT_ID: !Ref StravaClientID
           # STRAVA_CLIENT_SECRET: !Ref StravaClientSecret
 

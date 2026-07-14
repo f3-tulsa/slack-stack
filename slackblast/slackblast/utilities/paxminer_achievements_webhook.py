@@ -15,8 +15,8 @@ LOG = logging.getLogger(__name__)
 def achievements_coupling_configured(region_record) -> bool:
     if not getattr(region_record, "paxminer_schema", None):
         return False
-    url = (os.environ.get("PAXMINER_ACHIEVEMENTS_URL") or "").strip()
-    secret = (os.environ.get("PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET") or "").strip()
+    url = (os.environ.get("PM_ACHIEVEMENTS_URL") or "").strip()
+    secret = (os.environ.get("PM_ACHIEVEMENTS_WEBHOOK_SECRET") or "").strip()
     return bool(url and secret)
 
 
@@ -33,8 +33,8 @@ def trigger_achievement_webhook(
     if not achievements_coupling_configured(region_record):
         log.debug("Achievement webhook skipped: coupling guard not satisfied")
         return
-    url = os.environ["PAXMINER_ACHIEVEMENTS_URL"].strip()
-    secret = os.environ["PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET"].strip()
+    url = os.environ["PM_ACHIEVEMENTS_URL"].strip()
+    secret = os.environ["PM_ACHIEVEMENTS_WEBHOOK_SECRET"].strip()
     payload = {
         "schema": region_record.paxminer_schema,
         "pax_user_ids": sorted(pax_user_ids),

@@ -230,9 +230,9 @@ run_setup_github() {
   gh variable set PAXMINER_SCHEMA --env "$STAGE" --body "$PAXMINER_SCHEMA" -R "$repo"
   gh variable set SLACKBLAST_SCHEMA --env "$STAGE" --body "$SLACKBLAST_SCHEMA" -R "$repo"
   gh variable set QSIGNUPS_SCHEMA --env "$STAGE" --body "$QSIGNUPS_SCHEMA" -R "$repo"
-  [[ -n "${PAXMINER_REGIONAL_SCHEMAS:-${WEASELBOT_PAXMINER_REGIONAL_SCHEMAS:-}}" ]] && \
-    gh variable set PAXMINER_REGIONAL_SCHEMAS --env "$STAGE" \
-      --body "${PAXMINER_REGIONAL_SCHEMAS:-${WEASELBOT_PAXMINER_REGIONAL_SCHEMAS:-}}" -R "$repo"
+  [[ -n "${PM_REGIONAL_SCHEMA:-}" ]] && \
+    gh variable set PM_REGIONAL_SCHEMA --env "$STAGE" \
+      --body "$PM_REGIONAL_SCHEMA" -R "$repo"
   gh variable set IMAGE_S3_BUCKET --env "$STAGE" --body "$IMAGE_S3_BUCKET" -R "$repo"
   gh variable set DATABASE_TLS_ENABLED --env "$STAGE" --body "$DATABASE_TLS_ENABLED" -R "$repo"
   gh variable set F3_REGION_NAME --env "$STAGE" --body "$F3_REGION_NAME" -R "$repo"
@@ -249,7 +249,7 @@ run_setup_github() {
   gh secret set DB_ENCRYPTION_KEY --env "$STAGE" --body "$DB_ENCRYPTION_KEY" -R "$repo"
   gh secret set PM_SLACK_TOKEN --env "$STAGE" --body "$PM_SLACK_TOKEN" -R "$repo"
   gh secret set PM_SLACK_SIGNING_SECRET --env "$STAGE" --body "$PM_SLACK_SIGNING_SECRET" -R "$repo"
-  gh secret set PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET --env "$STAGE" --body "$PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET" -R "$repo"
+  gh secret set PM_ACHIEVEMENTS_WEBHOOK_SECRET --env "$STAGE" --body "$PM_ACHIEVEMENTS_WEBHOOK_SECRET" -R "$repo"
   gh secret set SB_SLACK_TOKEN --env "$STAGE" --body "$SB_SLACK_TOKEN" -R "$repo"
   gh secret set SB_SLACK_SIGNING_SECRET --env "$STAGE" --body "$SB_SLACK_SIGNING_SECRET" -R "$repo"
   gh secret set SB_SLACK_CLIENT_SECRET --env "$STAGE" --body "$SB_SLACK_CLIENT_SECRET" -R "$repo"
@@ -313,8 +313,12 @@ fi
 : "${F3_REGION_NAME:?}"
 : "${PM_SLACK_TOKEN:?}"
 : "${PM_SLACK_SIGNING_SECRET:?}"
-: "${PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET:?}"
+: "${PM_ACHIEVEMENTS_WEBHOOK_SECRET:?}"
 : "${F3_REGION_SLACK_TEAM_ID:?}"
+if [[ "${#PM_ACHIEVEMENTS_WEBHOOK_SECRET}" -lt 16 ]]; then
+  echo "ERROR: PM_ACHIEVEMENTS_WEBHOOK_SECRET must be at least 16 characters (got ${#PM_ACHIEVEMENTS_WEBHOOK_SECRET})" >&2
+  exit 1
+fi
 
 export AWS_DEFAULT_REGION="${AWS_REGION}"
 
@@ -448,13 +452,13 @@ deploy_paxminer() {
       "F3RegionName=${F3_REGION_NAME}" \
       "PmSlackToken=${PM_SLACK_TOKEN}" \
       "PmSlackSigningSecret=${PM_SLACK_SIGNING_SECRET}" \
-      "PaxminerAchievementsWebhookSecret=${PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET}" \
+      "PmAchievementsWebhookSecret=${PM_ACHIEVEMENTS_WEBHOOK_SECRET}" \
     2>&1 | tee -a "$RECEIPT_FILE"
   return "${PIPESTATUS[0]}"
 }
 
 deploy_slackblast() {
-  local achievements_url="${PAXMINER_ACHIEVEMENTS_URL:-}"
+  local achievements_url="${PM_ACHIEVEMENTS_URL:-}"
   if [[ -z "$achievements_url" && "${PAX_RC:-1}" -eq 0 ]]; then
     achievements_url="$(get_stack_output "paxminer-${STAGE}" "AchievementsFunctionUrl")"
   fi
@@ -481,8 +485,8 @@ deploy_slackblast() {
       "DatabaseTlsEnabled=${DATABASE_TLS_ENABLED}" \
       "DatabaseSchema=${SLACKBLAST_SCHEMA}_${STAGE}" \
       "PaxminerSchema=${PAXMINER_SCHEMA}_${STAGE}" \
-      "PaxminerAchievementsUrl=${achievements_url}" \
-      "PaxminerAchievementsWebhookSecret=${PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET}" \
+      "PmAchievementsUrl=${achievements_url}" \
+      "PmAchievementsWebhookSecret=${PM_ACHIEVEMENTS_WEBHOOK_SECRET}" \
       "SlackToken=${SB_SLACK_TOKEN}" \
       "SlackSigningSecret=${SB_SLACK_SIGNING_SECRET}" \
       "SlackClientSecret=${SB_SLACK_CLIENT_SECRET}" \
@@ -522,7 +526,7 @@ deploy_qsignups() {
       "DatabasePassword=${DATABASE_PASSWORD}" \
       "DatabaseTlsEnabled=${DATABASE_TLS_ENABLED}" \
       "DatabaseSchema=${QSIGNUPS_SCHEMA}_${STAGE}" \
-      "PaxminerRegionalSchema=${PAXMINER_REGIONAL_SCHEMAS:-${WEASELBOT_PAXMINER_REGIONAL_SCHEMAS:-}}" \
+      "PmRegionalSchema=${PM_REGIONAL_SCHEMA:-}" \
       "SlackToken=${QS_SLACK_TOKEN}" \
       "SlackSigningSecret=${QS_SLACK_SIGNING_SECRET}" \
       "SlackClientSecret=${QS_SLACK_CLIENT_SECRET}" \

@@ -139,6 +139,19 @@ jobs:
             exit 1
           fi
 
+      - name: Validate PM_ACHIEVEMENTS_WEBHOOK_SECRET
+        env:
+          KEY: ${{ secrets.PM_ACHIEVEMENTS_WEBHOOK_SECRET }}
+        run: |
+          if [[ -z "$KEY" ]]; then
+            echo "::error::PM_ACHIEVEMENTS_WEBHOOK_SECRET secret is not set for this environment"
+            exit 1
+          fi
+          if [[ "${#KEY}" -lt 16 ]]; then
+            echo "::error::PM_ACHIEVEMENTS_WEBHOOK_SECRET must be at least 16 characters"
+            exit 1
+          fi
+
       - name: Validate Slack OAuth client IDs
         env:
           SB_ID: ${{ vars.SB_SLACK_CLIENT_ID }}
@@ -198,7 +211,7 @@ jobs:
               F3RegionName=${{ vars.F3_REGION_NAME }} \
               PmSlackToken=${{ secrets.PM_SLACK_TOKEN }} \
               PmSlackSigningSecret=${{ secrets.PM_SLACK_SIGNING_SECRET }} \
-              PaxminerAchievementsWebhookSecret=${{ secrets.PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET }}
+              PmAchievementsWebhookSecret=${{ secrets.PM_ACHIEVEMENTS_WEBHOOK_SECRET }}
 
   deploy-slackblast:
     runs-on: ubuntu-latest
@@ -241,8 +254,8 @@ jobs:
             "DatabaseTlsEnabled=${{ vars.DATABASE_TLS_ENABLED }}"
             "DatabaseSchema=${{ vars.SLACKBLAST_SCHEMA }}_${{ vars.STAGE }}"
             "PaxminerSchema=${{ vars.PAXMINER_SCHEMA }}_${{ vars.STAGE }}"
-            "PaxminerAchievementsUrl=${ACH_URL}"
-            "PaxminerAchievementsWebhookSecret=${{ secrets.PAXMINER_ACHIEVEMENTS_WEBHOOK_SECRET }}"
+            "PmAchievementsUrl=${ACH_URL}"
+            "PmAchievementsWebhookSecret=${{ secrets.PM_ACHIEVEMENTS_WEBHOOK_SECRET }}"
             "SlackToken=${{ secrets.SB_SLACK_TOKEN }}"
             "SlackSigningSecret=${{ secrets.SB_SLACK_SIGNING_SECRET }}"
             "SlackClientSecret=${{ secrets.SB_SLACK_CLIENT_SECRET }}"
@@ -300,7 +313,7 @@ jobs:
             "DatabasePassword=${{ secrets.DATABASE_PASSWORD }}"
             "DatabaseTlsEnabled=${{ vars.DATABASE_TLS_ENABLED }}"
             "DatabaseSchema=${{ vars.QSIGNUPS_SCHEMA }}_${{ vars.STAGE }}"
-            "PaxminerRegionalSchema=${{ vars.PAXMINER_REGIONAL_SCHEMAS || vars.WEASELBOT_PAXMINER_REGIONAL_SCHEMAS }}"
+            "PmRegionalSchema=${{ vars.PM_REGIONAL_SCHEMA }}"
             "SlackToken=${{ secrets.QS_SLACK_TOKEN }}"
             "SlackSigningSecret=${{ secrets.QS_SLACK_SIGNING_SECRET }}"
             "SlackClientSecret=${{ secrets.QS_SLACK_CLIENT_SECRET }}"

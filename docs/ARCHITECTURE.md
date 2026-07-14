@@ -43,7 +43,7 @@ flowchart LR
   PM -->|regions.schema_name| regional
   SB -->|regions.paxminer_schema + achievements webhook URL| PM
   SB -->|Slack config| regional
-  QS -->|PAXMINER_REGIONAL_SCHEMA optional| AOS
+  QS -->|PM_REGIONAL_SCHEMA optional| AOS
   QS -->|schedule data| QSMASTER[qsignups_master weekly aos regions]
 ```
 
@@ -66,7 +66,7 @@ flowchart LR
 Resolved in code via [`qsignups/qsignups/permissions.py`](../qsignups/qsignups/permissions.py) using:
 
 - Slack **`users.info`**: `is_admin`, `is_owner`, `is_primary_owner` → **ADMIN**
-- Regional **`aos.site_q_user_id`** (requires **`PAXMINER_REGIONAL_SCHEMA`**) → **AOQ** (Site Q / AOQ)
+- Regional **`aos.site_q_user_id`** (requires **`PM_REGIONAL_SCHEMA`**) → **AOQ** (Site Q / AOQ)
 - Regional **`beatdowns.q_user_id`** (any row) → **Q** (has Q’d a beatdown as primary Q)
 - Else → **USER**
 
@@ -77,7 +77,7 @@ Resolved in code via [`qsignups/qsignups/permissions.py`](../qsignups/qsignups/p
 | Q | Refresh only | No | No | No | No | Yes |
 | USER | Refresh only | No | No | No | No | Own slot only |
 
-If **`PAXMINER_REGIONAL_SCHEMA`** is unset, AOQ and **Q** cannot be detected; behavior falls back to **ADMIN vs USER** (Slack role only) for calendar access.
+If **`PM_REGIONAL_SCHEMA`** is unset, AOQ and **Q** cannot be detected; behavior falls back to **ADMIN vs USER** (Slack role only) for calendar access.
 
 ## Cross-links
 
