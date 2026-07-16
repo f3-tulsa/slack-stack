@@ -14,7 +14,7 @@ The main script is **`migration/migrate_data.py`**. It can:
 
 ### Weaselbot → PAXMiner cutover
 
-Run **`migration/migrate_weaselbot_to_paxminer.py --env <stage>`** to copy Weaselbot config columns into `paxminer_<stage>.regions`, add achievement rule columns on regional `achievements_list`, and seed default rules. After deploy and Slack manifest update, uninstall the legacy WeaselBot Slack app and (when ready) drop `weaselbot_<stage>` schema / CloudFormation stack. See **[DEPLOY.md](DEPLOY.md)** cutover checklist.
+Run **`migration/migrate_weaselbot_to_paxminer.py --env <stage>`** to copy Weaselbot config columns into `paxminer_<stage>.regions`, add achievement rule columns on regional `achievements_list`, and seed default rules. Re-runs skip config/seed writes once columns exist; pass **`--force`** to re-upsert achievement seeds (and re-copy config only while `weaselbot_<stage>` still exists). When ready, **`--drop-weaselbot-schema`** drops the old schema. A receipt under `migration/receipts/` includes the full console log. See **[DEPLOY.md](DEPLOY.md)** cutover checklist.
 
 ## Setup
 
