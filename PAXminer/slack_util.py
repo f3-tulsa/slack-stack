@@ -42,11 +42,15 @@ def post_message(
     channel: str,
     text: str,
     *,
+    blocks: list | None = None,
     add_reaction: bool = False,
     reaction: str = "fire",
 ) -> None:
+    kwargs: dict = {"channel": channel, "text": text, "link_names": True}
+    if blocks:
+        kwargs["blocks"] = blocks
     try:
-        response = client.chat_postMessage(channel=channel, text=text, link_names=True)
+        response = client.chat_postMessage(**kwargs)
         if add_reaction and response.get("ts"):
             client.reactions_add(channel=channel, name=reaction, timestamp=response["ts"])
     except SlackApiError as e:
@@ -54,13 +58,20 @@ def post_message(
             delay = int(e.response.headers.get("Retry-After", "1"))
             logging.info("Slack rate limit; sleeping %ss", delay)
             time.sleep(delay)
-            response = client.chat_postMessage(channel=channel, text=text, link_names=True)
+            response = client.chat_postMessage(**kwargs)
             if add_reaction and response.get("ts"):
                 client.reactions_add(channel=channel, name=reaction, timestamp=response["ts"])
         elif e.response.get("error") == "not_in_channel":
             try:
                 client.conversations_join(channel=channel)
-                post_message(client, channel, text, add_reaction=add_reaction, reaction=reaction)
+                post_message(
+                    client,
+                    channel,
+                    text,
+                    blocks=blocks,
+                    add_reaction=add_reaction,
+                    reaction=reaction,
+                )
             except Exception:
                 logging.exception("Failed to join/post channel=%s", channel)
         else:

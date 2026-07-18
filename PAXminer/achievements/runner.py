@@ -11,6 +11,7 @@ import pandas as pd
 from achievements.engine import awarded_period_bucket, evaluate_rule, period_bucket_for_date
 from achievements.attendance import attach_home_regions, load_nation_attendance
 from common.encryption import decrypt_field
+from slack_blocks import section
 from slack_util import open_dm_channel, ordinal_suffix, post_message, slack_client
 
 LOG = logging.getLogger(__name__)
@@ -51,19 +52,23 @@ def _existing_keys(awarded: pd.DataFrame, rules_by_id: dict[int, dict]) -> set[t
     return keys
 
 
-def _format_grant_message(pax_id: str, name: str, verb: str, awarded_on: date, total: int, idx_count: int) -> str:
+def _format_grant_message(
+    pax_id: str, name: str, verb: str, awarded_on: date, total: int, idx_count: int
+) -> tuple[str, list[dict]]:
     ending = ordinal_suffix(idx_count)
-    return (
+    text = (
         f"Congrats to our man <@{pax_id}>! "
         f"He just unlocked the achievement *{name}* for {verb} "
         f"which he earned on {awarded_on.strftime('%B %d, %Y')}. "
         f"This is achievement #{total} for <@{pax_id}> and the {idx_count}{ending} "
         f"time this year he's earned this award. Keep up the good work!"
     )
+    return text, [section(text)]
 
 
-def _format_revoke_message(pax_id: str, name: str) -> str:
-    return f"Correction: <@{pax_id}>'s achievement *{name}* was revoked after attendance was updated."
+def _format_revoke_message(pax_id: str, name: str) -> tuple[str, list[dict]]:
+    text = f"Correction: <@{pax_id}>'s achievement *{name}* was revoked after attendance was updated."
+    return text, [section(text)]
 
 
 def run_achievements_for_region(
@@ -149,10 +154,10 @@ def run_achievements_for_region(
         for g in revokes:
             rule = g["rule"]
             cur.execute(f"DELETE FROM `{regional_schema}`.`achievements_awarded` WHERE id=%s", (g["id"],))
-            msg = _format_revoke_message(g["pax_id"], rule["name"])
-            post_message(client, channel, msg)
+            text, blocks = _format_revoke_message(g["pax_id"], rule["name"])
+            post_message(client, channel, text, blocks=blocks)
             if post_to_ao and ao_channel_id:
-                post_message(client, ao_channel_id, msg)
+                post_message(client, ao_channel_id, text, blocks=blocks)
 
         for g in grants:
             rule = g["rule"]
@@ -166,17 +171,17 @@ def run_achievements_for_region(
             counts[g["pax_id"]][g["achievement_id"]] += 1
             total = sum(counts[g["pax_id"]].values())
             idx_count = counts[g["pax_id"]][g["achievement_id"]]
-            msg = _format_grant_message(
+            text, blocks = _format_grant_message(
                 g["pax_id"], rule["name"], rule["verb"], g["date_awarded"], total, idx_count
             )
-            post_message(client, channel, msg, add_reaction=True)
+            post_message(client, channel, text, blocks=blocks, add_reaction=True)
             try:
                 dm = open_dm_channel(client, g["pax_id"])
-                post_message(client, dm, msg)
+                post_message(client, dm, text, blocks=blocks)
             except Exception:
                 LOG.exception("DM failed pax=%s", g["pax_id"])
             if post_to_ao and ao_channel_id:
-                post_message(client, ao_channel_id, msg, add_reaction=True)
+                post_message(client, ao_channel_id, text, blocks=blocks, add_reaction=True)
 
         conn.commit()
 

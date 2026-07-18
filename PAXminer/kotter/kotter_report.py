@@ -9,6 +9,7 @@ import pandas as pd
 
 from achievements.attendance import attach_home_regions, load_nation_attendance
 from common.encryption import decrypt_field
+from slack_blocks import chunk_messages, chunk_sections, fallback_text, header, section
 from slack_util import post_message, slack_client
 
 LOG = logging.getLogger(__name__)
@@ -35,25 +36,30 @@ def _kotter_nation_sql(schema: str) -> str:
     """
 
 
-def build_kotter_message(df_mia: pd.DataFrame, df_lowq: pd.DataFrame, df_noq: pd.DataFrame) -> str:
-    lines = [
-        "Howdy! This is your monthly PAXMiner Kotter report. According to my records...",
-    ]
+def build_kotter_message(
+    df_mia: pd.DataFrame, df_lowq: pd.DataFrame, df_noq: pd.DataFrame
+) -> tuple[str, list[dict]]:
+    intro = "Howdy! This is your monthly PAXMiner Kotter report. According to my records..."
+    body_lines: list[str] = []
     if not df_mia.empty:
-        lines.append("\n\nThe following men haven't posted in a while.")
+        body_lines.append("\n\nThe following men haven't posted in a while.")
         for _, row in df_mia.iterrows():
-            lines.append(f"\n- <@{row['user_id']}> last posted {row['date']}")
+            body_lines.append(f"\n- <@{row['user_id']}> last posted {row['date']}")
     if not df_lowq.empty:
-        lines.append("\n\nThese guys haven't Q'd in a while. Here's how many days it's been:")
+        body_lines.append("\n\nThese guys haven't Q'd in a while. Here's how many days it's been:")
         today = date.today()
         for _, row in df_lowq.iterrows():
             days = (today - pd.to_datetime(row["date"]).date()).days
-            lines.append(f"\n- <@{row['user_id']}>: {days} days!")
+            body_lines.append(f"\n- <@{row['user_id']}>: {days} days!")
     if not df_noq.empty:
-        lines.append("\n\nThese guys have never been Q:")
+        body_lines.append("\n\nThese guys have never been Q:")
         for _, row in df_noq.iterrows():
-            lines.append(f"\n- <@{row['user_id']}>")
-    return "".join(lines)
+            body_lines.append(f"\n- <@{row['user_id']}>")
+    text = intro + "".join(body_lines)
+    blocks: list[dict] = [header("Monthly Kotter Report"), section(intro)]
+    if body_lines:
+        blocks.extend(chunk_sections(["".join(body_lines).lstrip("\n")]))
+    return text, blocks
 
 
 def run_kotter_for_region(conn, pm_schema: str, region_row: dict, *, dry_run: bool = False) -> dict:
@@ -139,15 +145,23 @@ def run_kotter_for_region(conn, pm_schema: str, region_row: dict, *, dry_run: bo
     ][["user_id"]].drop_duplicates()
     noq = noq[~noq["user_id"].isin(mia["user_id"]) & ~noq["user_id"].isin(lowq["user_id"])]
 
-    message = build_kotter_message(mia, lowq, noq)
+    text, blocks = build_kotter_message(mia, lowq, noq)
+    if mia.empty and lowq.empty and noq.empty:
+        active = "Everyone looks active this month!"
+        text = f"{text}\n\n{active}"
+        blocks = list(blocks) + [section(active)]
     if dry_run:
-        return {"chars": len(message), "dry_run": True}
+        return {"chars": len(text), "dry_run": True}
 
     token = decrypt_field(token_enc)
     client = slack_client(token)
-    if mia.empty and lowq.empty and noq.empty:
-        message += "\n\nEveryone looks active this month!"
-    post_message(client, channel, message)
+    for chunk in chunk_messages(blocks) or [[]]:
+        post_message(
+            client,
+            channel,
+            fallback_text(chunk) if chunk else text,
+            blocks=chunk or None,
+        )
     return {"posted": True, "channel": channel}
 
 

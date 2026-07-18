@@ -9,6 +9,7 @@ COPY PAXminer/handlers.py ./
 COPY PAXminer/paxminer_db.py ./
 COPY PAXminer/slack_util.py ./
 COPY PAXminer/slack_http.py ./
+COPY PAXminer/slack_blocks.py ./
 COPY PAXminer/config_paxminer.py ./
 COPY PAXminer/common/ ./common/
 COPY PAXminer/achievements/ ./achievements/

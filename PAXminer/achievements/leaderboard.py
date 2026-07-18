@@ -10,6 +10,7 @@ import pandas as pd
 from achievements.attendance import attach_home_regions, filter_activity, load_nation_attendance, period_key
 from achievements.engine import awarded_period_bucket, evaluate_rule
 from common.encryption import decrypt_field
+from slack_blocks import chunk_messages, chunk_sections, fallback_text, header, section
 from slack_util import post_message, slack_client
 
 LOG = logging.getLogger(__name__)
@@ -52,9 +53,11 @@ def period_bucket_for_today(period: str) -> int:
     return today.year
 
 
-def build_leaderboard_message(awarded: pd.DataFrame, users: pd.DataFrame) -> str:
+def build_leaderboard_message(awarded: pd.DataFrame, users: pd.DataFrame) -> tuple[str, list[dict]]:
+    title = "*Achievement leaderboard (YTD)*"
     if awarded.empty:
-        return "*Achievement leaderboard (YTD)*\n\nNo awards yet this year."
+        text = f"{title}\n\nNo awards yet this year."
+        return text, [header("Achievement leaderboard (YTD)"), section("No awards yet this year.")]
     counts = awarded.groupby("pax_id", as_index=False).agg(cnt=("id", "count"))
     if not users.empty:
         users_df = users.rename(columns={"user_name": "display_name", "user_id": "pax_id"})
@@ -63,10 +66,11 @@ def build_leaderboard_message(awarded: pd.DataFrame, users: pd.DataFrame) -> str
     else:
         counts["display_name"] = counts["pax_id"]
     counts = counts.sort_values(["cnt", "display_name", "pax_id"], ascending=[False, True, True]).head(CAP)
-    lines = ["*Achievement leaderboard (YTD)*\n"]
-    for _, row in counts.iterrows():
-        lines.append(f"\n- <@{row['pax_id']}>: {int(row['cnt'])} awards")
-    return "".join(lines)
+    body_lines = [f"\n- <@{row['pax_id']}>: {int(row['cnt'])} awards" for _, row in counts.iterrows()]
+    text = title + "\n" + "".join(body_lines)
+    blocks = [header("Achievement leaderboard (YTD)")]
+    blocks.extend(chunk_sections(["".join(body_lines).lstrip("\n")]))
+    return text, blocks
 
 
 def build_almost_there_message(
@@ -75,7 +79,7 @@ def build_almost_there_message(
     awarded: pd.DataFrame,
     schema: str,
     users: pd.DataFrame,
-) -> str:
+) -> tuple[str, list[dict]]:
     candidates: list[tuple[int, str, str]] = []
     awarded_keys = set()
     rules_by_id = {int(r["id"]): r for r in rules}
@@ -103,11 +107,12 @@ def build_almost_there_message(
     candidates.sort(key=lambda x: (x[0], x[1]))
     candidates = candidates[:CAP]
     if not candidates:
-        return ""
-    lines = ["\n\n*Almost there*\n"]
-    for _, _, text in candidates:
-        lines.append(f"\n- {text}")
-    return "".join(lines)
+        return "", []
+    body_lines = [f"\n- {line}" for _, _, line in candidates]
+    text = "\n\n*Almost there*\n" + "".join(body_lines)
+    blocks = [section("*Almost there*")]
+    blocks.extend(chunk_sections(["".join(body_lines).lstrip("\n")]))
+    return text, blocks
 
 
 def run_leaderboard_for_region(conn, pm_schema: str, region_row: dict, *, dry_run: bool = False) -> dict:
@@ -137,21 +142,17 @@ def run_leaderboard_for_region(conn, pm_schema: str, region_row: dict, *, dry_ru
     nation = load_nation_attendance(conn, schemas)
     nation = attach_home_regions(conn, nation, schemas)
 
-    msg = build_leaderboard_message(awarded, users)
-    almost = build_almost_there_message(nation, rules, awarded, schema, users)
+    text, blocks = build_leaderboard_message(awarded, users)
+    almost_text, almost_blocks = build_almost_there_message(nation, rules, awarded, schema, users)
 
     if dry_run:
-        full = msg + almost
-        return {"chars": len(full), "dry_run": True}
+        return {"chars": len(text) + len(almost_text), "dry_run": True}
 
     token = decrypt_field(token_enc)
     client = slack_client(token)
-    if almost and len(msg) + len(almost) <= 3900:
-        post_message(client, channel, msg + almost)
-    else:
-        post_message(client, channel, msg)
-        if almost:
-            post_message(client, channel, almost.strip())
+    all_blocks = list(blocks) + list(almost_blocks)
+    for chunk in chunk_messages(all_blocks):
+        post_message(client, channel, fallback_text(chunk), blocks=chunk)
     return {"posted": True}
 
 
