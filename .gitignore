@@ -58,6 +58,9 @@ node_modules/
 *.swp
 *.swo
 
+# Personal Cursor rule (local machine / account; do not commit)
+.cursor/rules/github-account.mdc
+
 # App artifacts
 data/*.csv
 cache/
