@@ -481,6 +481,7 @@ deploy_paxminer() {
       "PmSlackToken=${PM_SLACK_TOKEN}" \
       "PmSlackSigningSecret=${PM_SLACK_SIGNING_SECRET}" \
       "PmAchievementsWebhookSecret=${PM_ACHIEVEMENTS_WEBHOOK_SECRET}" \
+      "PmUseScheduleDispatcher=${PM_USE_SCHEDULE_DISPATCHER:-false}" \
     2>&1 | tee -a "$RECEIPT_FILE"
   return "${PIPESTATUS[0]}"
 }
@@ -749,6 +750,7 @@ run_smoke_test_lambdas() {
     invoke_one_payload "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke"}' || smoke_rc=1
     invoke_one_payload "paxminer-${STAGE}-paxminer-kotter" '{"source":"smoke"}' || smoke_rc=1
     invoke_one_payload "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke","feature":"achievement_leaderboard"}' || smoke_rc=1
+    invoke_one_payload "paxminer-${STAGE}-paxminer-schedule" '{"source":"smoke","dry_run":true}' || smoke_rc=1
   fi
   return "$smoke_rc"
 }

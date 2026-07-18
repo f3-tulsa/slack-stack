@@ -375,16 +375,14 @@ def test_validate_achievement_code():
     assert "code" in errors
 
 
-def test_parse_modal_values_non_numeric_falls_back_to_defaults():
-    from config_paxminer import _parse_modal_values
+def test_parse_kotter_form_non_numeric_falls_back_to_defaults():
+    from config_schedule import parse_kotter_form
 
-    parsed = _parse_modal_values(
+    parsed = parse_kotter_form(
         {
             "view": {
                 "state": {
                     "values": {
-                        "features": {"features": {"selected_options": []}},
-                        "charts": {"charts": {"selected_options": []}},
                         "NO_POST_THRESHOLD": {"val": {"value": "abc"}},
                         "REMINDER_WEEKS": {"val": {"value": ""}},
                         "HOME_AO_CAPTURE": {"val": {"value": "nope"}},
@@ -428,33 +426,35 @@ def test_parse_achievement_form_non_numeric_threshold_is_none():
     assert errors.get("threshold") == "Enter a whole number"
 
 
-def test_config_modal_initial_options_match_option_labels():
+def test_config_modal_hub_has_timezone_and_section_buttons():
     from config_paxminer import _config_modal, _parse_modal_values
+    from config_schedule import (
+        OPEN_KOTTER_CONFIG_ACTION_ID,
+        OPEN_REPORTS_ACTION_ID,
+        OPEN_SCHEDULE_ACTION_ID,
+    )
 
     modal = _config_modal(
         {
             "send_achievements": 1,
             "send_aoq_reports": 1,
             "send_achievement_leaderboard": 0,
-            "send_pax_charts": 1,
-            "send_q_charts": 0,
-            "send_region_leaderboard": 1,
-            "send_ao_leaderboard": 0,
             "achievement_channel": "C12345678",
             "kotter_channel": "C23456789",
             "firstf_channel": "C34567890",
+            "timezone": "America/Chicago",
             "team_id": "T1",
             "schema_name": "f3test",
         }
     )
     by_id = {b["block_id"]: b for b in modal["blocks"] if "block_id" in b}
-    for block_id in ("features", "charts"):
-        element = by_id[block_id]["element"]
-        options = element["options"]
-        initial = element.get("initial_options") or []
-        assert initial
-        for opt in initial:
-            assert opt in options
+    assert "timezone" in by_id
+    assert by_id["timezone"]["element"]["type"] == "static_select"
+    assert "hub_actions" in by_id
+    action_ids = {e["action_id"] for e in by_id["hub_actions"]["elements"]}
+    assert OPEN_SCHEDULE_ACTION_ID in action_ids
+    assert OPEN_REPORTS_ACTION_ID in action_ids
+    assert OPEN_KOTTER_CONFIG_ACTION_ID in action_ids
 
     for block_id in ("achievement_channel", "kotter_channel", "firstf_channel"):
         block = by_id[block_id]
@@ -467,21 +467,19 @@ def test_config_modal_initial_options_match_option_labels():
             "view": {
                 "state": {
                     "values": {
+                        "timezone": {
+                            "val": {"selected_option": {"value": "America/Chicago"}}
+                        },
                         "features": {"features": {"selected_options": [{"value": "achievements"}]}},
-                        "charts": {"charts": {"selected_options": []}},
                         "achievement_channel": {"val": {"selected_channel": "C11111111"}},
                         "kotter_channel": {"val": {"selected_channel": "C22222222"}},
                         "firstf_channel": {"val": {"selected_channel": ""}},
-                        "NO_POST_THRESHOLD": {"val": {"value": "2"}},
-                        "REMINDER_WEEKS": {"val": {"value": "2"}},
-                        "HOME_AO_CAPTURE": {"val": {"value": "8"}},
-                        "NO_Q_THRESHOLD_WEEKS": {"val": {"value": "4"}},
-                        "NO_Q_THRESHOLD_POSTS": {"val": {"value": "4"}},
                     }
                 }
             }
         }
     )
+    assert parsed["timezone"] == "America/Chicago"
     assert parsed["achievement_channel"] == "C11111111"
     assert parsed["kotter_channel"] == "C22222222"
     assert parsed["firstf_channel"] == ""

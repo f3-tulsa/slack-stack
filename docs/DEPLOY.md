@@ -130,6 +130,7 @@ The **GitHub Actions** deploy workflow runs a **smoke-test** step that synchrono
 - `paxminer-<stage>-paxminer-slack` — `{}` (**warm path** — confirms the Bolt image boots; returns `body: "warm"`)
 - `paxminer-<stage>-paxminer-achievements` — `{"source":"smoke"}` (**dry-run** — no awards/Slack posts)
 - `paxminer-<stage>-paxminer-kotter` — `{"source":"smoke"}` (**dry-run**)
+- `paxminer-<stage>-paxminer-schedule` — `{"source":"smoke","dry_run":true}` (**dry-run** due list)
 - `paxminer-<stage>-paxminer-achievements` — `{"source":"smoke","feature":"achievement_leaderboard"}` (**dry-run**)
 
 Any invoke with `"source":"smoke"` evaluates only and returns counts; bare `{}` remains the live EventBridge/scheduled path for achievements and Kotter. The SlackFunction warm ping does not forge Slack signatures — use the manual Slack smoke checklist after cutover.
@@ -199,7 +200,7 @@ With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if nee
 7. **Uninstall** the legacy WeaselBot Slack app from the workspace.
 8. When stable, drop **`weaselbot_<stage>`** schema and delete any remaining **weaselbot** CloudFormation stack (optional `--drop-weaselbot-schema` on migration script).
 
-**Free tier note:** Five container Lambdas (including the kept-warm Slack front door) plus Function URLs and EventBridge schedules fit typical light regional usage, but monitor Lambda invocations, log storage, and ECR if you run multiple stages.
+**Free tier note:** Six container Lambdas (including the kept-warm Slack front door and the 15-minute schedule tick) plus Function URLs and EventBridge schedules fit typical light regional usage, but monitor Lambda invocations, log storage, and ECR if you run multiple stages. Set **`PM_USE_SCHEDULE_DISPATCHER=true`** only after running `migration/add_report_scheduler.py` and verifying Schedule UI / dry-run smoke.
 
 ### Manual Lambda invocation (qsignups)
 

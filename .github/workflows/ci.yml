@@ -120,7 +120,7 @@ jobs:
           . .venv-paxminer/bin/activate
           # Heavy image deps + light Slack Bolt deps (boto3 is on Lambda runtime; needed locally for adapter import)
           pip install pytest boto3 -r PAXminer/requirements-lambda.txt -r PAXminer/requirements-slack.txt
-          cd PAXminer && pytest -q tests/test_achievements.py tests/test_handlers.py tests/test_slack_app.py
+          cd PAXminer && pytest -q tests/test_achievements.py tests/test_handlers.py tests/test_slack_app.py tests/test_scheduling.py tests/test_manifest.py
       - name: pytest slackblast
         run: |
           set -euo pipefail
