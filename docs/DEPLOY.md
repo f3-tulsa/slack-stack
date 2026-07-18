@@ -36,7 +36,7 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 | `IMAGE_S3_BUCKET` | Globally unique S3 bucket name for slackblast backblast images and **qsignups weinke** calendar PNGs under `weinkes/` (the slackblast stack creates this bucket) |
 | `F3_REGION_NAME` | F3 region key stored in `paxminer_<stage>.regions.region` (e.g. `f3ttown`); regional DB schema is `{F3_REGION_NAME}_{STAGE}` |
 | `PM_SLACK_TOKEN` | PAXMiner Slack **bot** token; SAM passes to Lambdas, which **encrypt** and **upsert** into `paxminer_<stage>.regions.slack_token` on cold start |
-| `PM_SLACK_SIGNING_SECRET` | PAXMiner Slack **signing secret** for Function URL slash commands and modals (`/config-paxminer`, `/kotter-report`) |
+| `PM_SLACK_SIGNING_SECRET` | PAXMiner Slack **signing secret** for the lightweight **SlackFunction** Bolt front door (`/config-paxminer`, `/kotter-report`) |
 | `PM_ACHIEVEMENTS_WEBHOOK_SECRET` | Shared secret for Slackblast → PAXMiner achievements Function URL (`X-Paxminer-Achievements-Webhook-Secret` header). Same rules as **`DB_ENCRYPTION_KEY`**: any random string, **min 16 characters** (see **Database encryption** for generate commands). |
 | `PM_REGIONAL_SCHEMA` | Optional; QSignups Site Q sync (first schema if comma-separated, e.g. `f3ttown_test`) |
 | `F3_REGION_SLACK_TEAM_ID` | Slack workspace Team ID (e.g. `T01234567`) |
@@ -58,7 +58,7 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 
 ### PAXMiner and Slack
 
-**PAXMiner** uses **`PM_SLACK_TOKEN`** and **`PM_SLACK_SIGNING_SECRET`**. Deploy passes them to SAM; on **Lambda cold start** the sync/charts/achievements/kotter stack encrypts with **`DB_ENCRYPTION_KEY`** and **upserts** into **`paxminer_<stage>.regions`**. Achievements webhook auth uses **`PM_ACHIEVEMENTS_WEBHOOK_SECRET`** on both PAXMiner and slackblast Lambdas.
+**PAXMiner** uses **`PM_SLACK_TOKEN`** and **`PM_SLACK_SIGNING_SECRET`**. Signing secret and slash/interactivity traffic go to the lightweight **SlackFunction** (Bolt, kept warm every 5 minutes). Heavy workers (sync/charts/achievements/kotter) get the bot token; on **Lambda cold start** they encrypt with **`DB_ENCRYPTION_KEY`** and **upsert** into **`paxminer_<stage>.regions`**. Achievements webhook auth uses **`PM_ACHIEVEMENTS_WEBHOOK_SECRET`** on both PAXMiner and slackblast Lambdas.
 
 **slackblast** (`SB_*`) and **qsignups** (`QS_*`) use their own Slack (and Google) env vars as below.
 
@@ -127,11 +127,12 @@ Scheduled PAXMiner Lambdas read **`slack_token`**, channel IDs, and feature togg
 The **GitHub Actions** deploy workflow runs a **smoke-test** step that synchronously invokes (only when PAXMiner was **deployed in that workflow run**), checking **`statusCode: 200`** on each response:
 
 - `paxminer-<stage>-paxminer-sync` — `{}` (**live** sync — intended)
+- `paxminer-<stage>-paxminer-slack` — `{}` (**warm path** — confirms the Bolt image boots; returns `body: "warm"`)
 - `paxminer-<stage>-paxminer-achievements` — `{"source":"smoke"}` (**dry-run** — no awards/Slack posts)
 - `paxminer-<stage>-paxminer-kotter` — `{"source":"smoke"}` (**dry-run**)
 - `paxminer-<stage>-paxminer-achievements` — `{"source":"smoke","feature":"achievement_leaderboard"}` (**dry-run**)
 
-Any invoke with `"source":"smoke"` evaluates only and returns counts; bare `{}` remains the live EventBridge/scheduled path for achievements and Kotter.
+Any invoke with `"source":"smoke"` evaluates only and returns counts; bare `{}` remains the live EventBridge/scheduled path for achievements and Kotter. The SlackFunction warm ping does not forge Slack signatures — use the manual Slack smoke checklist after cutover.
 
 To **manually trigger** the same Lambdas (replace `test` with your stage):
 
@@ -172,22 +173,33 @@ aws lambda invoke --function-name paxminer-test-paxminer-charts \
   --cli-binary-format raw-in-base64-out --payload '{}' /tmp/pm-charts.json && cat /tmp/pm-charts.json
 ```
 
-Admins can manually send Kotter from Slack via **`/kotter-report`** (uses **`KotterFunctionUrl`** from the PAXMiner manifest).
+Admins can manually send Kotter from Slack via **`/kotter-report`** (SlackFunction acks and async-invokes the Kotter Lambda). Slash commands and interactivity use **`SlackFunctionUrl`** from the PAXMiner manifest.
 
 With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if needed.
+
+### Slack Bolt front-door cutover checklist
+
+1. Deploy the PAXMiner stack (adds **SlackFunction** + **`SlackFunctionUrl`**; Kotter no longer has a Function URL).
+2. Update the PAXMiner Slack app from **`PAXminer/manifest-<stage>.json`** so slash-command and interactivity URLs point at **`SlackFunctionUrl`** (not the old Kotter URL).
+3. Manual Slack smoke:
+   - `/config-paxminer` — modal opens, **no** empty `""` ephemeral
+   - Manage Achievements — push modal works; Save persists
+   - Channel fields are dropdowns (not raw IDs)
+   - `/kotter-report` → Send Now — queues (ephemeral “queued”)
+4. Confirm deploy smoke includes `paxminer-<stage>-paxminer-slack` warm ping (`statusCode: 200`).
 
 ### Weaselbot → PAXMiner cutover checklist
 
 1. Run **`migration/migrate_weaselbot_to_paxminer.py --env <stage>`** (copy config + achievement rule columns).
 2. Deploy **PAXMiner** then **slackblast** (CI waits for PAXMiner when both run so **`AchievementsFunctionUrl`** is available).
-3. Update **PAXMiner** Slack app from **`PAXminer/manifest-<stage>.json`** (Function URLs, `reactions:write`).
+3. Update **PAXMiner** Slack app from **`PAXminer/manifest-<stage>.json`** (**`SlackFunctionUrl`**, `reactions:write`).
 4. Re-install or verify **slackblast** OAuth if needed; confirm achievement webhook env on slackblast Lambda.
 5. Configure **`/config-paxminer`** (channels, toggles, achievement catalog).
-6. Smoke-invoke the four PAXMiner Lambdas (see above).
+6. Smoke-invoke the PAXMiner Lambdas (see above) and run the Slack Bolt manual smoke.
 7. **Uninstall** the legacy WeaselBot Slack app from the workspace.
 8. When stable, drop **`weaselbot_<stage>`** schema and delete any remaining **weaselbot** CloudFormation stack (optional `--drop-weaselbot-schema` on migration script).
 
-**Free tier note:** Four container Lambdas plus Function URLs and EventBridge schedules fit typical light regional usage, but monitor Lambda invocations, log storage, and ECR if you run multiple stages.
+**Free tier note:** Five container Lambdas (including the kept-warm Slack front door) plus Function URLs and EventBridge schedules fit typical light regional usage, but monitor Lambda invocations, log storage, and ECR if you run multiple stages.
 
 ### Manual Lambda invocation (qsignups)
 

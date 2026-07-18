@@ -30,7 +30,7 @@ PAXMiner runs in the background and in Slack admin flows:
 - **Achievements:** Data-driven rules grant and revoke awards. Unlocks post to the configured achievement channel and DM the PAX; optional AO channel posts come from Slackblast when enabled.
 - **Leaderboard / almost-there:** Monthly YTD top-10 and “almost there” nudges in the achievement channel (when enabled).
 - **Kotter reports:** Monthly posting/Q reminders to the Kotter channel.
-- **`/config-paxminer`** (workspace admins): Channels, feature toggles, Kotter thresholds, monthly chart options, and **achievement catalog CRUD** (add / edit / delete rules).
+- **`/config-paxminer`** (workspace admins): Channel dropdowns, feature toggles, Kotter thresholds, monthly chart options, and **achievement catalog CRUD** (add / edit / delete rules).
 - **`/kotter-report`:** Admins can queue a manual Kotter send.
 
 There is no `/tag-achievement` command; awards are computed from attendance data, not manual tags.

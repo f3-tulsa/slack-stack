@@ -4,7 +4,7 @@
 
 | Path | Purpose |
 |------|---------|
-| `PAXminer/` | Docker-packaged Lambdas: sync, charts, achievements, Kotter (`/config-paxminer`, `/kotter-report`) |
+| `PAXminer/` | Docker-packaged Lambdas: lightweight Slack Bolt front door, sync, charts, achievements, Kotter (slash/modals on SlackFunction; charts via `files_upload_v2`) |
 | `slackblast/` | Zip Lambda + Function URL; Bolt app |
 | `qsignups/` | Zip Lambda + Function URL; Bolt app; schedule extension |
 | `common/` | Shared `encryption.py`, `token_bootstrap.py` (PAXminer image uses `PAXminer/common/`) |

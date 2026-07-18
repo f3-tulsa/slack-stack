@@ -591,13 +591,13 @@ done
 
 log_receipt ""
 log_receipt "--- Stage-specific Slack manifests ---"
-PM_KOTTER_URL=""
+PM_SLACK_URL=""
 SB_API_URL=""
 QS_API_URL=""
 if [[ "$PAX_RC" -eq 0 ]]; then
-  PM_KOTTER_URL="$(get_stack_output "paxminer-${STAGE}" "KotterFunctionUrl")"
-  if [[ -n "$PM_KOTTER_URL" ]]; then
-    write_stage_manifest_subst "PAXminer" "$PM_KOTTER_URL" || log_receipt "WARN: could not write PAXminer manifest-${STAGE}.json"
+  PM_SLACK_URL="$(get_stack_output "paxminer-${STAGE}" "SlackFunctionUrl")"
+  if [[ -n "$PM_SLACK_URL" ]]; then
+    write_stage_manifest_subst "PAXminer" "$PM_SLACK_URL" || log_receipt "WARN: could not write PAXminer manifest-${STAGE}.json"
   else
     write_stage_manifest_copy "PAXminer" || log_receipt "WARN: could not write PAXminer manifest-${STAGE}.json"
   fi
@@ -636,7 +636,7 @@ summarize_row "slackblast-${STAGE}" "$SB_RC"
 summarize_row "qsignups-${STAGE}" "$QS_RC"
 log_receipt ""
 log_receipt "API base URLs (for Slack manifests):"
-log_receipt "  paxminer kotter/config: ${PM_KOTTER_URL:-n/a}"
+log_receipt "  paxminer slack: ${PM_SLACK_URL:-n/a}"
 log_receipt "  slackblast: ${SB_API_URL:-n/a}"
 log_receipt "  qsignups:   ${QS_API_URL:-n/a}"
 log_receipt ""
@@ -717,6 +717,7 @@ run_smoke_test_lambdas() {
   local smoke_rc=0
   if [[ "$PAX_RC" -eq 0 ]]; then
     invoke_one "paxminer-${STAGE}-paxminer-sync" || smoke_rc=1
+    invoke_one "paxminer-${STAGE}-paxminer-slack" || smoke_rc=1
     invoke_one_payload "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke"}' || smoke_rc=1
     invoke_one_payload "paxminer-${STAGE}-paxminer-kotter" '{"source":"smoke"}' || smoke_rc=1
     invoke_one_payload "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke","feature":"achievement_leaderboard"}' || smoke_rc=1
