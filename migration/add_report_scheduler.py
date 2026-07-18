@@ -71,61 +71,103 @@ def _pm_schema(stage: str) -> str:
     return os.environ.get("TARGET_PAXMINER_SCHEMA") or f"paxminer_{stage}"
 
 
+def _write_receipt(stage: str, header: list[str], summary: list[str], log_lines: list[str]) -> Path:
+    _RECEIPTS_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    path = _RECEIPTS_DIR / f"add-report-scheduler-{stage}-{stamp}.txt"
+    body_lines = [
+        *header,
+        "",
+        "=== Summary ===",
+        *summary,
+        "",
+        "=== Console log ===",
+        *log_lines,
+        "",
+    ]
+    path.write_text("\n".join(body_lines) + "\n", encoding="utf-8")
+    return path
+
+
 def main() -> int:
+    list_handler = _ListHandler()
+    list_handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.handlers.clear()
+    console = logging.StreamHandler(sys.stdout)
+    console.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    root.addHandler(console)
+    root.addHandler(list_handler)
+
     parser = argparse.ArgumentParser(description="Add PAXMiner report scheduler tables and seed defaults")
     parser.add_argument("--env", required=True, choices=("test", "prod"))
     args = parser.parse_args()
 
     _load_env(args.env)
-    list_handler = _ListHandler()
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[logging.StreamHandler(), list_handler],
-    )
-
     pm_schema = _pm_schema(args.env)
     started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    LOG.info("add_report_scheduler start env=%s pm_schema=%s", args.env, pm_schema)
 
+    LOG.info(
+        "Starting report scheduler migration stage=%s pm_schema=%s (TARGET_HOST=%s)",
+        args.env,
+        pm_schema,
+        os.environ.get("TARGET_HOST", ""),
+    )
+    header = [
+        "=== PAXMiner report scheduler migration receipt ===",
+        f"Started (UTC): {started}",
+        f"Stage: {args.env}",
+        f"TARGET_HOST: {os.environ.get('TARGET_HOST', '')}",
+        f"PAXMiner schema: {pm_schema}",
+    ]
+
+    added_tz = False
+    tables_created: list[str] = []
+    counts: dict[str, int] = {"regions": 0, "regions_with_schema": 0, "definitions": 0, "schedules": 0}
     conn = _connect()
     try:
         with conn.cursor() as cur:
             added_tz = ensure_timezone_column(cur, pm_schema)
-            ensure_scheduler_tables(cur, pm_schema)
             LOG.info(
-                "Tables ready (timezone_added=%s): region_report_definitions, region_schedules",
-                added_tz,
+                "%s.regions.timezone: %s",
+                pm_schema,
+                "added" if added_tz else "already present",
             )
+            tables_created = ensure_scheduler_tables(cur, pm_schema)
+            LOG.info("Scheduler tables created this run: %s", tables_created or "(none)")
             counts = seed_all_regions(cur, pm_schema)
-            LOG.info("Seeded regions=%s schedules=%s", counts["regions"], counts["schedules"])
         conn.commit()
     except Exception:
         conn.rollback()
         LOG.exception("Migration failed")
+        finished = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        summary = [
+            "Result: FAILED",
+            f"Finished (UTC): {finished}",
+        ]
+        path = _write_receipt(args.env, header, summary, list(list_handler.lines))
+        print(f"Receipt written to {path}", flush=True)
         return 1
     finally:
         conn.close()
 
     finished = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _RECEIPTS_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    receipt = _RECEIPTS_DIR / f"add-report-scheduler-{args.env}-{stamp}.txt"
-    receipt.write_text(
-        "\n".join(
-            [
-                f"started={started}",
-                f"finished={finished}",
-                f"env={args.env}",
-                f"pm_schema={pm_schema}",
-                "",
-                *list_handler.lines,
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    LOG.info("Wrote receipt %s", receipt)
+    LOG.info("Finished (UTC): %s", finished)
+    LOG.info("Migration complete for stage=%s", args.env)
+
+    summary = [
+        "Result: OK",
+        f"Finished (UTC): {finished}",
+        f"regions.timezone added: {added_tz}",
+        f"Tables created this run: {', '.join(tables_created) if tables_created else '(none)'}",
+        f"Active regions: {counts['regions']}",
+        f"Regions with schema_name: {counts['regions_with_schema']}",
+        f"Report definitions upserted: {counts['definitions']}",
+        f"Schedule rows inserted: {counts['schedules']}",
+    ]
+    path = _write_receipt(args.env, header, summary, list(list_handler.lines))
+    print(f"Receipt written to {path}", flush=True)
     return 0
 
 

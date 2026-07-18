@@ -93,16 +93,47 @@ def ensure_timezone_column(cur, pm_schema: str) -> bool:
     return True
 
 
-def ensure_scheduler_tables(cur, pm_schema: str) -> None:
-    """Create scheduler tables if absent."""
-    cur.execute(DDL_REGION_REPORT_DEFINITIONS.format(schema=pm_schema))
-    cur.execute(DDL_REGION_SCHEDULES.format(schema=pm_schema))
+def _table_exists(cur, schema: str, table: str) -> bool:
+    cur.execute(
+        """
+        SELECT COUNT(*) AS c FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s
+        """,
+        (schema, table),
+    )
+    return int(cur.fetchone()["c"]) > 0
+
+
+def ensure_scheduler_tables(cur, pm_schema: str) -> list[str]:
+    """Create scheduler tables if absent. Returns names of tables created this run."""
+    created: list[str] = []
+    for table, ddl in (
+        ("region_report_definitions", DDL_REGION_REPORT_DEFINITIONS),
+        ("region_schedules", DDL_REGION_SCHEDULES),
+    ):
+        existed = _table_exists(cur, pm_schema, table)
+        cur.execute(ddl.format(schema=pm_schema))
+        if existed:
+            LOG.info("Table %s.%s already present (DDL not needed)", pm_schema, table)
+        else:
+            LOG.info("Created table %s.%s", pm_schema, table)
+            created.append(table)
+    return created
 
 
 def upsert_builtin_definitions(cur, pm_schema: str, regional_schema: str) -> dict[str, int]:
     """Upsert builtin definitions by (schema_name, code). Return code -> id map."""
     code_to_id: dict[str, int] = {}
     for d in BUILTIN_DEFINITIONS:
+        cur.execute(
+            f"""
+            SELECT id FROM `{pm_schema}`.`region_report_definitions`
+            WHERE schema_name=%s AND code=%s
+            """,
+            (regional_schema, d["code"]),
+        )
+        existing = cur.fetchone()
+        action = "update" if existing else "insert"
         cur.execute(
             f"""
             INSERT INTO `{pm_schema}`.`region_report_definitions`
@@ -132,6 +163,15 @@ def upsert_builtin_definitions(cur, pm_schema: str, regional_schema: str) -> dic
         )
         row = cur.fetchone()
         code_to_id[d["code"]] = int(row["id"])
+        LOG.info(
+            "  %s definition schema=%s code=%s name=%r report_type=%s window=%s",
+            action,
+            regional_schema,
+            d["code"],
+            d["name"],
+            d["report_type"],
+            d.get("time_window_type"),
+        )
     return code_to_id
 
 
@@ -208,17 +248,52 @@ def seed_default_schedules(
 
 
 def seed_all_regions(cur, pm_schema: str) -> dict[str, int]:
-    """Seed builtins + default schedules for every active region. Returns counts."""
-    ensure_timezone_column(cur, pm_schema)
-    ensure_scheduler_tables(cur, pm_schema)
+    """Seed builtins + default schedules for every active region. Returns counts.
+
+    Assumes the caller has already run ensure_timezone_column and
+    ensure_scheduler_tables (add_report_scheduler.py does this and reports the
+    results in its receipt), so those DDL steps are not repeated here.
+    """
     cur.execute(f"SELECT * FROM `{pm_schema}`.`regions` WHERE active = 1")
     regions = list(cur.fetchall() or [])
+    LOG.info("Active regions in %s.regions: %s", pm_schema, len(regions))
+    regions_with_schema = 0
     total_schedules = 0
     for region in regions:
-        total_schedules += seed_default_schedules(
+        regional = region.get("schema_name") or ""
+        if not regional:
+            LOG.info(
+                "Skip region=%s — no schema_name", region.get("region")
+            )
+            continue
+        regions_with_schema += 1
+        LOG.info(
+            "Seeding region=%s schema=%s timezone=%s",
+            region.get("region"),
+            regional,
+            region.get("timezone") or DEFAULT_TIMEZONE,
+        )
+        inserted = seed_default_schedules(
             cur, pm_schema, region, skip_if_any_schedules=True
         )
-    return {"regions": len(regions), "schedules": total_schedules}
+        total_schedules += inserted
+        LOG.info(
+            "Region schema=%s: %s schedule row(s) inserted this run", regional, inserted
+        )
+    definitions = regions_with_schema * len(BUILTIN_DEFINITIONS)
+    LOG.info(
+        "Seed summary: regions=%s regions_with_schema=%s definitions_upserted=%s schedules_inserted=%s",
+        len(regions),
+        regions_with_schema,
+        definitions,
+        total_schedules,
+    )
+    return {
+        "regions": len(regions),
+        "regions_with_schema": regions_with_schema,
+        "definitions": definitions,
+        "schedules": total_schedules,
+    }
 
 
 def delete_all_schedules(cur, pm_schema: str, regional_schema: str) -> int:
