@@ -18,6 +18,7 @@ from slack_sdk.errors import SlackApiError
 
 from config_paxminer import (
     ACHIEVEMENT_EDIT_CALLBACK_ID,
+    ACHIEVEMENTS_LIST_CALLBACK_ID,
     ADD_ACHIEVEMENT_ACTION_ID,
     CALLBACK_ID,
     DELETE_ACHIEVEMENT_ACTION_ID,
@@ -359,6 +360,27 @@ def handle_delete_achievement(ack, body, client, respond, logger):
 
 
 app.action(DELETE_ACHIEVEMENT_ACTION_ID)(handle_delete_achievement)
+
+
+def handle_achievements_list_submit(ack, body, client, logger):
+    """Return from achievements list to settings — importable for unit tests."""
+    user_id = (body.get("user") or {}).get("id", "")
+    if not is_slack_admin(user_id, client=client):
+        ack(response_action="clear")
+        return
+    team_id, regional_schema, region = _region_context_from_body(body)
+    if not region:
+        logger.warning("Achievements list submit: region not found")
+        ack(response_action="clear")
+        return
+    region = dict(region)
+    region["team_id"] = team_id or region.get("team_id") or ""
+    if regional_schema:
+        region["schema_name"] = regional_schema
+    ack(response_action="update", view=_config_modal(region))
+
+
+app.view(ACHIEVEMENTS_LIST_CALLBACK_ID)(handle_achievements_list_submit)
 
 
 def handle_config_submit(ack, body, client, logger):

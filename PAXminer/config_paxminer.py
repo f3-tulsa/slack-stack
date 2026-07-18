@@ -248,13 +248,26 @@ def _config_modal(region: dict) -> dict:
     }
 
 
-def _achievements_list_modal(team_id: str, regional_schema: str, achievements: list[dict]) -> dict:
-    blocks: list[dict] = [
+def _achievements_list_modal(
+    team_id: str,
+    regional_schema: str,
+    achievements: list[dict],
+    notice: str | None = None,
+) -> dict:
+    blocks: list[dict] = []
+    if notice:
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": notice}],
+            }
+        )
+    blocks.append(
         {
             "type": "section",
             "text": {"type": "mrkdwn", "text": f"*Achievements* ({regional_schema})"},
         }
-    ]
+    )
     if achievements:
         lines = [_achievement_summary(a) for a in achievements[:40]]
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}})
@@ -314,6 +327,7 @@ def _achievements_list_modal(team_id: str, regional_schema: str, achievements: l
         "callback_id": ACHIEVEMENTS_LIST_CALLBACK_ID,
         "private_metadata": _metadata(team_id, regional_schema),
         "title": {"type": "plain_text", "text": "Achievements"},
+        "submit": {"type": "plain_text", "text": "Done"},
         "close": {"type": "plain_text", "text": "Back"},
         "blocks": blocks,
     }
