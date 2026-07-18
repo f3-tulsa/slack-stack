@@ -1,0 +1,61 @@
+---
+description: Slack interactions MUST use Bolt + Block Kit across PAXMiner, Slackblast, and QSignups.
+alwaysApply: true
+globs:
+  - "**/slack_app.py"
+  - "**/config_*.py"
+  - "**/app.py"
+  - "**/slack_*.py"
+  - "**/handlers.py"
+  - "PAXminer/**/*.py"
+  - "slackblast/slackblast/**/*.py"
+  - "qsignups/qsignups/**/*.py"
+---
+
+# Slack Bolt + Block Kit
+
+All Slack interactivity (slash commands, modals, buttons, view submissions) MUST use
+`slack_bolt.App` + `SlackRequestHandler` (Lambda) or the equivalent Bolt adapter.
+Do **not** hand-roll Slack HMAC verification or return Slack payloads via raw
+`http_response` for slash/interactive traffic.
+
+References: `slackblast/slackblast/app.py`, `qsignups/qsignups/app.py`,
+`PAXminer/slack_app.py`. Block Kit helpers: `PAXminer/slack_blocks.py`,
+`slackblast/slackblast/utilities/slack/orm.py`, `qsignups/qsignups/slack/inputs.py`.
+
+## Ack rules (3-second window)
+
+- **Good:** empty `ack()` then `client.views_open(...)` for slash → modal.
+- **Good:** `ack()` then `client.views_push` / `client.views_update` for `block_actions`.
+- **Good:** `ack(response_action="clear"|"errors"|"update", ...)` only on `view_submission`.
+- **Bad:** returning `response_action` from `block_actions` (ignored by Slack).
+- **Bad:** `ack()` twice in one listener.
+- **Bad:** `http_response(200, "")` / JSON-encoding an empty string as the body
+  (Slack renders an ephemeral `""` message).
+
+## Latency
+
+Ack in under 3 seconds. Work that takes longer MUST async-invoke a worker Lambda
+(`InvocationType="Event"`) or use Bolt lazy listeners. Keep the interactive Lambda
+image free of heavy imports (pandas/matplotlib). Keep the Slack front-door Lambda warm
+(EventBridge schedule), not provisioned concurrency, on free-tier friendly deploys.
+
+## Block Kit
+
+- All views and outbound messages use Block Kit with a non-empty `text` fallback.
+- Channel pickers use `channels_select` (or filtered `conversations_select`), never
+  free-text channel ID inputs.
+- Respect Slack limits (≈3000 chars/section, ≤50 blocks/message); chunk with helpers.
+
+## Correct exceptions
+
+- Custom non-Slack webhooks (e.g. PAXMiner achievements Function URL with a shared
+  secret header) may keep `http_response` + shared-secret verify.
+- Chart PNG delivery stays on `files_upload_v2` (not Block Kit).
+
+## On-demand charts/stats (design)
+
+Future slash/`app_mention` handlers on the Slack front door should ack
+“Generating…”, async-invoke `ChartFunction` with params, and let the worker
+`files_upload_v2` to the requesting channel. Never render charts synchronously
+on the interactive path.
