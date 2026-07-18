@@ -1,0 +1,15 @@
+FROM public.ecr.aws/lambda/python:3.14
+
+WORKDIR ${LAMBDA_TASK_ROOT}
+
+COPY PAXminer/requirements-slack.txt requirements-slack.txt
+RUN pip install --no-cache-dir -r requirements-slack.txt
+
+COPY PAXminer/slack_app.py ./
+COPY PAXminer/config_paxminer.py ./
+COPY PAXminer/slack_util.py ./
+COPY PAXminer/slack_http.py ./
+COPY PAXminer/paxminer_db.py ./
+COPY PAXminer/common/ ./common/
+
+CMD ["slack_app.handler"]

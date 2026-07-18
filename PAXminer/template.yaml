@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: PAXminer — sync, charts, achievements, Kotter (container-image Lambdas).
+Description: PAXminer — sync, charts, achievements, Kotter, Slack Bolt front door (container-image Lambdas).
 
 Globals:
   Function:
@@ -227,14 +227,6 @@ Resources:
           - handlers.kotter_handler
       MemorySize: 512
       Timeout: 900
-      Policies:
-        - Statement:
-            - Sid: SelfInvoke
-              Effect: Allow
-              Action: lambda:InvokeFunction
-              Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*"
-      FunctionUrlConfig:
-        AuthType: NONE
       Events:
         MonthlyKotter:
           Type: Schedule
@@ -251,7 +243,6 @@ Resources:
           PAXMINER_REGISTRY_DATABASE: !Ref PaxminerRegistryDatabase
           DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
           HOME_REGION_DATE_TIERS: !Ref HomeRegionDateTiers
-          PM_SLACK_SIGNING_SECRET: !Ref PmSlackSigningSecret
           STAGE: !Ref Stage
           F3_REGION_NAME: !Ref F3RegionName
           PM_SLACK_TOKEN: !Ref PmSlackToken
@@ -266,6 +257,56 @@ Resources:
       LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-paxminer-kotter"
       RetentionInDays: 30
 
+  SlackFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-paxminer-slack"
+      PackageType: Image
+      ImageConfig:
+        Command:
+          - slack_app.handler
+      MemorySize: 512
+      Timeout: 30
+      FunctionUrlConfig:
+        AuthType: NONE
+      Policies:
+        - Statement:
+            - Sid: InvokeKotter
+              Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt KotterFunction.Arn
+      Events:
+        Warmup:
+          Type: Schedule
+          Properties:
+            Schedule: rate(5 minutes)
+      Environment:
+        Variables:
+          DATABASE_HOST: !Ref DatabaseHost
+          DATABASE_PORT: !Ref DatabasePort
+          DATABASE_USER: !Ref DatabaseUser
+          DATABASE_PASSWORD: !Ref DatabasePassword
+          DATABASE_TLS_ENABLED: !Ref DatabaseTlsEnabled
+          PAXMINER_SCHEMA: !Ref PaxminerSchema
+          PAXMINER_REGISTRY_DATABASE: !Ref PaxminerRegistryDatabase
+          DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
+          STAGE: !Ref Stage
+          F3_REGION_NAME: !Ref F3RegionName
+          PM_SLACK_TOKEN: !Ref PmSlackToken
+          PM_SLACK_SIGNING_SECRET: !Ref PmSlackSigningSecret
+          KOTTER_FUNCTION_NAME: !Ref KotterFunction
+          SLACKBLAST_SCHEMA: !Sub "slackblast_${Stage}"
+    Metadata:
+      DockerTag: paxminer-slack
+      DockerContext: ..
+      Dockerfile: PAXminer/Dockerfile.slack
+
+  PaxminerSlackLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-paxminer-slack"
+      RetentionInDays: 30
+
 Outputs:
   SyncFunctionArn:
     Value: !GetAtt SyncFunction.Arn
@@ -277,5 +318,7 @@ Outputs:
     Value: !GetAtt AchievementsFunctionUrl.FunctionUrl
   KotterFunctionArn:
     Value: !GetAtt KotterFunction.Arn
-  KotterFunctionUrl:
-    Value: !GetAtt KotterFunctionUrl.FunctionUrl
+  SlackFunctionArn:
+    Value: !GetAtt SlackFunction.Arn
+  SlackFunctionUrl:
+    Value: !GetAtt SlackFunctionUrl.FunctionUrl
