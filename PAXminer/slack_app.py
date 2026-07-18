@@ -290,7 +290,21 @@ def handle_add_achievement(ack, body, client, logger):
 app.action(ADD_ACHIEVEMENT_ACTION_ID)(handle_add_achievement)
 
 
-def handle_edit_achievement(ack, body, client, respond, logger):
+def _refresh_achievements_list(client, body, team_id, regional_schema, notice: str) -> None:
+    """Re-render the list modal with an inline notice (modal actions have no response_url)."""
+    conn = connect_from_env(_registry_db())
+    try:
+        with conn.cursor() as cur:
+            achievements = _load_achievements(cur, regional_schema)
+        client.views_update(
+            view_id=body["view"]["id"],
+            view=_achievements_list_modal(team_id, regional_schema, achievements, notice=notice),
+        )
+    finally:
+        conn.close()
+
+
+def handle_edit_achievement(ack, body, client, logger):
     user_id = (body.get("user") or {}).get("id", "")
     if not is_slack_admin(user_id, client=client):
         ack()
@@ -301,14 +315,18 @@ def handle_edit_achievement(ack, body, client, respond, logger):
         return
     selected_id = _selected_achievement_id(body)
     if not selected_id:
-        respond(text="Select an achievement to edit.", response_type="ephemeral")
+        _refresh_achievements_list(
+            client, body, team_id, regional_schema, "Select an achievement to edit."
+        )
         return
     conn = connect_from_env(_registry_db())
     try:
         with conn.cursor() as cur:
             row = _load_achievement(cur, regional_schema, selected_id)
         if not row:
-            respond(text="Achievement not found.", response_type="ephemeral")
+            _refresh_achievements_list(
+                client, body, team_id, regional_schema, "Achievement not found."
+            )
             return
         view = _achievement_edit_modal(team_id, regional_schema, row)
         client.views_push(trigger_id=body["trigger_id"], view=view)
@@ -319,7 +337,7 @@ def handle_edit_achievement(ack, body, client, respond, logger):
 app.action(EDIT_ACHIEVEMENT_ACTION_ID)(handle_edit_achievement)
 
 
-def handle_delete_achievement(ack, body, client, respond, logger):
+def handle_delete_achievement(ack, body, client, logger):
     user_id = (body.get("user") or {}).get("id", "")
     if not is_slack_admin(user_id, client=client):
         ack()
@@ -330,7 +348,9 @@ def handle_delete_achievement(ack, body, client, respond, logger):
         return
     selected_id = _selected_achievement_id(body)
     if not selected_id:
-        respond(text="Select an achievement to delete.", response_type="ephemeral")
+        _refresh_achievements_list(
+            client, body, team_id, regional_schema, "Select an achievement to delete."
+        )
         return
     conn = connect_from_env(_registry_db())
     try:
@@ -342,9 +362,15 @@ def handle_delete_achievement(ack, body, client, respond, logger):
             )
             cnt = (cur.fetchone() or {}).get("cnt", 0)
             if cnt:
-                respond(
-                    text=f"Cannot delete: {cnt} award(s) reference this achievement.",
-                    response_type="ephemeral",
+                achievements = _load_achievements(cur, regional_schema)
+                client.views_update(
+                    view_id=body["view"]["id"],
+                    view=_achievements_list_modal(
+                        team_id,
+                        regional_schema,
+                        achievements,
+                        notice=f"Cannot delete: {cnt} award(s) reference this achievement.",
+                    ),
                 )
                 return
             cur.execute(
