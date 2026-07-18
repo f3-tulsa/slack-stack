@@ -494,8 +494,69 @@ CREATE TABLE IF NOT EXISTS `{schema}`.`regions` (
   `HOME_AO_CAPTURE` int DEFAULT 8,
   `NO_Q_THRESHOLD_WEEKS` int DEFAULT 4,
   `NO_Q_THRESHOLD_POSTS` int DEFAULT 4,
+  `timezone` varchar(45) NOT NULL DEFAULT 'America/Chicago',
   `comments` text,
   PRIMARY KEY (`region`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+"""
+
+
+def _ddl_paxminer_region_report_definitions(schema: str) -> str:
+    return f"""
+CREATE TABLE IF NOT EXISTS `{schema}`.`region_report_definitions` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `schema_name` varchar(45) NOT NULL,
+  `code` varchar(64) NOT NULL,
+  `name` varchar(120) NOT NULL,
+  `report_type` varchar(40) NOT NULL,
+  `is_builtin` tinyint NOT NULL DEFAULT 0,
+  `kind` varchar(20) DEFAULT NULL,
+  `source` varchar(40) DEFAULT NULL,
+  `fields` json DEFAULT NULL,
+  `metric` varchar(40) DEFAULT NULL,
+  `aggregation` varchar(40) DEFAULT NULL,
+  `group_by` varchar(80) DEFAULT NULL,
+  `top_n` int DEFAULT NULL,
+  `time_window_type` varchar(20) DEFAULT NULL,
+  `window_days` int DEFAULT NULL,
+  `window_start` date DEFAULT NULL,
+  `window_end` date DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_rrd_schema_code` (`schema_name`, `code`),
+  KEY `idx_rrd_schema` (`schema_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+"""
+
+
+def _ddl_paxminer_region_schedules(schema: str) -> str:
+    return f"""
+CREATE TABLE IF NOT EXISTS `{schema}`.`region_schedules` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `schema_name` varchar(45) NOT NULL,
+  `report_definition_id` int NOT NULL,
+  `destination_type` varchar(40) NOT NULL,
+  `destination_channels` json DEFAULT NULL,
+  `destination_users` json DEFAULT NULL,
+  `frequency_type` varchar(20) NOT NULL DEFAULT 'monthly',
+  `day_of_week` tinyint DEFAULT NULL,
+  `month_day_mode` varchar(20) DEFAULT 'first',
+  `day_of_month` tinyint DEFAULT NULL,
+  `time_of_day` time NOT NULL DEFAULT '07:00:00',
+  `custom_spec` json DEFAULT NULL,
+  `enabled` tinyint NOT NULL DEFAULT 1,
+  `last_run_on` date DEFAULT NULL,
+  `last_run_status` varchar(20) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_rs_schema` (`schema_name`),
+  KEY `idx_rs_enabled` (`enabled`),
+  CONSTRAINT `fk_rs_definition`
+    FOREIGN KEY (`report_definition_id`)
+    REFERENCES `{schema}`.`region_report_definitions` (`id`)
+    ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 """
 
@@ -647,6 +708,8 @@ def pre_migration_bootstrap_schemas(conn: Any, stage: str) -> None:
             cur.execute(f"CREATE DATABASE IF NOT EXISTS `{db}`")
         conn.commit()
         cur.execute(_ddl_paxminer_regions(pm_s))
+        cur.execute(_ddl_paxminer_region_report_definitions(pm_s))
+        cur.execute(_ddl_paxminer_region_schedules(pm_s))
         cur.execute(_ddl_slackblast_regions(sb_s))
         cur.execute(_ddl_slackblast_users(sb_s))
         conn.commit()

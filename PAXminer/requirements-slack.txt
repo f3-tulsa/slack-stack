@@ -4,3 +4,4 @@ slack-bolt==1.29.0
 slack-sdk==3.41.0
 PyMySQL==1.1.2
 cryptography==49.0.0
+tzdata==2025.2
