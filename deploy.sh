@@ -107,6 +107,7 @@ prereq_hint() {
   case "$cmd" in
     aws)
       echo "Install AWS CLI v2: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+      echo "If the CLI is installed but the session expired, reauthenticate with: aws login"
       ;;
     sam)
       echo "Install AWS SAM CLI: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html"
@@ -128,6 +129,23 @@ require_cmd() {
   if ! command -v "$c" >/dev/null 2>&1; then
     echo "Error: required command '$c' not found." >&2
     prereq_hint "$c" >&2
+    exit 1
+  fi
+}
+
+# True when this run will call AWS APIs (deploy/smoke/CFN, or --bootstrap).
+# --build-only alone (optionally with --setup-github) does not need live AWS creds.
+needs_aws_credentials() {
+  [[ "$BUILD_ONLY" != true ]] || [[ "$DO_BOOTSTRAP" == true ]]
+}
+
+# Fail before expensive sam build / Docker image work when the session is dead.
+require_aws_credentials() {
+  local err
+  if ! err="$(aws sts get-caller-identity --region "$AWS_REGION" 2>&1)"; then
+    echo "Error: AWS credentials are missing or expired (checked before build/deploy)." >&2
+    echo "$err" >&2
+    echo "Reauthenticate with 'aws login' (or 'aws sso login' if you use SSO), then re-run." >&2
     exit 1
   fi
 }
@@ -269,6 +287,12 @@ require_cmd aws
 require_cmd sam
 require_cmd python3
 
+# Validate AWS auth before Docker/SAM build (and before bootstrap CFN calls).
+# Without this, an expired session only fails after a long local container build.
+if needs_aws_credentials; then
+  require_aws_credentials
+fi
+
 needs_docker() {
   case "$STACK" in
     all|paxminer) return 0 ;;
@@ -338,22 +362,26 @@ SAM_DEPLOY_EXTRA+=(--no-fail-on-empty-changeset --capabilities CAPABILITY_IAM)
 #   2) _BOOTSTRAP_DEPLOY_BUCKET (set in the same process when ./deploy.sh ran --bootstrap)
 #   3) CloudFormation output DeploymentBucketName from BOOTSTRAP_STACK_NAME (same as CI)
 #   4) Last resort: --resolve-s3 (warn — likely wrong bucket for this role)
+#
+# --build-only never calls sam deploy, so skip bucket resolution (avoids a soft CFN probe).
 SAM_S3_BUCKET_ARGS=()
-if [[ -n "${DEPLOYMENT_S3_BUCKET:-}" ]]; then
-  SAM_S3_BUCKET_ARGS=(--s3-bucket "$DEPLOYMENT_S3_BUCKET")
-elif [[ -n "${_BOOTSTRAP_DEPLOY_BUCKET:-}" ]]; then
-  SAM_S3_BUCKET_ARGS=(--s3-bucket "$_BOOTSTRAP_DEPLOY_BUCKET")
-else
-  _resolved_deploy_bucket=""
-  _resolved_deploy_bucket="$(cf_output "$BOOTSTRAP_STACK_NAME" "DeploymentBucketName")"
-  if [[ -n "$_resolved_deploy_bucket" && "$_resolved_deploy_bucket" != "None" ]]; then
-    SAM_S3_BUCKET_ARGS=(--s3-bucket "$_resolved_deploy_bucket")
-    echo "SAM artifact bucket (from stack ${BOOTSTRAP_STACK_NAME}): ${_resolved_deploy_bucket}"
+if [[ "$BUILD_ONLY" != true ]]; then
+  if [[ -n "${DEPLOYMENT_S3_BUCKET:-}" ]]; then
+    SAM_S3_BUCKET_ARGS=(--s3-bucket "$DEPLOYMENT_S3_BUCKET")
+  elif [[ -n "${_BOOTSTRAP_DEPLOY_BUCKET:-}" ]]; then
+    SAM_S3_BUCKET_ARGS=(--s3-bucket "$_BOOTSTRAP_DEPLOY_BUCKET")
   else
-    echo "WARN: Could not resolve DeploymentBucketName from stack '${BOOTSTRAP_STACK_NAME}'." >&2
-    echo "      Falling back to --resolve-s3. The deploy IAM role may lack s3:PutObject on SAM's" >&2
-    echo "      default bucket; set DEPLOYMENT_S3_BUCKET in your env file or run --bootstrap." >&2
-    SAM_S3_BUCKET_ARGS=(--resolve-s3)
+    _resolved_deploy_bucket=""
+    _resolved_deploy_bucket="$(cf_output "$BOOTSTRAP_STACK_NAME" "DeploymentBucketName")"
+    if [[ -n "$_resolved_deploy_bucket" && "$_resolved_deploy_bucket" != "None" ]]; then
+      SAM_S3_BUCKET_ARGS=(--s3-bucket "$_resolved_deploy_bucket")
+      echo "SAM artifact bucket (from stack ${BOOTSTRAP_STACK_NAME}): ${_resolved_deploy_bucket}"
+    else
+      echo "WARN: Could not resolve DeploymentBucketName from stack '${BOOTSTRAP_STACK_NAME}'." >&2
+      echo "      Falling back to --resolve-s3. The deploy IAM role may lack s3:PutObject on SAM's" >&2
+      echo "      default bucket; set DEPLOYMENT_S3_BUCKET in your env file or run --bootstrap." >&2
+      SAM_S3_BUCKET_ARGS=(--resolve-s3)
+    fi
   fi
 fi
 
