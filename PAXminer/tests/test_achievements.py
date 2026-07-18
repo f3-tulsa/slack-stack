@@ -375,6 +375,59 @@ def test_validate_achievement_code():
     assert "code" in errors
 
 
+def test_parse_modal_values_non_numeric_falls_back_to_defaults():
+    from config_paxminer import _parse_modal_values
+
+    parsed = _parse_modal_values(
+        {
+            "view": {
+                "state": {
+                    "values": {
+                        "features": {"features": {"selected_options": []}},
+                        "charts": {"charts": {"selected_options": []}},
+                        "NO_POST_THRESHOLD": {"val": {"value": "abc"}},
+                        "REMINDER_WEEKS": {"val": {"value": ""}},
+                        "HOME_AO_CAPTURE": {"val": {"value": "nope"}},
+                        "NO_Q_THRESHOLD_WEEKS": {"val": {"value": "3.5"}},
+                        "NO_Q_THRESHOLD_POSTS": {"val": {"value": None}},
+                    }
+                }
+            }
+        }
+    )
+    assert parsed["NO_POST_THRESHOLD"] == 2
+    assert parsed["REMINDER_WEEKS"] == 2
+    assert parsed["HOME_AO_CAPTURE"] == 8
+    assert parsed["NO_Q_THRESHOLD_WEEKS"] == 4
+    assert parsed["NO_Q_THRESHOLD_POSTS"] == 4
+
+
+def test_parse_achievement_form_non_numeric_threshold_is_none():
+    from config_paxminer import _parse_achievement_form, _validate_achievement
+
+    values = _parse_achievement_form(
+        {
+            "view": {
+                "state": {
+                    "values": {
+                        "name": {"val": {"value": "Six Pack"}},
+                        "description": {"val": {"value": "d"}},
+                        "verb": {"val": {"value": "posting"}},
+                        "code": {"val": {"value": "six_pack"}},
+                        "metric": {"val": {"selected_option": {"value": "posts"}}},
+                        "activity": {"val": {"selected_option": {"value": "beatdown"}}},
+                        "period": {"val": {"selected_option": {"value": "week"}}},
+                        "threshold": {"val": {"value": "abc"}},
+                    }
+                }
+            }
+        }
+    )
+    assert values["threshold"] is None
+    errors = _validate_achievement(values)
+    assert errors.get("threshold") == "Enter a whole number"
+
+
 def test_config_modal_initial_options_match_option_labels():
     from config_paxminer import _config_modal, _parse_modal_values
 

@@ -120,7 +120,6 @@ def test_delete_achievement_updates_view():
 
     ack = MagicMock()
     client = MagicMock()
-    respond = MagicMock()
     logger = MagicMock()
     body = {
         "user": {"id": "U1"},
@@ -148,7 +147,7 @@ def test_delete_achievement_updates_view():
                 mock_conn.return_value.cursor.return_value.__exit__.return_value = False
                 mock_cur.fetchone.return_value = {"cnt": 0}
                 with patch("slack_app._load_achievements", return_value=[]):
-                    handle_delete_achievement(ack, body, client, respond, logger)
+                    handle_delete_achievement(ack, body, client, logger)
 
     ack.assert_called_once_with()
     client.views_update.assert_called_once()
@@ -237,3 +236,158 @@ def test_kotter_send_retry_does_not_invoke():
     ack.assert_called_once_with()
     mock_queue.assert_not_called()
     assert "already queued" in respond.call_args.kwargs.get("text", "").lower()
+
+
+def _assert_modals_with_inputs_have_submit(views: list[dict]) -> None:
+    for view in views:
+        has_input = any(b.get("type") == "input" for b in view.get("blocks") or [])
+        if has_input:
+            assert "submit" in view, f"modal {view.get('callback_id')} has input blocks but no submit"
+
+
+def test_modals_with_input_blocks_include_submit():
+    """Regression: Slack rejects input-block modals without submit (achievements list 500)."""
+    from config_paxminer import (
+        _achievement_edit_modal,
+        _achievements_list_modal,
+        _config_modal,
+    )
+
+    region = {
+        "region": "tulsa",
+        "schema_name": "f3tulsa_test",
+        "team_id": "T1",
+        "send_achievements": 1,
+        "send_aoq_reports": 0,
+        "send_achievement_leaderboard": 0,
+        "send_pax_charts": 0,
+        "send_q_charts": 0,
+        "send_region_leaderboard": 0,
+        "send_ao_leaderboard": 0,
+    }
+    achievements = [
+        {
+            "id": 1,
+            "name": "The Six Pack",
+            "code": "six_pack",
+            "metric": "posts",
+            "activity": "beatdown",
+            "period": "week",
+            "threshold": 6,
+        }
+    ]
+    views = [
+        _config_modal(region),
+        _achievements_list_modal("T1", "f3tulsa_test", []),
+        _achievements_list_modal("T1", "f3tulsa_test", achievements),
+        _achievement_edit_modal("T1", "f3tulsa_test", None),
+        _achievement_edit_modal("T1", "f3tulsa_test", achievements[0]),
+    ]
+    _assert_modals_with_inputs_have_submit(views)
+    list_with = _achievements_list_modal("T1", "f3tulsa_test", achievements)
+    assert list_with["submit"]["text"] == "Done"
+    delete_btn = next(
+        el
+        for b in list_with["blocks"]
+        if b.get("block_id") == "achievement_actions"
+        for el in b["elements"]
+        if el.get("action_id") == "paxminer_achievement_delete"
+    )
+    assert "confirm" in delete_btn
+
+
+def test_edit_achievement_no_selection_updates_view_with_notice():
+    from slack_app import handle_edit_achievement
+
+    ack = MagicMock()
+    client = MagicMock()
+    logger = MagicMock()
+    body = {
+        "user": {"id": "U1"},
+        "view": {
+            "id": "V1",
+            "private_metadata": '{"team_id":"T1","regional_schema":"f3tulsa_test"}',
+            "state": {"values": {}},
+        },
+    }
+    region = {"region": "tulsa", "schema_name": "f3tulsa_test"}
+
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch("slack_app._region_context_from_body", return_value=("T1", "f3tulsa_test", region)):
+            with patch("slack_app.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                with patch("slack_app._load_achievements", return_value=[]):
+                    handle_edit_achievement(ack, body, client, logger)
+
+    ack.assert_called_once_with()
+    client.views_update.assert_called_once()
+    view = client.views_update.call_args.kwargs["view"]
+    notice = view["blocks"][0]
+    assert notice["type"] == "context"
+    assert "Select an achievement" in notice["elements"][0]["text"]
+
+
+def test_delete_achievement_no_selection_updates_view_with_notice():
+    from slack_app import handle_delete_achievement
+
+    ack = MagicMock()
+    client = MagicMock()
+    logger = MagicMock()
+    body = {
+        "user": {"id": "U1"},
+        "view": {
+            "id": "V1",
+            "private_metadata": '{"team_id":"T1","regional_schema":"f3tulsa_test"}',
+            "state": {"values": {}},
+        },
+    }
+    region = {"region": "tulsa", "schema_name": "f3tulsa_test"}
+
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch("slack_app._region_context_from_body", return_value=("T1", "f3tulsa_test", region)):
+            with patch("slack_app.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                with patch("slack_app._load_achievements", return_value=[]):
+                    handle_delete_achievement(ack, body, client, logger)
+
+    ack.assert_called_once_with()
+    client.views_update.assert_called_once()
+    view = client.views_update.call_args.kwargs["view"]
+    assert view["blocks"][0]["type"] == "context"
+    assert "Select an achievement" in view["blocks"][0]["elements"][0]["text"]
+
+
+def test_achievements_list_submit_updates_to_config_modal():
+    from slack_app import handle_achievements_list_submit
+
+    ack = MagicMock()
+    client = MagicMock()
+    logger = MagicMock()
+    body = {
+        "user": {"id": "U1"},
+        "view": {"private_metadata": '{"team_id":"T1","regional_schema":"f3tulsa_test"}'},
+    }
+    region = {
+        "region": "tulsa",
+        "schema_name": "f3tulsa_test",
+        "send_achievements": 1,
+        "send_aoq_reports": 0,
+        "send_achievement_leaderboard": 0,
+        "send_pax_charts": 0,
+        "send_q_charts": 0,
+        "send_region_leaderboard": 0,
+        "send_ao_leaderboard": 0,
+    }
+
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch("slack_app._region_context_from_body", return_value=("T1", "f3tulsa_test", region)):
+            handle_achievements_list_submit(ack, body, client, logger)
+
+    ack.assert_called_once()
+    kwargs = ack.call_args.kwargs
+    assert kwargs["response_action"] == "update"
+    assert kwargs["view"]["callback_id"] == "paxminer-config-id"
