@@ -448,6 +448,16 @@ def _selected_channel(state: dict, block_id: str) -> str:
     return (block.get("selected_channel") or "").strip()
 
 
+def _to_int(value, default):
+    """Parse an int from free-text input; return default on empty/invalid."""
+    try:
+        if value is None or str(value).strip() == "":
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _parse_modal_values(payload: dict) -> dict:
     state = payload.get("view", {}).get("state", {}).get("values", {})
     features = [o["value"] for o in state.get("features", {}).get("features", {}).get("selected_options", [])]
@@ -463,14 +473,16 @@ def _parse_modal_values(payload: dict) -> dict:
         "send_q_charts": 1 if "q" in charts else 0,
         "send_region_leaderboard": 1 if "region_lb" in charts else 0,
         "send_ao_leaderboard": 1 if "ao_lb" in charts else 0,
-        "NO_POST_THRESHOLD": int(state.get("NO_POST_THRESHOLD", {}).get("val", {}).get("value", "2") or 2),
-        "REMINDER_WEEKS": int(state.get("REMINDER_WEEKS", {}).get("val", {}).get("value", "2") or 2),
-        "HOME_AO_CAPTURE": int(state.get("HOME_AO_CAPTURE", {}).get("val", {}).get("value", "8") or 8),
-        "NO_Q_THRESHOLD_WEEKS": int(
-            state.get("NO_Q_THRESHOLD_WEEKS", {}).get("val", {}).get("value", "4") or 4
+        "NO_POST_THRESHOLD": _to_int(
+            state.get("NO_POST_THRESHOLD", {}).get("val", {}).get("value"), 2
         ),
-        "NO_Q_THRESHOLD_POSTS": int(
-            state.get("NO_Q_THRESHOLD_POSTS", {}).get("val", {}).get("value", "4") or 4
+        "REMINDER_WEEKS": _to_int(state.get("REMINDER_WEEKS", {}).get("val", {}).get("value"), 2),
+        "HOME_AO_CAPTURE": _to_int(state.get("HOME_AO_CAPTURE", {}).get("val", {}).get("value"), 8),
+        "NO_Q_THRESHOLD_WEEKS": _to_int(
+            state.get("NO_Q_THRESHOLD_WEEKS", {}).get("val", {}).get("value"), 4
+        ),
+        "NO_Q_THRESHOLD_POSTS": _to_int(
+            state.get("NO_Q_THRESHOLD_POSTS", {}).get("val", {}).get("value"), 4
         ),
     }
 
@@ -485,6 +497,13 @@ def _parse_achievement_form(payload: dict) -> dict:
         sel = state.get(block_id, {}).get("val", {}).get("selected_option") or {}
         return sel.get("value", "").strip()
 
+    raw_threshold = _text("threshold")
+    if not raw_threshold:
+        threshold = 1
+    else:
+        # None signals non-numeric input for _validate_achievement.
+        threshold = _to_int(raw_threshold, None)
+
     return {
         "name": _text("name"),
         "description": _text("description"),
@@ -493,7 +512,7 @@ def _parse_achievement_form(payload: dict) -> dict:
         "metric": _select("metric") or "posts",
         "activity": _select("activity") or "beatdown",
         "period": _select("period") or "year",
-        "threshold": int(_text("threshold") or "1"),
+        "threshold": threshold,
     }
 
 
@@ -511,7 +530,9 @@ def _validate_achievement(values: dict) -> dict[str, str]:
         errors["activity"] = "Invalid activity"
     if values["period"] not in PERIODS:
         errors["period"] = "Invalid period"
-    if values["threshold"] < 1:
+    if values["threshold"] is None:
+        errors["threshold"] = "Enter a whole number"
+    elif values["threshold"] < 1:
         errors["threshold"] = "Threshold must be at least 1"
     return errors
 
