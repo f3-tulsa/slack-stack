@@ -1,0 +1,239 @@
+"""Unit tests for the lightweight Slack Bolt front door."""
+
+from __future__ import annotations
+
+import os
+from unittest.mock import MagicMock, patch
+
+os.environ.setdefault("DB_ENCRYPTION_KEY", "test-encryption-key-32chars!!")
+os.environ.setdefault("PM_SLACK_TOKEN", "xoxb-test-token")
+os.environ.setdefault("PM_SLACK_SIGNING_SECRET", "test-signing-secret-16")
+os.environ.setdefault("KOTTER_FUNCTION_NAME", "paxminer-test-paxminer-kotter")
+os.environ.setdefault("STAGE", "test")
+
+
+def test_handler_warm_path_skips_bolt():
+    with patch("slack_app.SlackRequestHandler") as mock_handler_cls:
+        from slack_app import handler
+
+        resp = handler({}, None)
+        assert resp == {"statusCode": 200, "body": "warm"}
+        mock_handler_cls.assert_not_called()
+
+
+def test_handler_http_dispatches_to_bolt():
+    with patch("slack_app.SlackRequestHandler") as mock_handler_cls:
+        mock_handler_cls.return_value.handle.return_value = {"statusCode": 200, "body": "ok"}
+        from slack_app import handler
+
+        event = {"requestContext": {"http": {"method": "POST"}}, "body": ""}
+        resp = handler(event, None)
+        assert resp["statusCode"] == 200
+        mock_handler_cls.assert_called_once()
+        mock_handler_cls.return_value.handle.assert_called_once_with(event, None)
+
+
+def test_config_command_admin_acks_empty_and_opens_modal():
+    from slack_app import handle_config_command
+
+    ack = MagicMock()
+    client = MagicMock()
+    respond = MagicMock()
+    logger = MagicMock()
+    region = {
+        "region": "tulsa",
+        "schema_name": "f3tulsa_test",
+        "send_achievements": 1,
+        "send_aoq_reports": 0,
+        "send_achievement_leaderboard": 0,
+        "send_pax_charts": 0,
+        "send_q_charts": 0,
+        "send_region_leaderboard": 0,
+        "send_ao_leaderboard": 0,
+        "achievement_channel": "C12345678",
+        "kotter_channel": "",
+        "firstf_channel": "",
+    }
+    body = {"user_id": "U1", "team_id": "T1", "trigger_id": "trig"}
+
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch("slack_app.connect_from_env") as mock_conn:
+            mock_cur = MagicMock()
+            mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+            mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+            with patch("slack_app._region_for_team", return_value=region):
+                handle_config_command(ack, body, client, logger, respond)
+
+    ack.assert_called_once_with()
+    client.views_open.assert_called_once()
+    assert client.views_open.call_args.kwargs["trigger_id"] == "trig"
+    assert "view" in client.views_open.call_args.kwargs
+
+
+def test_config_command_non_admin_acks_ephemeral_once():
+    from slack_app import handle_config_command
+
+    ack = MagicMock()
+    client = MagicMock()
+    respond = MagicMock()
+    logger = MagicMock()
+    body = {"user_id": "U1", "team_id": "T1", "trigger_id": "trig"}
+
+    with patch("slack_app.is_slack_admin", return_value=False):
+        handle_config_command(ack, body, client, logger, respond)
+
+    assert ack.call_count == 1
+    assert "admin" in ack.call_args.kwargs.get("text", "").lower()
+    client.views_open.assert_not_called()
+
+
+def test_manage_achievements_pushes_view():
+    from slack_app import handle_manage_achievements
+
+    ack = MagicMock()
+    client = MagicMock()
+    logger = MagicMock()
+    body = {
+        "user": {"id": "U1"},
+        "team": {"id": "T1"},
+        "trigger_id": "trig",
+        "view": {"private_metadata": '{"team_id":"T1","regional_schema":"f3tulsa_test"}'},
+    }
+    region = {"region": "tulsa", "schema_name": "f3tulsa_test"}
+
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch("slack_app._region_context_from_body", return_value=("T1", "f3tulsa_test", region)):
+            with patch("slack_app.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                with patch("slack_app._load_achievements", return_value=[]):
+                    handle_manage_achievements(ack, body, client, logger)
+
+    ack.assert_called_once_with()
+    client.views_push.assert_called_once()
+    assert client.views_push.call_args.kwargs["trigger_id"] == "trig"
+
+
+def test_delete_achievement_updates_view():
+    from slack_app import handle_delete_achievement
+
+    ack = MagicMock()
+    client = MagicMock()
+    respond = MagicMock()
+    logger = MagicMock()
+    body = {
+        "user": {"id": "U1"},
+        "view": {
+            "id": "V1",
+            "private_metadata": '{"team_id":"T1","regional_schema":"f3tulsa_test"}',
+            "state": {
+                "values": {
+                    "achievement_pick": {
+                        "paxminer_achievement_select": {
+                            "selected_option": {"value": "7"}
+                        }
+                    }
+                }
+            },
+        },
+    }
+    region = {"region": "tulsa", "schema_name": "f3tulsa_test"}
+
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch("slack_app._region_context_from_body", return_value=("T1", "f3tulsa_test", region)):
+            with patch("slack_app.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                mock_cur.fetchone.return_value = {"cnt": 0}
+                with patch("slack_app._load_achievements", return_value=[]):
+                    handle_delete_achievement(ack, body, client, respond, logger)
+
+    ack.assert_called_once_with()
+    client.views_update.assert_called_once()
+    assert client.views_update.call_args.kwargs["view_id"] == "V1"
+
+
+def test_config_submit_clear_on_success():
+    from slack_app import handle_config_submit
+
+    ack = MagicMock()
+    client = MagicMock()
+    logger = MagicMock()
+    body = {
+        "user": {"id": "U1"},
+        "view": {
+            "private_metadata": '{"team_id":"T1","regional_schema":"f3tulsa_test"}',
+            "state": {"values": {}},
+        },
+    }
+    region = {"region": "tulsa", "schema_name": "f3tulsa_test"}
+    values = {
+        "send_achievements": 1,
+        "send_aoq_reports": 0,
+        "send_achievement_leaderboard": 0,
+        "achievement_channel": "C1",
+        "kotter_channel": "",
+        "firstf_channel": "",
+        "send_pax_charts": 0,
+        "send_q_charts": 0,
+        "send_region_leaderboard": 0,
+        "send_ao_leaderboard": 0,
+        "NO_POST_THRESHOLD": 2,
+        "REMINDER_WEEKS": 2,
+        "HOME_AO_CAPTURE": 8,
+        "NO_Q_THRESHOLD_WEEKS": 4,
+        "NO_Q_THRESHOLD_POSTS": 4,
+    }
+
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch("slack_app._region_context_from_body", return_value=("T1", "f3tulsa_test", region)):
+            with patch("slack_app._parse_modal_values", return_value=values):
+                with patch("slack_app.connect_from_env") as mock_conn:
+                    mock_cur = MagicMock()
+                    mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                    mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                    handle_config_submit(ack, body, client, logger)
+
+    ack.assert_called_once_with(response_action="clear")
+
+
+def test_kotter_send_invokes_async():
+    from slack_app import handle_kotter_send_now
+
+    ack = MagicMock()
+    client = MagicMock()
+    respond = MagicMock()
+    request = MagicMock()
+    request.headers = {}
+    logger = MagicMock()
+    body = {"user": {"id": "U1"}}
+
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch("slack_app._queue_manual_kotter") as mock_queue:
+            handle_kotter_send_now(ack, body, client, respond, request, logger)
+
+    ack.assert_called_once_with()
+    mock_queue.assert_called_once()
+    assert "queued" in respond.call_args.kwargs.get("text", "").lower()
+
+
+def test_kotter_send_retry_does_not_invoke():
+    from slack_app import handle_kotter_send_now
+
+    ack = MagicMock()
+    client = MagicMock()
+    respond = MagicMock()
+    request = MagicMock()
+    request.headers = {"x-slack-retry-num": ["1"]}
+    logger = MagicMock()
+    body = {"user": {"id": "U1"}}
+
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch("slack_app._queue_manual_kotter") as mock_queue:
+            handle_kotter_send_now(ack, body, client, respond, request, logger)
+
+    ack.assert_called_once_with()
+    mock_queue.assert_not_called()
+    assert "already queued" in respond.call_args.kwargs.get("text", "").lower()

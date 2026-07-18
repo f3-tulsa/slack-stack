@@ -118,8 +118,9 @@ jobs:
           set -euo pipefail
           python -m venv .venv-paxminer
           . .venv-paxminer/bin/activate
-          pip install pytest -r PAXminer/requirements-lambda.txt
-          cd PAXminer && pytest -q tests/test_achievements.py tests/test_handlers.py
+          # Heavy image deps + light Slack Bolt deps (boto3 is on Lambda runtime; needed locally for adapter import)
+          pip install pytest boto3 -r PAXminer/requirements-lambda.txt -r PAXminer/requirements-slack.txt
+          cd PAXminer && pytest -q tests/test_achievements.py tests/test_handlers.py tests/test_slack_app.py
       - name: pytest slackblast
         run: |
           set -euo pipefail
@@ -147,6 +148,7 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip pip-audit
           pip-audit -r PAXminer/requirements-lambda.txt
+          pip-audit -r PAXminer/requirements-slack.txt
           pip-audit -r PAXminer/requirements.txt
           pip-audit -r PAXminer/database_management/requirements.txt
           pip-audit -r slackblast/slackblast/requirements.txt
