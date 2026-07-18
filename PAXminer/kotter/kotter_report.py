@@ -151,7 +151,7 @@ def run_kotter_for_region(conn, pm_schema: str, region_row: dict, *, dry_run: bo
         text = f"{text}\n\n{active}"
         blocks = list(blocks) + [section(active)]
     if dry_run:
-        return {"chars": len(text), "dry_run": True}
+        return {"chars": len(text), "dry_run": True, "text": text, "blocks": blocks}
 
     token = decrypt_field(token_enc)
     client = slack_client(token)
@@ -162,7 +162,7 @@ def run_kotter_for_region(conn, pm_schema: str, region_row: dict, *, dry_run: bo
             fallback_text(chunk) if chunk else text,
             blocks=chunk or None,
         )
-    return {"posted": True, "channel": channel}
+    return {"posted": True, "channel": channel, "text": text, "blocks": blocks}
 
 
 def run_kotter(conn, pm_schema: str, *, region_filter: str | None = None, dry_run: bool = False) -> list[dict]:

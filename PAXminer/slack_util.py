@@ -81,3 +81,42 @@ def post_message(
 def open_dm_channel(client: WebClient, user_id: str) -> str:
     resp = client.conversations_open(users=user_id)
     return resp["channel"]["id"]
+
+
+def upload_file(
+    client: WebClient,
+    channel: str,
+    file_path: str,
+    *,
+    initial_comment: str = "",
+    title: str | None = None,
+    max_retries: int = 5,
+) -> None:
+    """Upload a file with 429 retry and not_in_channel join fallback."""
+    kwargs: dict = {
+        "channel": channel,
+        "file": file_path,
+        "initial_comment": initial_comment or "",
+    }
+    if title:
+        kwargs["title"] = title
+    for attempt in range(max_retries):
+        try:
+            client.files_upload_v2(**kwargs)
+            return
+        except SlackApiError as e:
+            err = e.response.get("error") if e.response else None
+            if e.response is not None and e.response.status_code == 429:
+                delay = int(e.response.headers.get("Retry-After", "1"))
+                logging.info("Slack rate limit on upload; sleeping %ss", delay)
+                time.sleep(delay)
+                continue
+            if err == "not_in_channel":
+                try:
+                    client.conversations_join(channel=channel)
+                    continue
+                except Exception:
+                    logging.exception("Failed to join channel=%s for upload", channel)
+                    raise
+            raise
+    raise RuntimeError(f"files_upload_v2 failed after {max_retries} attempts channel={channel}")

@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: PAXminer — sync, charts, achievements, Kotter, Slack Bolt front door (container-image Lambdas).
+Description: PAXminer — sync, charts, achievements, Kotter, schedule dispatcher, Slack Bolt front door (container-image Lambdas).
 
 Globals:
   Function:
@@ -49,6 +49,15 @@ Parameters:
   KotterSchedule:
     Type: String
     Default: cron(0 12 1 * ? *)
+  ScheduleTick:
+    Type: String
+    Default: rate(15 minutes)
+  PmUseScheduleDispatcher:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
   HomeRegionDateTiers:
     Type: String
     Default: "30,60,90,120"
@@ -160,6 +169,7 @@ Resources:
           CHART_REGION_REGEX: !Ref ChartRegionRegex
           DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
           CHART_PERIOD_OFFSET_DAYS: !Ref ChartPeriodOffsetDays
+          PM_USE_SCHEDULE_DISPATCHER: !Ref PmUseScheduleDispatcher
           STAGE: !Ref Stage
           F3_REGION_NAME: !Ref F3RegionName
           PM_SLACK_TOKEN: !Ref PmSlackToken
@@ -243,6 +253,7 @@ Resources:
           PAXMINER_REGISTRY_DATABASE: !Ref PaxminerRegistryDatabase
           DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
           HOME_REGION_DATE_TIERS: !Ref HomeRegionDateTiers
+          PM_USE_SCHEDULE_DISPATCHER: !Ref PmUseScheduleDispatcher
           STAGE: !Ref Stage
           F3_REGION_NAME: !Ref F3RegionName
           PM_SLACK_TOKEN: !Ref PmSlackToken
@@ -255,6 +266,56 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-paxminer-kotter"
+      RetentionInDays: 30
+
+  ScheduleFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-paxminer-schedule"
+      PackageType: Image
+      ImageConfig:
+        Command:
+          - handlers.schedule_handler
+      MemorySize: 1024
+      Timeout: 900
+      Policies:
+        - Statement:
+            - Sid: SelfInvokeSchedule
+              Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-paxminer-schedule"
+      Events:
+        ScheduleTick:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref ScheduleTick
+      Environment:
+        Variables:
+          DATABASE_HOST: !Ref DatabaseHost
+          DATABASE_PORT: !Ref DatabasePort
+          DATABASE_USER: !Ref DatabaseUser
+          DATABASE_PASSWORD: !Ref DatabasePassword
+          DATABASE_TLS_ENABLED: !Ref DatabaseTlsEnabled
+          PAXMINER_SCHEMA: !Ref PaxminerSchema
+          PAXMINER_REGISTRY_DATABASE: !Ref PaxminerRegistryDatabase
+          CHART_PLOT_DIR: /tmp/paxminer_plots
+          DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
+          CHART_PERIOD_OFFSET_DAYS: !Ref ChartPeriodOffsetDays
+          HOME_REGION_DATE_TIERS: !Ref HomeRegionDateTiers
+          PM_USE_SCHEDULE_DISPATCHER: !Ref PmUseScheduleDispatcher
+          SCHEDULE_FUNCTION_NAME: !Sub "${AWS::StackName}-paxminer-schedule"
+          STAGE: !Ref Stage
+          F3_REGION_NAME: !Ref F3RegionName
+          PM_SLACK_TOKEN: !Ref PmSlackToken
+    Metadata:
+      DockerTag: paxminer-schedule
+      DockerContext: ..
+      Dockerfile: PAXminer/Dockerfile
+
+  PaxminerScheduleLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-paxminer-schedule"
       RetentionInDays: 30
 
   SlackFunction:
@@ -275,6 +336,10 @@ Resources:
               Effect: Allow
               Action: lambda:InvokeFunction
               Resource: !GetAtt KotterFunction.Arn
+            - Sid: InvokeSchedule
+              Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt ScheduleFunction.Arn
       Events:
         Warmup:
           Type: Schedule
@@ -295,6 +360,7 @@ Resources:
           PM_SLACK_TOKEN: !Ref PmSlackToken
           PM_SLACK_SIGNING_SECRET: !Ref PmSlackSigningSecret
           KOTTER_FUNCTION_NAME: !Ref KotterFunction
+          SCHEDULE_FUNCTION_NAME: !Ref ScheduleFunction
           SLACKBLAST_SCHEMA: !Sub "slackblast_${Stage}"
     Metadata:
       DockerTag: paxminer-slack
@@ -318,6 +384,8 @@ Outputs:
     Value: !GetAtt AchievementsFunctionUrl.FunctionUrl
   KotterFunctionArn:
     Value: !GetAtt KotterFunction.Arn
+  ScheduleFunctionArn:
+    Value: !GetAtt ScheduleFunction.Arn
   SlackFunctionArn:
     Value: !GetAtt SlackFunction.Arn
   SlackFunctionUrl:

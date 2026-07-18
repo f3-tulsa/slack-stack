@@ -41,11 +41,15 @@ def run_q_charter(
     region: str,
     firstf: str,
     plot_dir: str | Path = "/tmp/paxminer_plots",
+    destinations: list[str] | None = None,
+    post_per_ao: bool = True,
 ) -> dict:
     """
     Generate per-AO and region-wide Q charts and upload to Slack.
 
     ``mydb`` is an open PyMySQL connection to the regional schema.
+    When ``post_per_ao`` is False, only the region summary is posted to
+    ``destinations`` (or ``firstf``).
     """
     plot_base = Path(plot_dir) / schema
     plot_base.mkdir(parents=True, exist_ok=True)
@@ -56,6 +60,7 @@ def run_q_charter(
 
     thismonth, thismonthname, thismonthnamelong, yearnum = _q_charter_period()
     total_ao_graphs = 0
+    summary_channels = list(destinations) if destinations else ([firstf] if firstf else [])
 
     try:
         with mydb.cursor() as cursor:
@@ -65,6 +70,9 @@ def run_q_charter(
             aos_df = pd.DataFrame(aos, columns=["ao", "channel_id"])
     finally:
         pass
+
+    if not post_per_ao:
+        aos_df = aos_df.iloc[0:0]
 
     for _index, row in aos_df.iterrows():
         ao = row["ao"]
@@ -194,15 +202,27 @@ def run_q_charter(
                 plt.ioff()
                 out_path = plot_base / f"Q_Counts_{schema}_{thismonthname}{yearnum}.jpg"
                 plt.savefig(str(out_path), bbox_inches="tight")
-                slack.conversations_join(channel=firstf)
-                slack.files_upload_v2(
-                    channel=firstf,
-                    initial_comment="Hey "
+                comment = (
+                    "Hey "
                     + region
-                    + "! Here is a look at who has been stepping up to Q across all AOs for the month. Is your name on this list? Remember Core Principle #4 - F3 is peer led in a rotating fashion. Exercise your leadership muscles. Sign up to Q!",
-                    file=str(out_path),
+                    + "! Here is a look at who has been stepping up to Q across all AOs for the month. "
+                    "Is your name on this list? Remember Core Principle #4 - F3 is peer led in a rotating "
+                    "fashion. Exercise your leadership muscles. Sign up to Q!"
                 )
-                summary_graphs += 1
+                for ch in summary_channels:
+                    try:
+                        try:
+                            slack.conversations_join(channel=ch)
+                        except Exception:
+                            pass
+                        slack.files_upload_v2(
+                            channel=ch,
+                            initial_comment=comment,
+                            file=str(out_path),
+                        )
+                        summary_graphs += 1
+                    except Exception:
+                        _LOG.exception("Q charter summary upload failed channel=%s", ch)
     finally:
         plt.close("all")
 

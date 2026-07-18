@@ -11,6 +11,10 @@ COPY PAXminer/slack_util.py ./
 COPY PAXminer/slack_http.py ./
 COPY PAXminer/slack_blocks.py ./
 COPY PAXminer/config_paxminer.py ./
+COPY PAXminer/scheduling.py ./
+COPY PAXminer/schedule_schema.py ./
+COPY PAXminer/schedule_runner.py ./
+COPY PAXminer/schedule_reports.py ./
 COPY PAXminer/common/ ./common/
 COPY PAXminer/achievements/ ./achievements/
 COPY PAXminer/kotter/ ./kotter/

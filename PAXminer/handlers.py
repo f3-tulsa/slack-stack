@@ -108,6 +108,14 @@ def sync_handler(event, context):
 def chart_handler(event, context):
     logging.info("PAXminer chart_handler start")
     from paxminer_db import connect_from_env
+    from schedule_runner import use_schedule_dispatcher
+
+    if use_schedule_dispatcher():
+        logging.info("PM_USE_SCHEDULE_DISPATCHER set — skipping legacy chart_handler")
+        return {
+            "statusCode": 200,
+            "body": json.dumps({"ok": True, "skipped": "schedule_dispatcher"}),
+        }
 
     pm = _pm_schema()
     registry_db = _registry_database()
@@ -245,11 +253,25 @@ def kotter_handler(event, context):
     """Scheduled / async-invoked Kotter runner (no Slack HTTP — see slack_app)."""
     logging.info("PAXminer kotter_handler start")
     from kotter.kotter_report import run_kotter
+    from schedule_runner import use_schedule_dispatcher
+
+    # Manual /kotter-report queue and smoke tests still run; monthly EventBridge
+    # is skipped when the unified schedule dispatcher owns cadence.
+    event = event or {}
+    source = str(event.get("source") or "")
+    if use_schedule_dispatcher() and source not in (
+        "smoke",
+        "manual",
+        "slack",
+        "paxminer.kotter.manual",
+    ):
+        logging.info("PM_USE_SCHEDULE_DISPATCHER set — skipping legacy kotter schedule")
+        return http_response(200, {"ok": True, "skipped": "schedule_dispatcher"})
 
     pm = _pm_schema()
     registry_db = _registry_database()
 
-    dry_run = (event or {}).get("source") == "smoke"
+    dry_run = event.get("source") == "smoke"
     conn = connect_from_env(registry_db)
     try:
         results = run_kotter(conn, pm, dry_run=dry_run)
@@ -257,5 +279,95 @@ def kotter_handler(event, context):
     except Exception:
         logging.exception("kotter failed")
         return http_response(500, {"ok": False, "error": traceback.format_exc()})
+    finally:
+        conn.close()
+
+
+def schedule_handler(event, context):
+    """
+    Unified schedule dispatcher (EventBridge rate(15 minutes) + Run Now fan-out).
+
+    Modes:
+      - tick / empty: evaluate due schedules and async-invoke per heavy item
+      - {schedule_id, force?}: run one item inline
+      - {source: smoke, dry_run: true}: dry-run due list
+    """
+    logging.info("PAXminer schedule_handler start")
+    from schedule_runner import (
+        async_invoke_schedule_item,
+        list_due_schedules,
+        run_one_schedule_item,
+        use_schedule_dispatcher,
+    )
+
+    event = event or {}
+    pm = _pm_schema()
+    registry_db = _registry_database()
+    dry_run = bool(event.get("dry_run")) or event.get("source") == "smoke"
+
+    # Fan-out / Run Now path
+    if event.get("schedule_id") is not None:
+        conn = connect_from_env(registry_db)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT * FROM `{pm}`.`region_schedules` WHERE id=%s",
+                    (int(event["schedule_id"]),),
+                )
+                row = cur.fetchone()
+            if not row:
+                return {"statusCode": 404, "body": json.dumps({"ok": False, "error": "not found"})}
+            result = run_one_schedule_item(
+                conn,
+                pm,
+                row,
+                dry_run=dry_run,
+                force=bool(event.get("force")),
+            )
+            return {"statusCode": 200, "body": json.dumps({"ok": True, "result": result})}
+        except Exception:
+            logging.exception("schedule item failed")
+            return {"statusCode": 500, "body": json.dumps({"ok": False, "error": traceback.format_exc()})}
+        finally:
+            conn.close()
+
+    if not use_schedule_dispatcher() and event.get("source") != "smoke":
+        logging.info("PM_USE_SCHEDULE_DISPATCHER off — schedule tick no-op")
+        return {"statusCode": 200, "body": json.dumps({"ok": True, "skipped": "dispatcher_off"})}
+
+    conn = connect_from_env(registry_db)
+    try:
+        due = list_due_schedules(conn, pm)
+        results: list[dict] = []
+        for row in due:
+            report_type = None
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT report_type FROM `{pm}`.`region_report_definitions` WHERE id=%s",
+                    (row["report_definition_id"],),
+                )
+                d = cur.fetchone()
+                report_type = (d or {}).get("report_type")
+            heavy = report_type in ("pax_charts", "q_charts", "ao_leaderboard")
+            if dry_run:
+                results.append(
+                    run_one_schedule_item(conn, pm, row, dry_run=True, force=True)
+                )
+            elif heavy and os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+                try:
+                    async_invoke_schedule_item(int(row["id"]), force=False)
+                    results.append({"schedule_id": row["id"], "ok": True, "queued": True})
+                except Exception as e:
+                    logging.exception("fanout failed schedule_id=%s", row["id"])
+                    results.append({"schedule_id": row["id"], "ok": False, "error": str(e)})
+            else:
+                results.append(run_one_schedule_item(conn, pm, row, dry_run=False, force=False))
+        return {
+            "statusCode": 200,
+            "body": json.dumps({"ok": True, "due": len(due), "results": results}),
+        }
+    except Exception:
+        logging.exception("schedule_handler failed")
+        return {"statusCode": 500, "body": json.dumps({"ok": False, "error": traceback.format_exc()})}
     finally:
         conn.close()
