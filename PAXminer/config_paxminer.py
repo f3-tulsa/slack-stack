@@ -109,6 +109,24 @@ def _channels_select_element(initial: str | None) -> dict:
 
 
 def _config_modal(region: dict) -> dict:
+    """Hub modal: timezone + entry points for Achievements / Reports / Kotter / Schedule."""
+    from config_schedule import (
+        OPEN_ACHIEVEMENTS_ACTION_ID,
+        OPEN_KOTTER_CONFIG_ACTION_ID,
+        OPEN_REPORTS_ACTION_ID,
+        OPEN_SCHEDULE_ACTION_ID,
+        TIMEZONE_OPTIONS,
+    )
+
+    team_id = region.get("team_id") or ""
+    regional_schema = region.get("schema_name") or ""
+    tz = (region.get("timezone") or "America/Chicago").strip() or "America/Chicago"
+    tz_opts = [{"text": {"type": "plain_text", "text": t}, "value": t} for t in TIMEZONE_OPTIONS]
+    if tz not in TIMEZONE_OPTIONS:
+        tz_opts = [{"text": {"type": "plain_text", "text": tz}, "value": tz}] + tz_opts
+    tz_initial = next((o for o in tz_opts if o["value"] == tz), tz_opts[0])
+
+    # Legacy flags still editable until schedule cutover fully owns cadence.
     features = []
     if region.get("send_achievements"):
         features.append("achievements")
@@ -116,21 +134,8 @@ def _config_modal(region: dict) -> dict:
         features.append("kotter")
     if region.get("send_achievement_leaderboard"):
         features.append("leaderboard")
-    charts = []
-    if region.get("send_pax_charts"):
-        charts.append("pax")
-    if region.get("send_q_charts"):
-        charts.append("q")
-    if region.get("send_region_leaderboard"):
-        charts.append("region_lb")
-    if region.get("send_ao_leaderboard"):
-        charts.append("ao_lb")
     feature_options = list(FEATURE_OPTIONS)
-    chart_options = list(CHART_OPTIONS)
     feature_initial = _selected_options(feature_options, features)
-    chart_initial = _selected_options(chart_options, charts)
-    team_id = region.get("team_id") or ""
-    regional_schema = region.get("schema_name") or ""
     features_element: dict = {
         "type": "checkboxes",
         "action_id": "features",
@@ -138,13 +143,7 @@ def _config_modal(region: dict) -> dict:
     }
     if feature_initial:
         features_element["initial_options"] = feature_initial
-    charts_element: dict = {
-        "type": "checkboxes",
-        "action_id": "charts",
-        "options": chart_options,
-    }
-    if chart_initial:
-        charts_element["initial_options"] = chart_initial
+
     return {
         "type": "modal",
         "callback_id": CALLBACK_ID,
@@ -154,90 +153,99 @@ def _config_modal(region: dict) -> dict:
         "blocks": [
             {
                 "type": "input",
+                "block_id": "timezone",
+                "label": {"type": "plain_text", "text": "Region timezone"},
+                "element": {
+                    "type": "static_select",
+                    "action_id": "val",
+                    "options": tz_opts,
+                    "initial_option": tz_initial,
+                },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "*Configure*\n"
+                        "• *PAX Achievements* — award rules\n"
+                        "• *PAX Reports* — builtin + custom report definitions\n"
+                        "• *Kotter Reports* — thresholds\n"
+                        "• *Schedule* — when/where each report posts"
+                    ),
+                },
+            },
+            {
+                "type": "actions",
+                "block_id": "hub_actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": OPEN_ACHIEVEMENTS_ACTION_ID,
+                        "text": {"type": "plain_text", "text": "PAX Achievements"},
+                    },
+                    {
+                        "type": "button",
+                        "action_id": OPEN_REPORTS_ACTION_ID,
+                        "text": {"type": "plain_text", "text": "PAX Reports"},
+                    },
+                    {
+                        "type": "button",
+                        "action_id": OPEN_KOTTER_CONFIG_ACTION_ID,
+                        "text": {"type": "plain_text", "text": "Kotter Reports"},
+                    },
+                    {
+                        "type": "button",
+                        "action_id": OPEN_SCHEDULE_ACTION_ID,
+                        "text": {"type": "plain_text", "text": "Schedule"},
+                        "style": "primary",
+                    },
+                ],
+            },
+            {
+                "type": "divider",
+            },
+            {
+                "type": "input",
                 "block_id": "features",
-                "label": {"type": "plain_text", "text": "Enabled features"},
+                "optional": True,
+                "label": {"type": "plain_text", "text": "Legacy feature flags (until schedule cutover)"},
                 "element": features_element,
             },
             {
                 "type": "input",
                 "block_id": "achievement_channel",
                 "optional": True,
-                "label": {"type": "plain_text", "text": "Achievement channel"},
+                "label": {"type": "plain_text", "text": "Legacy achievement channel (seed/defaults)"},
                 "element": _channels_select_element(region.get("achievement_channel")),
             },
             {
                 "type": "input",
                 "block_id": "kotter_channel",
                 "optional": True,
-                "label": {"type": "plain_text", "text": "Kotter channel"},
+                "label": {"type": "plain_text", "text": "Legacy Kotter channel (seed/defaults)"},
                 "element": _channels_select_element(region.get("kotter_channel")),
             },
             {
                 "type": "input",
                 "block_id": "firstf_channel",
                 "optional": True,
-                "label": {"type": "plain_text", "text": "1stF channel for charts"},
+                "label": {"type": "plain_text", "text": "Legacy region charts channel (seed/defaults)"},
                 "element": _channels_select_element(region.get("firstf_channel")),
             },
             {
-                "type": "input",
-                "block_id": "charts",
-                "label": {"type": "plain_text", "text": "Monthly charts"},
-                "element": charts_element,
-            },
-            {
-                "type": "input",
-                "block_id": "NO_POST_THRESHOLD",
-                "label": {"type": "plain_text", "text": "Kotter: no-post threshold (weeks)"},
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": "val",
-                    "initial_value": str(region.get("NO_POST_THRESHOLD") or 2),
-                },
-            },
-            {
-                "type": "input",
-                "block_id": "REMINDER_WEEKS",
-                "label": {"type": "plain_text", "text": "Kotter: reminder window (weeks)"},
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": "val",
-                    "initial_value": str(region.get("REMINDER_WEEKS") or 2),
-                },
-            },
-            {
-                "type": "input",
-                "block_id": "HOME_AO_CAPTURE",
-                "label": {"type": "plain_text", "text": "Kotter: home AO capture (weeks)"},
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": "val",
-                    "initial_value": str(region.get("HOME_AO_CAPTURE") or 8),
-                },
-            },
-            {
-                "type": "input",
-                "block_id": "NO_Q_THRESHOLD_WEEKS",
-                "label": {"type": "plain_text", "text": "Kotter: no-Q threshold (weeks)"},
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": "val",
-                    "initial_value": str(region.get("NO_Q_THRESHOLD_WEEKS") or 4),
-                },
-            },
-            {
-                "type": "input",
-                "block_id": "NO_Q_THRESHOLD_POSTS",
-                "label": {"type": "plain_text", "text": "Kotter: no-Q threshold (posts)"},
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": "val",
-                    "initial_value": str(region.get("NO_Q_THRESHOLD_POSTS") or 4),
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "_Legacy channel fields seed Restore Defaults. Prefer Schedule destinations._",
                 },
             },
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": "*Achievement catalog*\nAdd, edit, or remove achievement rules."},
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Achievement catalog*\nAdd, edit, or remove achievement rules.",
+                },
                 "accessory": {
                     "type": "button",
                     "action_id": MANAGE_ACHIEVEMENTS_ACTION_ID,
@@ -470,29 +478,34 @@ def _to_int(value, default):
 def _parse_modal_values(payload: dict) -> dict:
     state = payload.get("view", {}).get("state", {}).get("values", {})
     features = [o["value"] for o in state.get("features", {}).get("features", {}).get("selected_options", [])]
-    charts = [o["value"] for o in state.get("charts", {}).get("charts", {}).get("selected_options", [])]
+    tz_sel = state.get("timezone", {}).get("val", {}).get("selected_option") or {}
+    timezone = (tz_sel.get("value") or "America/Chicago").strip()
     return {
+        "timezone": timezone,
         "send_achievements": 1 if "achievements" in features else 0,
         "send_aoq_reports": 1 if "kotter" in features else 0,
         "send_achievement_leaderboard": 1 if "leaderboard" in features else 0,
         "achievement_channel": _selected_channel(state, "achievement_channel"),
         "kotter_channel": _selected_channel(state, "kotter_channel"),
         "firstf_channel": _selected_channel(state, "firstf_channel"),
-        "send_pax_charts": 1 if "pax" in charts else 0,
-        "send_q_charts": 1 if "q" in charts else 0,
-        "send_region_leaderboard": 1 if "region_lb" in charts else 0,
-        "send_ao_leaderboard": 1 if "ao_lb" in charts else 0,
-        "NO_POST_THRESHOLD": _to_int(
-            state.get("NO_POST_THRESHOLD", {}).get("val", {}).get("value"), 2
-        ),
-        "REMINDER_WEEKS": _to_int(state.get("REMINDER_WEEKS", {}).get("val", {}).get("value"), 2),
-        "HOME_AO_CAPTURE": _to_int(state.get("HOME_AO_CAPTURE", {}).get("val", {}).get("value"), 8),
-        "NO_Q_THRESHOLD_WEEKS": _to_int(
-            state.get("NO_Q_THRESHOLD_WEEKS", {}).get("val", {}).get("value"), 4
-        ),
-        "NO_Q_THRESHOLD_POSTS": _to_int(
-            state.get("NO_Q_THRESHOLD_POSTS", {}).get("val", {}).get("value"), 4
-        ),
+        # Chart send_* flags are owned by Schedule after cutover; keep prior DB values
+        # unless still present in an older modal payload.
+        "send_pax_charts": 1
+        if "pax"
+        in [o["value"] for o in state.get("charts", {}).get("charts", {}).get("selected_options", [])]
+        else None,
+        "send_q_charts": 1
+        if "q"
+        in [o["value"] for o in state.get("charts", {}).get("charts", {}).get("selected_options", [])]
+        else None,
+        "send_region_leaderboard": 1
+        if "region_lb"
+        in [o["value"] for o in state.get("charts", {}).get("charts", {}).get("selected_options", [])]
+        else None,
+        "send_ao_leaderboard": 1
+        if "ao_lb"
+        in [o["value"] for o in state.get("charts", {}).get("charts", {}).get("selected_options", [])]
+        else None,
     }
 
 

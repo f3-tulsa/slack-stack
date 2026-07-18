@@ -419,7 +419,7 @@ def handle_config_submit(ack, body, client, logger):
     if not region:
         ack(response_action="errors", errors={"features": "Region not found"})
         return
-    values = _parse_modal_values(body)
+    values = {k: v for k, v in _parse_modal_values(body).items() if v is not None}
     pm = paxminer_schema_from_env()
     conn = connect_from_env(_registry_db())
     try:
@@ -522,6 +522,46 @@ def handle_achievement_edit_submit(ack, body, client, logger):
 
 
 app.view(ACHIEVEMENT_EDIT_CALLBACK_ID)(handle_achievement_edit_submit)
+
+
+# Schedule / PAX Reports / Kotter config listeners
+from slack_schedule import register_schedule_listeners  # noqa: E402
+
+register_schedule_listeners(app)
+
+
+@app.event("app_home_opened")
+def handle_app_home_opened(client, event, logger):
+    """Minimal Home tab stub (full dashboard is a later plan)."""
+    user_id = event.get("user")
+    if not user_id:
+        return
+    try:
+        client.views_publish(
+            user_id=user_id,
+            view={
+                "type": "home",
+                "blocks": [
+                    {
+                        "type": "header",
+                        "text": {"type": "plain_text", "text": "PAXMiner"},
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": (
+                                "Configure reports and schedules with `/config-paxminer` "
+                                "(workspace admins).\n\n"
+                                "_Home dashboard charts coming soon._"
+                            ),
+                        },
+                    },
+                ],
+            },
+        )
+    except Exception:
+        logger.exception("app_home_opened views.publish failed")
 
 
 def handler(event, context):

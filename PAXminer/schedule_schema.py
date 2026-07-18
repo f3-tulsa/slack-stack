@@ -148,6 +148,7 @@ def seed_default_schedules(
     region: dict[str, Any],
     *,
     merge_only: bool = True,
+    skip_if_any_schedules: bool = False,
 ) -> int:
     """
     Seed default schedules for one region from legacy flags/channels.
@@ -155,12 +156,26 @@ def seed_default_schedules(
     When merge_only=True (Restore Defaults), always INSERT new schedule rows
     for each builtin (duplicates allowed). Definitions are upserted by code.
 
+    When skip_if_any_schedules=True (initial migration), skip inserting schedules
+    if the region already has any rows (definitions are still upserted).
+
     Returns number of schedule rows inserted.
     """
     regional = region.get("schema_name") or ""
     if not regional:
         return 0
     code_to_id = upsert_builtin_definitions(cur, pm_schema, regional)
+    if skip_if_any_schedules:
+        cur.execute(
+            f"SELECT COUNT(*) AS c FROM `{pm_schema}`.`region_schedules` WHERE schema_name=%s",
+            (regional,),
+        )
+        if int(cur.fetchone()["c"]) > 0:
+            LOG.info(
+                "Skip schedule seed schema=%s — schedules already present",
+                regional,
+            )
+            return 0
     inserted = 0
     for item in LEGACY_FLAG_MAP:
         def_id = code_to_id[item["code"]]
@@ -200,7 +215,9 @@ def seed_all_regions(cur, pm_schema: str) -> dict[str, int]:
     regions = list(cur.fetchall() or [])
     total_schedules = 0
     for region in regions:
-        total_schedules += seed_default_schedules(cur, pm_schema, region)
+        total_schedules += seed_default_schedules(
+            cur, pm_schema, region, skip_if_any_schedules=True
+        )
     return {"regions": len(regions), "schedules": total_schedules}
 
 
