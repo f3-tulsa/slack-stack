@@ -40,9 +40,11 @@ def test_verify_achievements_webhook_secret():
 def test_build_kotter_message_monthly_copy():
     from kotter.kotter_report import build_kotter_message
 
-    msg = build_kotter_message(pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
-    assert "monthly" in msg.lower()
-    assert "weekly" not in msg.lower()
+    text, blocks = build_kotter_message(pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
+    assert "monthly" in text.lower()
+    assert "weekly" not in text.lower()
+    assert blocks
+    assert blocks[0]["type"] == "header"
 
 
 def test_leaderboard_tie_break_by_display_name():
@@ -60,8 +62,10 @@ def test_leaderboard_tie_break_by_display_name():
             "user_name": ["Zed", "Amy", "Bob"],
         }
     )
-    msg = build_leaderboard_message(awarded, users)
-    assert msg.index("<@U2>") < msg.index("<@U3>") < msg.index("<@U1>")
+    text, blocks = build_leaderboard_message(awarded, users)
+    assert text.index("<@U2>") < text.index("<@U3>") < text.index("<@U1>")
+    assert blocks
+    assert any(b.get("type") == "header" for b in blocks)
 
 
 def test_almost_there_excludes_awarded_and_caps_gap():
@@ -108,11 +112,12 @@ def test_almost_there_excludes_awarded_and_caps_gap():
                     "threshold": [50] * 3,
                 }
             )
-            msg = build_almost_there_message(nation, rules, awarded, "f3test", users)
+            text, blocks = build_almost_there_message(nation, rules, awarded, "f3test", users)
 
-    assert "U1" not in msg
-    assert "<@U2>" in msg
-    assert "3 posts away" not in msg
+    assert "U1" not in text
+    assert "<@U2>" in text
+    assert "3 posts away" not in text
+    assert blocks
 
 
 def test_run_achievements_skips_duplicate_grants():
@@ -371,7 +376,7 @@ def test_validate_achievement_code():
 
 
 def test_config_modal_initial_options_match_option_labels():
-    from config_paxminer import _config_modal
+    from config_paxminer import _config_modal, _parse_modal_values
 
     modal = _config_modal(
         {
@@ -382,9 +387,9 @@ def test_config_modal_initial_options_match_option_labels():
             "send_q_charts": 0,
             "send_region_leaderboard": 1,
             "send_ao_leaderboard": 0,
-            "achievement_channel": "C1",
-            "kotter_channel": "C2",
-            "firstf_channel": "C3",
+            "achievement_channel": "C12345678",
+            "kotter_channel": "C23456789",
+            "firstf_channel": "C34567890",
             "team_id": "T1",
             "schema_name": "f3test",
         }
@@ -397,6 +402,36 @@ def test_config_modal_initial_options_match_option_labels():
         assert initial
         for opt in initial:
             assert opt in options
+
+    for block_id in ("achievement_channel", "kotter_channel", "firstf_channel"):
+        block = by_id[block_id]
+        assert block.get("optional") is True
+        assert block["element"]["type"] == "channels_select"
+        assert block["element"].get("initial_channel", "").startswith("C")
+
+    parsed = _parse_modal_values(
+        {
+            "view": {
+                "state": {
+                    "values": {
+                        "features": {"features": {"selected_options": [{"value": "achievements"}]}},
+                        "charts": {"charts": {"selected_options": []}},
+                        "achievement_channel": {"val": {"selected_channel": "C11111111"}},
+                        "kotter_channel": {"val": {"selected_channel": "C22222222"}},
+                        "firstf_channel": {"val": {"selected_channel": ""}},
+                        "NO_POST_THRESHOLD": {"val": {"value": "2"}},
+                        "REMINDER_WEEKS": {"val": {"value": "2"}},
+                        "HOME_AO_CAPTURE": {"val": {"value": "8"}},
+                        "NO_Q_THRESHOLD_WEEKS": {"val": {"value": "4"}},
+                        "NO_Q_THRESHOLD_POSTS": {"val": {"value": "4"}},
+                    }
+                }
+            }
+        }
+    )
+    assert parsed["achievement_channel"] == "C11111111"
+    assert parsed["kotter_channel"] == "C22222222"
+    assert parsed["firstf_channel"] == ""
 
 
 def test_achievements_handler_webhook_unauthorized():
