@@ -317,6 +317,15 @@ def _achievements_list_modal(
                         "action_id": DELETE_ACHIEVEMENT_ACTION_ID,
                         "text": {"type": "plain_text", "text": "Delete selected"},
                         "style": "danger",
+                        "confirm": {
+                            "title": {"type": "plain_text", "text": "Delete achievement?"},
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": "This permanently removes the achievement rule. Awards already granted are not deleted.",
+                            },
+                            "confirm": {"type": "plain_text", "text": "Delete"},
+                            "deny": {"type": "plain_text", "text": "Cancel"},
+                        },
                     },
                 ],
             }
