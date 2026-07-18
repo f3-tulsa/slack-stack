@@ -1,0 +1,483 @@
+"""
+Lightweight Slack Bolt front door for PAXMiner.
+
+Acks interactive requests quickly; heavy work (Kotter send, charts) is
+async-invoked on the existing heavy Lambdas. Keep-warm EventBridge pings
+short-circuit before Bolt.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+
+from slack_bolt import App
+from slack_bolt.adapter.aws_lambda import SlackRequestHandler
+from slack_sdk.errors import SlackApiError
+
+from config_paxminer import (
+    ACHIEVEMENT_EDIT_CALLBACK_ID,
+    ADD_ACHIEVEMENT_ACTION_ID,
+    CALLBACK_ID,
+    DELETE_ACHIEVEMENT_ACTION_ID,
+    EDIT_ACHIEVEMENT_ACTION_ID,
+    MANAGE_ACHIEVEMENTS_ACTION_ID,
+    _achievement_edit_modal,
+    _achievements_list_modal,
+    _config_modal,
+    _load_achievement,
+    _load_achievements,
+    _parse_achievement_form,
+    _parse_metadata,
+    _parse_modal_values,
+    _region_for_team,
+    _registry_db,
+    _selected_achievement_id,
+    _validate_achievement,
+)
+from paxminer_db import connect_from_env, paxminer_schema_from_env
+from slack_http import KOTTER_SEND_ACTION_ID, is_http_request, is_slack_admin
+
+LOCAL_DEVELOPMENT = not os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+
+SlackRequestHandler.clear_all_log_handlers()
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+if LOCAL_DEVELOPMENT:
+    logger.addHandler(logging.StreamHandler())
+
+app = App(
+    process_before_response=not LOCAL_DEVELOPMENT,
+    token=os.environ.get("PM_SLACK_TOKEN", ""),
+    signing_secret=os.environ.get("PM_SLACK_SIGNING_SECRET", ""),
+    # Skip auth.test locally so unit tests can import without a real bot token.
+    token_verification_enabled=not LOCAL_DEVELOPMENT,
+)
+
+
+@app.middleware
+def log_request(logger, body, next):
+    team_id = body.get("team_id") or (body.get("team") or {}).get("id")
+    user_id = body.get("user_id") or (body.get("user") or {}).get("id")
+    request_type = body.get("type") or ("command" if body.get("command") else "unknown")
+    callback_or_action = (
+        body.get("command")
+        or ((body.get("view") or {}).get("callback_id"))
+        or (((body.get("actions") or [{}])[0]).get("action_id"))
+        or ""
+    )
+    logger.info(
+        "slack request team_id=%s user_id=%s type=%s callback_or_action=%s",
+        team_id,
+        user_id,
+        request_type,
+        callback_or_action,
+    )
+    return next()
+
+
+@app.error
+def handle_error(error, body, logger, client):
+    logger.exception("Unhandled Slack Bolt error: %s", error)
+    user_id = body.get("user_id") or (body.get("user") or {}).get("id")
+    channel_id = body.get("channel_id") or (body.get("channel") or {}).get("id")
+    if user_id and channel_id:
+        try:
+            client.chat_postEphemeral(
+                channel=channel_id,
+                user=user_id,
+                text=f"Something went wrong: {str(error)[:500]}",
+            )
+        except Exception:
+            logger.exception("Failed to send error ephemeral")
+
+
+def _strip_channel_initials(view: dict) -> dict:
+    """Return a copy of the modal view without channels_select initial_channel."""
+    import copy
+
+    cleaned = copy.deepcopy(view)
+    for block in cleaned.get("blocks") or []:
+        element = block.get("element") or {}
+        if element.get("type") == "channels_select":
+            element.pop("initial_channel", None)
+    return cleaned
+
+
+def _open_config_modal(client, trigger_id: str, region: dict, logger) -> None:
+    view = _config_modal(region)
+    try:
+        client.views_open(trigger_id=trigger_id, view=view)
+    except SlackApiError as exc:
+        logger.warning("views_open failed (%s); retrying without channel initials", exc)
+        client.views_open(trigger_id=trigger_id, view=_strip_channel_initials(view))
+
+
+def handle_config_command(ack, body, client, logger, respond):
+    """Named listener for /config-paxminer — importable for unit tests."""
+    user_id = body.get("user_id", "")
+    team_id = body.get("team_id", "")
+    trigger_id = body.get("trigger_id", "")
+
+    if not is_slack_admin(user_id, client=client):
+        ack(text="Workspace admin required.", response_type="ephemeral")
+        return
+
+    pm = paxminer_schema_from_env()
+    conn = connect_from_env(_registry_db())
+    try:
+        with conn.cursor() as cur:
+            region = _region_for_team(cur, pm, team_id)
+        if not region:
+            ack(
+                text="No PAXMiner region linked to this workspace.",
+                response_type="ephemeral",
+            )
+            return
+        ack()
+        region = dict(region)
+        region["team_id"] = team_id
+        try:
+            _open_config_modal(client, trigger_id, region, logger)
+        except Exception as exc:
+            logger.exception("Failed to open config modal: %s", exc)
+            try:
+                respond(text=f"Could not open settings: {str(exc)[:300]}")
+            except Exception:
+                pass
+    finally:
+        conn.close()
+
+
+app.command("/config-paxminer")(handle_config_command)
+
+
+def handle_kotter_command(ack, body, client, logger):
+    """Named listener for /kotter-report — importable for unit tests."""
+    user_id = body.get("user_id", "")
+    if not is_slack_admin(user_id, client=client):
+        ack(text="Admin required.", response_type="ephemeral")
+        return
+    ack(
+        response_type="ephemeral",
+        text="Kotter report controls",
+        blocks=[
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Kotter Reports*\nSend this month's Kotter report now.",
+                },
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Send Monthly Kotter Now"},
+                        "style": "primary",
+                        "action_id": KOTTER_SEND_ACTION_ID,
+                        "value": "send",
+                    }
+                ],
+            },
+        ],
+    )
+
+
+app.command("/kotter-report")(handle_kotter_command)
+
+
+def _queue_manual_kotter() -> None:
+    import boto3
+
+    function_name = os.environ.get("KOTTER_FUNCTION_NAME", "").strip()
+    if not function_name:
+        raise RuntimeError("KOTTER_FUNCTION_NAME is not configured")
+    boto3.client("lambda").invoke(
+        FunctionName=function_name,
+        InvocationType="Event",
+        Payload=json.dumps({"source": "paxminer.kotter.manual"}).encode("utf-8"),
+    )
+
+
+def _retry_num(request) -> str | None:
+    if request is None:
+        return None
+    headers = getattr(request, "headers", None) or {}
+    value = headers.get("x-slack-retry-num")
+    if isinstance(value, (list, tuple)):
+        return value[0] if value else None
+    return value
+
+
+def handle_kotter_send_now(ack, body, client, respond, request, logger):
+    """Named listener for Send Monthly Kotter Now — importable for unit tests."""
+    user_id = (body.get("user") or {}).get("id", "")
+    if not is_slack_admin(user_id, client=client):
+        ack()
+        respond(text="Admin required.", response_type="ephemeral")
+        return
+
+    ack()
+    if _retry_num(request):
+        respond(text="Manual Kotter send already queued.", response_type="ephemeral")
+        return
+    try:
+        _queue_manual_kotter()
+        respond(text="Manual Kotter send queued.", response_type="ephemeral")
+    except Exception as exc:
+        logger.exception("Failed to queue Kotter: %s", exc)
+        respond(text=f"Failed to queue Kotter: {str(exc)[:300]}", response_type="ephemeral")
+
+
+app.action(KOTTER_SEND_ACTION_ID)(handle_kotter_send_now)
+
+
+def _region_context_from_body(body: dict) -> tuple[str, str, dict | None]:
+    meta = _parse_metadata((body.get("view") or {}).get("private_metadata"))
+    team_id = meta.get("team_id") or (body.get("team") or {}).get("id", "")
+    regional_schema = meta.get("regional_schema", "")
+    pm = paxminer_schema_from_env()
+    conn = connect_from_env(_registry_db())
+    try:
+        with conn.cursor() as cur:
+            region = _region_for_team(cur, pm, team_id) if team_id else None
+        return team_id, regional_schema or (region or {}).get("schema_name", ""), region
+    finally:
+        conn.close()
+
+
+def handle_manage_achievements(ack, body, client, logger):
+    """Push achievements list modal — importable for unit tests."""
+    user_id = (body.get("user") or {}).get("id", "")
+    if not is_slack_admin(user_id, client=client):
+        ack()
+        return
+    ack()
+    team_id, regional_schema, region = _region_context_from_body(body)
+    if not region or not regional_schema:
+        logger.warning("Manage achievements: region not found")
+        return
+    conn = connect_from_env(_registry_db())
+    try:
+        with conn.cursor() as cur:
+            achievements = _load_achievements(cur, regional_schema)
+        view = _achievements_list_modal(team_id, regional_schema, achievements)
+        client.views_push(trigger_id=body["trigger_id"], view=view)
+    finally:
+        conn.close()
+
+
+app.action(MANAGE_ACHIEVEMENTS_ACTION_ID)(handle_manage_achievements)
+
+
+def handle_add_achievement(ack, body, client, logger):
+    user_id = (body.get("user") or {}).get("id", "")
+    if not is_slack_admin(user_id, client=client):
+        ack()
+        return
+    ack()
+    team_id, regional_schema, region = _region_context_from_body(body)
+    if not region or not regional_schema:
+        return
+    view = _achievement_edit_modal(team_id, regional_schema, None)
+    client.views_push(trigger_id=body["trigger_id"], view=view)
+
+
+app.action(ADD_ACHIEVEMENT_ACTION_ID)(handle_add_achievement)
+
+
+def handle_edit_achievement(ack, body, client, respond, logger):
+    user_id = (body.get("user") or {}).get("id", "")
+    if not is_slack_admin(user_id, client=client):
+        ack()
+        return
+    ack()
+    team_id, regional_schema, region = _region_context_from_body(body)
+    if not region or not regional_schema:
+        return
+    selected_id = _selected_achievement_id(body)
+    if not selected_id:
+        respond(text="Select an achievement to edit.", response_type="ephemeral")
+        return
+    conn = connect_from_env(_registry_db())
+    try:
+        with conn.cursor() as cur:
+            row = _load_achievement(cur, regional_schema, selected_id)
+        if not row:
+            respond(text="Achievement not found.", response_type="ephemeral")
+            return
+        view = _achievement_edit_modal(team_id, regional_schema, row)
+        client.views_push(trigger_id=body["trigger_id"], view=view)
+    finally:
+        conn.close()
+
+
+app.action(EDIT_ACHIEVEMENT_ACTION_ID)(handle_edit_achievement)
+
+
+def handle_delete_achievement(ack, body, client, respond, logger):
+    user_id = (body.get("user") or {}).get("id", "")
+    if not is_slack_admin(user_id, client=client):
+        ack()
+        return
+    ack()
+    team_id, regional_schema, region = _region_context_from_body(body)
+    if not region or not regional_schema:
+        return
+    selected_id = _selected_achievement_id(body)
+    if not selected_id:
+        respond(text="Select an achievement to delete.", response_type="ephemeral")
+        return
+    conn = connect_from_env(_registry_db())
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT COUNT(*) AS cnt FROM `{regional_schema}`.`achievements_awarded` "
+                "WHERE achievement_id=%s",
+                (selected_id,),
+            )
+            cnt = (cur.fetchone() or {}).get("cnt", 0)
+            if cnt:
+                respond(
+                    text=f"Cannot delete: {cnt} award(s) reference this achievement.",
+                    response_type="ephemeral",
+                )
+                return
+            cur.execute(
+                f"DELETE FROM `{regional_schema}`.`achievements_list` WHERE id=%s",
+                (selected_id,),
+            )
+            conn.commit()
+            achievements = _load_achievements(cur, regional_schema)
+        view = _achievements_list_modal(team_id, regional_schema, achievements)
+        client.views_update(view_id=body["view"]["id"], view=view)
+    finally:
+        conn.close()
+
+
+app.action(DELETE_ACHIEVEMENT_ACTION_ID)(handle_delete_achievement)
+
+
+def handle_config_submit(ack, body, client, logger):
+    """Named listener for config modal save — importable for unit tests."""
+    user_id = (body.get("user") or {}).get("id", "")
+    if not is_slack_admin(user_id, client=client):
+        ack(response_action="errors", errors={"features": "Admin required"})
+        return
+    team_id, _, region = _region_context_from_body(body)
+    if not region:
+        ack(response_action="errors", errors={"features": "Region not found"})
+        return
+    values = _parse_modal_values(body)
+    pm = paxminer_schema_from_env()
+    conn = connect_from_env(_registry_db())
+    try:
+        with conn.cursor() as cur:
+            sets = ", ".join(f"`{k}`=%s" for k in values)
+            cur.execute(
+                f"UPDATE `{pm}`.`regions` SET {sets} WHERE region=%s",
+                (*values.values(), region["region"]),
+            )
+            conn.commit()
+        ack(response_action="clear")
+    finally:
+        conn.close()
+
+
+app.view(CALLBACK_ID)(handle_config_submit)
+
+
+def handle_achievement_edit_submit(ack, body, client, logger):
+    """Named listener for achievement add/edit save — importable for unit tests."""
+    user_id = (body.get("user") or {}).get("id", "")
+    if not is_slack_admin(user_id, client=client):
+        ack(response_action="errors", errors={"name": "Admin required"})
+        return
+    team_id, regional_schema, region = _region_context_from_body(body)
+    if not region or not regional_schema:
+        ack(response_action="errors", errors={"name": "Region not found"})
+        return
+
+    meta = _parse_metadata((body.get("view") or {}).get("private_metadata"))
+    achievement_id = meta.get("achievement_id")
+    values = _parse_achievement_form(body)
+    errors = _validate_achievement(values)
+    if errors:
+        ack(response_action="errors", errors=errors)
+        return
+
+    conn = connect_from_env(_registry_db())
+    try:
+        with conn.cursor() as cur:
+            if achievement_id:
+                cur.execute(
+                    f"SELECT id FROM `{regional_schema}`.`achievements_list` "
+                    "WHERE code=%s AND id<>%s",
+                    (values["code"], achievement_id),
+                )
+            else:
+                cur.execute(
+                    f"SELECT id FROM `{regional_schema}`.`achievements_list` WHERE code=%s",
+                    (values["code"],),
+                )
+            if cur.fetchone():
+                ack(response_action="errors", errors={"code": "Code already in use"})
+                return
+
+            if achievement_id:
+                cur.execute(
+                    f"""
+                    UPDATE `{regional_schema}`.`achievements_list`
+                    SET name=%s, description=%s, verb=%s, code=%s,
+                        metric=%s, activity=%s, period=%s, threshold=%s
+                    WHERE id=%s
+                    """,
+                    (
+                        values["name"],
+                        values["description"],
+                        values["verb"],
+                        values["code"],
+                        values["metric"],
+                        values["activity"],
+                        values["period"],
+                        values["threshold"],
+                        achievement_id,
+                    ),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    INSERT INTO `{regional_schema}`.`achievements_list`
+                    (name, description, verb, code, metric, activity, period, threshold)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        values["name"],
+                        values["description"],
+                        values["verb"],
+                        values["code"],
+                        values["metric"],
+                        values["activity"],
+                        values["period"],
+                        values["threshold"],
+                    ),
+                )
+            conn.commit()
+            achievements = _load_achievements(cur, regional_schema)
+            view = _achievements_list_modal(team_id, regional_schema, achievements)
+            ack(response_action="update", view=view)
+    finally:
+        conn.close()
+
+
+app.view(ACHIEVEMENT_EDIT_CALLBACK_ID)(handle_achievement_edit_submit)
+
+
+def handler(event, context):
+    """Lambda entrypoint: keep-warm short-circuit, else Bolt SlackRequestHandler."""
+    if not is_http_request(event):
+        return {"statusCode": 200, "body": "warm"}
+    return SlackRequestHandler(app=app).handle(event, context)

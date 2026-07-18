@@ -1,4 +1,4 @@
-"""`/config-paxminer` Slack modal — channels, toggles, Kotter thresholds, achievements CRUD."""
+"""`/config-paxminer` Slack modal builders and DB helpers (Bolt listeners live in slack_app)."""
 
 from __future__ import annotations
 
@@ -6,11 +6,6 @@ import json
 import logging
 import os
 import re
-
-from common.encryption import decrypt_field
-from paxminer_db import connect_from_env, paxminer_schema_from_env
-from slack_http import http_response, is_slack_admin
-from slack_util import slack_client
 
 LOG = logging.getLogger(__name__)
 
@@ -98,6 +93,21 @@ def _selected_options(all_options: list[dict], selected_values: list[str]) -> li
     return [opt for opt in all_options if opt["value"] in selected]
 
 
+def _looks_like_channel_id(value: str | None) -> bool:
+    """True for public Slack channel IDs (channels_select is public-only)."""
+    if not value:
+        return False
+    v = str(value).strip()
+    return v.startswith("C") and len(v) >= 9
+
+
+def _channels_select_element(initial: str | None) -> dict:
+    element: dict = {"type": "channels_select", "action_id": "val"}
+    if _looks_like_channel_id(initial):
+        element["initial_channel"] = str(initial).strip()
+    return element
+
+
 def _config_modal(region: dict) -> dict:
     features = []
     if region.get("send_achievements"):
@@ -151,32 +161,23 @@ def _config_modal(region: dict) -> dict:
             {
                 "type": "input",
                 "block_id": "achievement_channel",
-                "label": {"type": "plain_text", "text": "Achievement channel ID"},
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": "val",
-                    "initial_value": region.get("achievement_channel") or "",
-                },
+                "optional": True,
+                "label": {"type": "plain_text", "text": "Achievement channel"},
+                "element": _channels_select_element(region.get("achievement_channel")),
             },
             {
                 "type": "input",
                 "block_id": "kotter_channel",
-                "label": {"type": "plain_text", "text": "Kotter channel ID"},
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": "val",
-                    "initial_value": region.get("kotter_channel") or "",
-                },
+                "optional": True,
+                "label": {"type": "plain_text", "text": "Kotter channel"},
+                "element": _channels_select_element(region.get("kotter_channel")),
             },
             {
                 "type": "input",
                 "block_id": "firstf_channel",
+                "optional": True,
                 "label": {"type": "plain_text", "text": "1stF channel for charts"},
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": "val",
-                    "initial_value": region.get("firstf_channel") or "",
-                },
+                "element": _channels_select_element(region.get("firstf_channel")),
             },
             {
                 "type": "input",
@@ -428,6 +429,11 @@ def _achievement_edit_modal(
     }
 
 
+def _selected_channel(state: dict, block_id: str) -> str:
+    block = state.get(block_id, {}).get("val", {})
+    return (block.get("selected_channel") or "").strip()
+
+
 def _parse_modal_values(payload: dict) -> dict:
     state = payload.get("view", {}).get("state", {}).get("values", {})
     features = [o["value"] for o in state.get("features", {}).get("features", {}).get("selected_options", [])]
@@ -436,9 +442,9 @@ def _parse_modal_values(payload: dict) -> dict:
         "send_achievements": 1 if "achievements" in features else 0,
         "send_aoq_reports": 1 if "kotter" in features else 0,
         "send_achievement_leaderboard": 1 if "leaderboard" in features else 0,
-        "achievement_channel": state.get("achievement_channel", {}).get("val", {}).get("value", "").strip(),
-        "kotter_channel": state.get("kotter_channel", {}).get("val", {}).get("value", "").strip(),
-        "firstf_channel": state.get("firstf_channel", {}).get("val", {}).get("value", "").strip(),
+        "achievement_channel": _selected_channel(state, "achievement_channel"),
+        "kotter_channel": _selected_channel(state, "kotter_channel"),
+        "firstf_channel": _selected_channel(state, "firstf_channel"),
         "send_pax_charts": 1 if "pax" in charts else 0,
         "send_q_charts": 1 if "q" in charts else 0,
         "send_region_leaderboard": 1 if "region_lb" in charts else 0,
@@ -516,220 +522,3 @@ def _selected_achievement_id(payload: dict) -> int | None:
     except (KeyError, TypeError, ValueError):
         return None
 
-
-def _region_context(payload: dict) -> tuple[str, str, dict | None]:
-    meta = _parse_metadata((payload.get("view") or {}).get("private_metadata"))
-    team_id = meta.get("team_id") or (payload.get("team") or {}).get("id", "")
-    regional_schema = meta.get("regional_schema", "")
-    pm = paxminer_schema_from_env()
-    conn = connect_from_env(_registry_db())
-    try:
-        with conn.cursor() as cur:
-            region = _region_for_team(cur, pm, team_id) if team_id else None
-        return team_id, regional_schema or (region or {}).get("schema_name", ""), region
-    finally:
-        conn.close()
-
-
-def handle_config_command(team_id: str, user_id: str, trigger_id: str) -> dict:
-    if not is_slack_admin(user_id):
-        return http_response(200, {"response_type": "ephemeral", "text": "Workspace admin required."})
-    pm = paxminer_schema_from_env()
-    conn = connect_from_env(_registry_db())
-    try:
-        with conn.cursor() as cur:
-            region = _region_for_team(cur, pm, team_id)
-        if not region:
-            return http_response(200, {"response_type": "ephemeral", "text": "No PAXMiner region linked to this workspace."})
-        region = dict(region)
-        region["team_id"] = team_id
-        token = decrypt_field(region["slack_token"]) if region.get("slack_token") else os.environ.get("PM_SLACK_TOKEN")
-        client = slack_client(token)
-        client.views_open(trigger_id=trigger_id, view=_config_modal(region))
-        return http_response(200, "")
-    finally:
-        conn.close()
-
-
-def handle_config_submit(payload: dict) -> dict:
-    user_id = (payload.get("user") or {}).get("id", "")
-    if not is_slack_admin(user_id):
-        return http_response(200, {"response_action": "errors", "errors": {"features": "Admin required"}})
-    team_id, _, region = _region_context(payload)
-    if not region:
-        return http_response(200, {"response_action": "errors", "errors": {"features": "Region not found"}})
-    values = _parse_modal_values(payload)
-    pm = paxminer_schema_from_env()
-    conn = connect_from_env(_registry_db())
-    try:
-        with conn.cursor() as cur:
-            sets = ", ".join(f"`{k}`=%s" for k in values)
-            cur.execute(
-                f"UPDATE `{pm}`.`regions` SET {sets} WHERE region=%s",
-                (*values.values(), region["region"]),
-            )
-            conn.commit()
-        return http_response(200, {"response_action": "clear"})
-    finally:
-        conn.close()
-
-
-def handle_config_block_actions(payload: dict) -> dict:
-    user_id = (payload.get("user") or {}).get("id", "")
-    if not is_slack_admin(user_id):
-        return http_response(200, {"response_type": "ephemeral", "text": "Admin required."})
-    action = ((payload.get("actions") or [{}])[0]).get("action_id", "")
-    team_id, regional_schema, region = _region_context(payload)
-    if not region or not regional_schema:
-        return http_response(200, {"response_type": "ephemeral", "text": "Region not found."})
-
-    pm = paxminer_schema_from_env()
-    conn = connect_from_env(_registry_db())
-    try:
-        with conn.cursor() as cur:
-            achievements = _load_achievements(cur, regional_schema)
-
-            if action == MANAGE_ACHIEVEMENTS_ACTION_ID:
-                view = _achievements_list_modal(team_id, regional_schema, achievements)
-                return http_response(200, {"response_action": "push", "view": view})
-
-            if action == ADD_ACHIEVEMENT_ACTION_ID:
-                view = _achievement_edit_modal(team_id, regional_schema, None)
-                return http_response(200, {"response_action": "push", "view": view})
-
-            selected_id = _selected_achievement_id(payload)
-            if action == EDIT_ACHIEVEMENT_ACTION_ID:
-                if not selected_id:
-                    return http_response(
-                        200,
-                        {"response_type": "ephemeral", "text": "Select an achievement to edit."},
-                    )
-                row = _load_achievement(cur, regional_schema, selected_id)
-                if not row:
-                    return http_response(200, {"response_type": "ephemeral", "text": "Achievement not found."})
-                view = _achievement_edit_modal(team_id, regional_schema, row)
-                return http_response(200, {"response_action": "push", "view": view})
-
-            if action == DELETE_ACHIEVEMENT_ACTION_ID:
-                if not selected_id:
-                    return http_response(
-                        200,
-                        {"response_type": "ephemeral", "text": "Select an achievement to delete."},
-                    )
-                cur.execute(
-                    f"SELECT COUNT(*) AS cnt FROM `{regional_schema}`.`achievements_awarded` "
-                    "WHERE achievement_id=%s",
-                    (selected_id,),
-                )
-                cnt = (cur.fetchone() or {}).get("cnt", 0)
-                if cnt:
-                    return http_response(
-                        200,
-                        {
-                            "response_type": "ephemeral",
-                            "text": f"Cannot delete: {cnt} award(s) reference this achievement.",
-                        },
-                    )
-                cur.execute(f"DELETE FROM `{regional_schema}`.`achievements_list` WHERE id=%s", (selected_id,))
-                conn.commit()
-                achievements = _load_achievements(cur, regional_schema)
-                view = _achievements_list_modal(team_id, regional_schema, achievements)
-                return http_response(200, {"response_action": "update", "view": view})
-    finally:
-        conn.close()
-
-    return http_response(400, {"ok": False, "error": "Unsupported action"})
-
-
-def handle_achievement_edit_submit(payload: dict) -> dict:
-    user_id = (payload.get("user") or {}).get("id", "")
-    if not is_slack_admin(user_id):
-        return http_response(200, {"response_action": "errors", "errors": {"name": "Admin required"}})
-    team_id, regional_schema, region = _region_context(payload)
-    if not region or not regional_schema:
-        return http_response(200, {"response_action": "errors", "errors": {"name": "Region not found"}})
-
-    meta = _parse_metadata((payload.get("view") or {}).get("private_metadata"))
-    achievement_id = meta.get("achievement_id")
-    values = _parse_achievement_form(payload)
-    errors = _validate_achievement(values)
-    if errors:
-        return http_response(200, {"response_action": "errors", "errors": errors})
-
-    conn = connect_from_env(_registry_db())
-    try:
-        with conn.cursor() as cur:
-            if achievement_id:
-                cur.execute(
-                    f"SELECT id FROM `{regional_schema}`.`achievements_list` "
-                    "WHERE code=%s AND id<>%s",
-                    (values["code"], achievement_id),
-                )
-            else:
-                cur.execute(
-                    f"SELECT id FROM `{regional_schema}`.`achievements_list` WHERE code=%s",
-                    (values["code"],),
-                )
-            if cur.fetchone():
-                return http_response(
-                    200,
-                    {"response_action": "errors", "errors": {"code": "Code already in use"}},
-                )
-
-            if achievement_id:
-                cur.execute(
-                    f"""
-                    UPDATE `{regional_schema}`.`achievements_list`
-                    SET name=%s, description=%s, verb=%s, code=%s,
-                        metric=%s, activity=%s, period=%s, threshold=%s
-                    WHERE id=%s
-                    """,
-                    (
-                        values["name"],
-                        values["description"],
-                        values["verb"],
-                        values["code"],
-                        values["metric"],
-                        values["activity"],
-                        values["period"],
-                        values["threshold"],
-                        achievement_id,
-                    ),
-                )
-            else:
-                cur.execute(
-                    f"""
-                    INSERT INTO `{regional_schema}`.`achievements_list`
-                    (name, description, verb, code, metric, activity, period, threshold)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        values["name"],
-                        values["description"],
-                        values["verb"],
-                        values["code"],
-                        values["metric"],
-                        values["activity"],
-                        values["period"],
-                        values["threshold"],
-                    ),
-                )
-            conn.commit()
-            achievements = _load_achievements(cur, regional_schema)
-            view = _achievements_list_modal(team_id, regional_schema, achievements)
-            return http_response(200, {"response_action": "update", "view": view})
-    finally:
-        conn.close()
-
-
-def handle_achievements_list_submit(payload: dict) -> dict:
-    """Close achievements sub-view and return to main settings."""
-    user_id = (payload.get("user") or {}).get("id", "")
-    if not is_slack_admin(user_id):
-        return http_response(200, {"response_action": "errors", "errors": {"achievement_pick": "Admin required"}})
-    team_id, _, region = _region_context(payload)
-    if not region:
-        return http_response(200, {"response_action": "clear"})
-    region = dict(region)
-    region["team_id"] = team_id
-    return http_response(200, {"response_action": "update", "view": _config_modal(region)})

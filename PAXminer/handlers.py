@@ -1,6 +1,9 @@
 """
 AWS Lambda entry points for PAXminer user/channel sync, monthly charts,
-achievements (daily + webhook), Kotter reports, and Slack interactivity.
+achievements (daily + webhook), and Kotter reports.
+
+Slack interactivity (/config-paxminer, /kotter-report) lives in slack_app.py
+on the lightweight SlackFunction.
 """
 
 from __future__ import annotations
@@ -25,25 +28,11 @@ for _p in (_ROOT, _ROOT / "database_management", _ROOT / "achievements", _ROOT /
         sys.path.insert(0, s)
 
 from common.encryption import decrypt_field, require_encryption_key
-from config_paxminer import (
-    ACHIEVEMENT_EDIT_CALLBACK_ID,
-    ACHIEVEMENTS_LIST_CALLBACK_ID,
-    CALLBACK_ID as CONFIG_CALLBACK_ID,
-    handle_achievement_edit_submit,
-    handle_achievements_list_submit,
-    handle_config_block_actions,
-    handle_config_command,
-    handle_config_submit,
-)
 from paxminer_db import connect_from_env, paxminer_schema_from_env
 from slack_http import (
-    KOTTER_SEND_ACTION_ID,
     http_response,
     is_http_request,
-    is_slack_admin,
-    parse_slack_body,
     raw_body,
-    verify_slack_request,
     verify_achievements_webhook_secret,
 )
 
@@ -99,42 +88,6 @@ def _load_charter_module(module_file_stem: str):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
-
-
-def _queue_manual_kotter(context) -> None:
-    import boto3
-
-    function_name = getattr(context, "invoked_function_arn", "") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "")
-    boto3.client("lambda").invoke(
-        FunctionName=function_name,
-        InvocationType="Event",
-        Payload=json.dumps({"source": "paxminer.kotter.manual"}).encode("utf-8"),
-    )
-
-
-def _kotter_slash_response() -> dict:
-    return {
-        "response_type": "ephemeral",
-        "text": "Kotter report controls",
-        "blocks": [
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": "*Kotter Reports*\nSend this month's Kotter report now."},
-            },
-            {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "Send Monthly Kotter Now"},
-                        "style": "primary",
-                        "action_id": KOTTER_SEND_ACTION_ID,
-                        "value": "send",
-                    }
-                ],
-            },
-        ],
-    }
 
 
 def sync_handler(event, context):
@@ -289,49 +242,12 @@ def achievements_handler(event, context):
 
 
 def kotter_handler(event, context):
+    """Scheduled / async-invoked Kotter runner (no Slack HTTP — see slack_app)."""
     logging.info("PAXminer kotter_handler start")
     from kotter.kotter_report import run_kotter
 
     pm = _pm_schema()
     registry_db = _registry_database()
-
-    if is_http_request(event):
-        headers = (event or {}).get("headers") or {}
-        body_str = raw_body(event)
-        if not verify_slack_request(headers, body_str):
-            return http_response(401, {"ok": False, "error": "Unauthorized"})
-        payload_type, payload = parse_slack_body(body_str)
-        if payload_type == "command":
-            cmd = payload.get("command", "")
-            user_id = payload.get("user_id", "")
-            team_id = payload.get("team_id", "")
-            trigger_id = payload.get("trigger_id", "")
-            if cmd == "/config-paxminer":
-                return handle_config_command(team_id, user_id, trigger_id)
-            if not is_slack_admin(user_id):
-                return http_response(200, {"response_type": "ephemeral", "text": "Admin required."})
-            return http_response(200, _kotter_slash_response())
-        if payload_type == "interactive":
-            if payload.get("type") == "block_actions":
-                return handle_config_block_actions(payload)
-            cb = (payload.get("view") or {}).get("callback_id")
-            if cb == CONFIG_CALLBACK_ID:
-                return handle_config_submit(payload)
-            if cb == ACHIEVEMENTS_LIST_CALLBACK_ID:
-                return handle_achievements_list_submit(payload)
-            if cb == ACHIEVEMENT_EDIT_CALLBACK_ID:
-                return handle_achievement_edit_submit(payload)
-            user_id = (payload.get("user") or {}).get("id", "")
-            action_id = (((payload.get("actions") or [{}])[0]).get("action_id") or "").strip()
-            if action_id == KOTTER_SEND_ACTION_ID:
-                if not is_slack_admin(user_id):
-                    return http_response(200, {"response_type": "ephemeral", "text": "Admin required."})
-                _queue_manual_kotter(context)
-                return http_response(
-                    200,
-                    {"response_type": "ephemeral", "text": "Manual Kotter send queued."},
-                )
-        return http_response(400, {"ok": False, "error": "Unsupported payload"})
 
     dry_run = (event or {}).get("source") == "smoke"
     conn = connect_from_env(registry_db)

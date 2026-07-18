@@ -1,15 +1,12 @@
-"""Slack HTTP verification and parsing for Function URL handlers."""
+"""HTTP helpers for Function URL handlers (achievements webhook + Slack keep-warm)."""
 
 from __future__ import annotations
 
 import base64
-import hashlib
 import hmac
 import json
 import logging
 import os
-from datetime import datetime, timezone
-from urllib.parse import parse_qs
 
 LOG = logging.getLogger(__name__)
 
@@ -43,26 +40,6 @@ def header_value(headers: dict, key: str) -> str:
     return ""
 
 
-def verify_slack_request(headers: dict, body: str) -> bool:
-    secret = os.environ.get("PM_SLACK_SIGNING_SECRET", "").strip()
-    if not secret:
-        LOG.error("PM_SLACK_SIGNING_SECRET is not configured")
-        return False
-    timestamp = header_value(headers, "X-Slack-Request-Timestamp")
-    signature = header_value(headers, "X-Slack-Signature")
-    if not timestamp or not signature:
-        return False
-    try:
-        age = abs(int(datetime.now(timezone.utc).timestamp()) - int(timestamp))
-    except ValueError:
-        return False
-    if age > 60 * 5:
-        return False
-    sig_basestring = f"v0:{timestamp}:{body}".encode("utf-8")
-    expected = "v0=" + hmac.new(secret.encode("utf-8"), sig_basestring, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
-
-
 def verify_achievements_webhook_secret(headers: dict) -> bool:
     expected = os.environ.get("PM_ACHIEVEMENTS_WEBHOOK_SECRET", "").strip()
     if not expected:
@@ -72,19 +49,14 @@ def verify_achievements_webhook_secret(headers: dict) -> bool:
     return hmac.compare_digest(expected, got)
 
 
-def parse_slack_body(body: str) -> tuple[str, dict]:
-    params = parse_qs(body, keep_blank_values=True)
-    if "payload" in params:
-        try:
-            return "interactive", json.loads(params["payload"][0])
-        except (KeyError, IndexError, json.JSONDecodeError):
-            return "invalid", {}
-    if "command" in params:
-        return "command", {k: v[0] if v else "" for k, v in params.items()}
-    return "invalid", {}
+def is_slack_admin(user_id: str, client=None) -> bool:
+    """Return True if the user is a workspace admin/owner.
 
-
-def is_slack_admin(user_id: str) -> bool:
+    Prefer a Bolt-injected ``client`` when available so we reuse one WebClient.
+    """
+    if client is not None:
+        user = client.users_info(user=user_id).get("user", {})
+        return bool(user.get("is_admin") or user.get("is_owner") or user.get("is_primary_owner"))
     token = os.environ.get("PM_SLACK_TOKEN", "").strip()
     if not token:
         return False
