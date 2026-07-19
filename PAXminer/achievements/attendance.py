@@ -117,7 +117,11 @@ def load_nation_attendance(conn, schemas: list[str]) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame()
     out = pd.concat(frames, ignore_index=True)
-    out["date"] = pd.to_datetime(out["date"])
+    out["date"] = pd.to_datetime(out["date"], errors="coerce")
+    bad = int(out["date"].isna().sum())
+    if bad:
+        LOG.warning("Dropping %s attendance rows with unparseable bd_date", bad)
+        out = out[out["date"].notna()].copy()
     out["backblast"] = out["backblast"].astype(str)
     out["ao"] = out["ao"].astype(str)
     return out

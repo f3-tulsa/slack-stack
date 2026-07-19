@@ -100,7 +100,13 @@ def run_kotter_for_region(
     if not nation_parts:
         return {"skipped": "no nation data"}
     nation = pd.concat(nation_parts, ignore_index=True)
-    nation["date"] = pd.to_datetime(nation["date"])
+    nation["date"] = pd.to_datetime(nation["date"], errors="coerce")
+    bad = int(nation["date"].isna().sum())
+    if bad:
+        LOG.warning("Dropping %s kotter rows with unparseable bd_date", bad)
+        nation = nation[nation["date"].notna()].copy()
+    if nation.empty:
+        return {"skipped": "no nation data"}
 
     home = attach_home_regions(conn, nation.copy(), schemas)
     if "user_id_y" in home.columns:

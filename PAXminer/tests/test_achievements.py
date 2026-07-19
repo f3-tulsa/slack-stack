@@ -47,6 +47,76 @@ def test_build_kotter_message_monthly_copy():
     assert blocks[0]["type"] == "header"
 
 
+def test_load_nation_attendance_coerces_bad_dates():
+    from achievements.attendance import load_nation_attendance
+
+    frame = pd.DataFrame(
+        {
+            "email": ["a@x.com", "b@x.com"],
+            "user_name": ["A", "B"],
+            "user_id": ["U1", "U2"],
+            "ao_id": ["C1", "C2"],
+            "ao": ["ao1", "ao2"],
+            "date": ["2026-07-01", "date"],
+            "q_flag": [0, 1],
+            "backblast": ["bb", "bb"],
+        }
+    )
+    with patch("achievements.attendance.pd.read_sql", return_value=frame):
+        out = load_nation_attendance(MagicMock(), ["f3ttown"])
+    assert len(out) == 1
+    assert str(out.iloc[0]["date"].date()) == "2026-07-01"
+
+
+def test_kotter_nation_coerces_bad_dates():
+    """Bad bd_date values must not abort run_kotter_for_region."""
+    from kotter import kotter_report as kotter_mod
+
+    bad_frame = pd.DataFrame(
+        {
+            "email": ["a@x.com", "b@x.com"],
+            "user_id": ["U1", "U2"],
+            "ao_id": ["C1", "C2"],
+            "ao": ["ao1", "ao2"],
+            "date": ["2026-07-01", "date"],
+            "q_flag": [0, 1],
+        }
+    )
+    region_row = {
+        "send_aoq_reports": 1,
+        "schema_name": "f3ttown",
+        "kotter_channel": "C_KOTTER",
+        "slack_token": "enc",
+        "region": "f3ttown",
+        "NO_POST_THRESHOLD": 2,
+        "REMINDER_WEEKS": 2,
+        "HOME_AO_CAPTURE": 8,
+        "NO_Q_THRESHOLD_WEEKS": 4,
+        "NO_Q_THRESHOLD_POSTS": 4,
+    }
+    conn = MagicMock()
+    cur = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cur
+    conn.cursor.return_value.__exit__.return_value = False
+    cur.fetchall.return_value = [{"schema_name": "f3ttown"}]
+
+    def _attach(_conn, df, _schemas):
+        out = df.copy()
+        out["region"] = "f3ttown"
+        return out
+
+    with (
+        patch.object(kotter_mod.pd, "read_sql", return_value=bad_frame),
+        patch.object(kotter_mod, "attach_home_regions", side_effect=_attach),
+        patch.object(kotter_mod, "build_kotter_message", return_value=("ok", [])),
+    ):
+        result = kotter_mod.run_kotter_for_region(
+            conn, "paxminer_test", region_row, dry_run=True, emit_paxminer_log=False
+        )
+    assert result.get("dry_run") is True
+    assert "error" not in result
+
+
 def test_leaderboard_tie_break_by_display_name():
     from achievements.leaderboard import build_leaderboard_message
 
