@@ -332,10 +332,6 @@ Resources:
         AuthType: NONE
       Policies:
         - Statement:
-            - Sid: InvokeKotter
-              Effect: Allow
-              Action: lambda:InvokeFunction
-              Resource: !GetAtt KotterFunction.Arn
             - Sid: InvokeSchedule
               Effect: Allow
               Action: lambda:InvokeFunction
@@ -359,7 +355,6 @@ Resources:
           F3_REGION_NAME: !Ref F3RegionName
           PM_SLACK_TOKEN: !Ref PmSlackToken
           PM_SLACK_SIGNING_SECRET: !Ref PmSlackSigningSecret
-          KOTTER_FUNCTION_NAME: !Ref KotterFunction
           SCHEDULE_FUNCTION_NAME: !Ref ScheduleFunction
           SLACKBLAST_SCHEMA: !Sub "slackblast_${Stage}"
     Metadata:

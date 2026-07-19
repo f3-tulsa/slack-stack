@@ -54,20 +54,19 @@ Achievement **grant/revoke** evaluation stays on the daily Achievements Lambda +
 | Surface | Trigger | Notes |
 |---------|---------|-------|
 | `/config-paxminer` hub | slash | admin-only; timezone + Achievements / Reports / Kotter / Schedule |
-| Schedule / Reports modals | hub buttons | line-item schedule, report builder, Delete All, Restore Defaults, Run Now |
-| `/kotter-report` | slash | manual Kotter send |
+| Schedule / Reports modals | hub buttons | line-item schedule, report builder, Delete All, Restore Defaults, Run Now (DMs result) |
 | App Home | `app_home_opened` | minimal stub; full dashboard later |
 
 ## Lambdas (six functions)
 
 | Function | Trigger | Role |
 |----------|---------|------|
-| **slack** | Function URL + keep-warm every 5 min | Bolt front door; async-invokes Kotter / Schedule for Run Now |
+| **slack** | Function URL + keep-warm every 5 min | Bolt front door; async-invokes ScheduleFunction for Run Now |
 | **sync** | Daily | User/channel sync |
 | **charts** | Monthly (skipped when dispatcher on) | Legacy chart fan-out |
 | **achievements** | Daily + webhook | Grant/revoke |
-| **kotter** | Monthly + async (manual still runs when dispatcher on) | Kotter generation |
-| **schedule** | `rate(15 minutes)` + async fan-out / Run Now | Unified dispatcher |
+| **kotter** | Monthly EventBridge (skipped when dispatcher on; smoke still runs) | Kotter generation |
+| **schedule** | `rate(15 minutes)` + async fan-out / Run Now | Unified dispatcher (manual Kotter via Run Now) |
 
 Function URL outputs: **`SlackFunctionUrl`**, **`AchievementsFunctionUrl`**.
 

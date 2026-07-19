@@ -2,7 +2,7 @@
 AWS Lambda entry points for PAXminer user/channel sync, monthly charts,
 achievements (daily + webhook), and Kotter reports.
 
-Slack interactivity (/config-paxminer, /kotter-report) lives in slack_app.py
+Slack interactivity (/config-paxminer and config modals) lives in slack_app.py
 on the lightweight SlackFunction.
 """
 
@@ -255,16 +255,11 @@ def kotter_handler(event, context):
     from kotter.kotter_report import run_kotter
     from schedule_runner import use_schedule_dispatcher
 
-    # Manual /kotter-report queue and smoke tests still run; monthly EventBridge
-    # is skipped when the unified schedule dispatcher owns cadence.
+    # Smoke tests still run; monthly EventBridge is skipped when the unified
+    # schedule dispatcher owns cadence. Manual Kotter is via Schedule Run Now.
     event = event or {}
     source = str(event.get("source") or "")
-    if use_schedule_dispatcher() and source not in (
-        "smoke",
-        "manual",
-        "slack",
-        "paxminer.kotter.manual",
-    ):
+    if use_schedule_dispatcher() and source != "smoke":
         logging.info("PM_USE_SCHEDULE_DISPATCHER set — skipping legacy kotter schedule")
         return http_response(200, {"ok": True, "skipped": "schedule_dispatcher"})
 

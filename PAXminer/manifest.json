@@ -16,12 +16,6 @@
     },
     "slash_commands": [
       {
-        "command": "/kotter-report",
-        "description": "Send or configure monthly Kotter reports",
-        "should_escape": false,
-        "url": "__HOSTNAME__"
-      },
-      {
         "command": "/config-paxminer",
         "description": "Configure PAXMiner channels, achievements, and charts",
         "should_escape": false,

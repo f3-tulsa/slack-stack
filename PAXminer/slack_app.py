@@ -1,14 +1,13 @@
 """
 Lightweight Slack Bolt front door for PAXMiner.
 
-Acks interactive requests quickly; heavy work (Kotter send, charts) is
-async-invoked on the existing heavy Lambdas. Keep-warm EventBridge pings
+Acks interactive requests quickly; heavy work (Schedule Run Now) is
+async-invoked on ScheduleFunction. Keep-warm EventBridge pings
 short-circuit before Bolt.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 
@@ -37,7 +36,7 @@ from config_paxminer import (
     _validate_achievement,
 )
 from paxminer_db import connect_from_env, paxminer_schema_from_env
-from slack_http import KOTTER_SEND_ACTION_ID, is_http_request, is_slack_admin
+from slack_http import is_http_request, is_slack_admin
 
 LOCAL_DEVELOPMENT = not os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
 
@@ -151,88 +150,6 @@ def handle_config_command(ack, body, client, logger, respond):
 
 
 app.command("/config-paxminer")(handle_config_command)
-
-
-def handle_kotter_command(ack, body, client, logger):
-    """Named listener for /kotter-report — importable for unit tests."""
-    user_id = body.get("user_id", "")
-    if not is_slack_admin(user_id, client=client):
-        ack(text="Admin required.", response_type="ephemeral")
-        return
-    ack(
-        response_type="ephemeral",
-        text="Kotter report controls",
-        blocks=[
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*Kotter Reports*\nSend this month's Kotter report now.",
-                },
-            },
-            {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "Send Monthly Kotter Now"},
-                        "style": "primary",
-                        "action_id": KOTTER_SEND_ACTION_ID,
-                        "value": "send",
-                    }
-                ],
-            },
-        ],
-    )
-
-
-app.command("/kotter-report")(handle_kotter_command)
-
-
-def _queue_manual_kotter() -> None:
-    import boto3
-
-    function_name = os.environ.get("KOTTER_FUNCTION_NAME", "").strip()
-    if not function_name:
-        raise RuntimeError("KOTTER_FUNCTION_NAME is not configured")
-    boto3.client("lambda").invoke(
-        FunctionName=function_name,
-        InvocationType="Event",
-        Payload=json.dumps({"source": "paxminer.kotter.manual"}).encode("utf-8"),
-    )
-
-
-def _retry_num(request) -> str | None:
-    if request is None:
-        return None
-    headers = getattr(request, "headers", None) or {}
-    value = headers.get("x-slack-retry-num")
-    if isinstance(value, (list, tuple)):
-        return value[0] if value else None
-    return value
-
-
-def handle_kotter_send_now(ack, body, client, respond, request, logger):
-    """Named listener for Send Monthly Kotter Now — importable for unit tests."""
-    user_id = (body.get("user") or {}).get("id", "")
-    if not is_slack_admin(user_id, client=client):
-        ack()
-        respond(text="Admin required.", response_type="ephemeral")
-        return
-
-    ack()
-    if _retry_num(request):
-        respond(text="Manual Kotter send already queued.", response_type="ephemeral")
-        return
-    try:
-        _queue_manual_kotter()
-        respond(text="Manual Kotter send queued.", response_type="ephemeral")
-    except Exception as exc:
-        logger.exception("Failed to queue Kotter: %s", exc)
-        respond(text=f"Failed to queue Kotter: {str(exc)[:300]}", response_type="ephemeral")
-
-
-app.action(KOTTER_SEND_ACTION_ID)(handle_kotter_send_now)
 
 
 def _region_context_from_body(body: dict) -> tuple[str, str, dict | None]:

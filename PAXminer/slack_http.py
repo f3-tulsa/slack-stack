@@ -10,8 +10,6 @@ import os
 
 LOG = logging.getLogger(__name__)
 
-KOTTER_SEND_ACTION_ID = "paxminer_kotter_send_now"
-
 
 def http_response(status_code: int, body: dict) -> dict:
     return {

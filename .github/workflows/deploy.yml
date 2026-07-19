@@ -451,12 +451,12 @@ jobs:
               "$ROOT/$app/manifest.json" "$ROOT/$app/manifest-${STAGE}.json" "$base"
             echo "Wrote $app/manifest-${STAGE}.json"
           }
-          PM_KOTTER="$(get_out "paxminer-${STAGE}" KotterFunctionUrl)"
-          if [[ -n "$PM_KOTTER" && "$PM_KOTTER" != "None" ]]; then
-            write_subst PAXminer "$PM_KOTTER"
+          PM_SLACK="$(get_out "paxminer-${STAGE}" SlackFunctionUrl)"
+          if [[ -n "$PM_SLACK" && "$PM_SLACK" != "None" ]]; then
+            write_subst PAXminer "$PM_SLACK"
           else
             cp "$ROOT/PAXminer/manifest.json" "$ROOT/PAXminer/manifest-${STAGE}.json"
-            echo "WARN: KotterFunctionUrl missing; copied PAXminer manifest"
+            echo "WARN: SlackFunctionUrl missing; copied PAXminer manifest"
           fi
           SB_FULL="$(get_out "slackblast-${STAGE}" SlackblastApi)"
           SB_BASE="$(api_base "$SB_FULL")"

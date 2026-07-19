@@ -36,7 +36,7 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 | `IMAGE_S3_BUCKET` | Globally unique S3 bucket name for slackblast backblast images and **qsignups weinke** calendar PNGs under `weinkes/` (the slackblast stack creates this bucket) |
 | `F3_REGION_NAME` | F3 region key stored in `paxminer_<stage>.regions.region` (e.g. `f3ttown`); regional DB schema is `{F3_REGION_NAME}_{STAGE}` |
 | `PM_SLACK_TOKEN` | PAXMiner Slack **bot** token; SAM passes to Lambdas, which **encrypt** and **upsert** into `paxminer_<stage>.regions.slack_token` on cold start |
-| `PM_SLACK_SIGNING_SECRET` | PAXMiner Slack **signing secret** for the lightweight **SlackFunction** Bolt front door (`/config-paxminer`, `/kotter-report`) |
+| `PM_SLACK_SIGNING_SECRET` | PAXMiner Slack **signing secret** for the lightweight **SlackFunction** Bolt front door (`/config-paxminer` and interactivity) |
 | `PM_ACHIEVEMENTS_WEBHOOK_SECRET` | Shared secret for Slackblast → PAXMiner achievements Function URL (`X-Paxminer-Achievements-Webhook-Secret` header). Same rules as **`DB_ENCRYPTION_KEY`**: any random string, **min 16 characters** (see **Database encryption** for generate commands). |
 | `PM_REGIONAL_SCHEMA` | Optional; QSignups Site Q sync (first schema if comma-separated, e.g. `f3ttown_test`) |
 | `F3_REGION_SLACK_TEAM_ID` | Slack workspace Team ID (e.g. `T01234567`) |
@@ -174,7 +174,7 @@ aws lambda invoke --function-name paxminer-test-paxminer-charts \
   --cli-binary-format raw-in-base64-out --payload '{}' /tmp/pm-charts.json && cat /tmp/pm-charts.json
 ```
 
-Admins can manually send Kotter from Slack via **`/kotter-report`** (SlackFunction acks and async-invokes the Kotter Lambda). Slash commands and interactivity use **`SlackFunctionUrl`** from the PAXMiner manifest.
+Admins can manually send Kotter (and other reports) from Slack via **`/config-paxminer` → Schedule → Run Now** (SlackFunction acks and async-invokes **ScheduleFunction** for that one schedule item). Slash commands and interactivity use **`SlackFunctionUrl`** from the PAXMiner manifest.
 
 With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if needed.
 
@@ -186,8 +186,9 @@ With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if nee
    - `/config-paxminer` — modal opens, **no** empty `""` ephemeral
    - **PAX Achievements** hub button — push modal works; Save persists
    - Channel fields are dropdowns (not raw IDs)
-   - `/kotter-report` → Send Now — queues (ephemeral “queued”)
+   - **Schedule → Run Now** — runs immediately; admin receives a result DM
 4. Confirm deploy smoke includes `paxminer-<stage>-paxminer-slack` warm ping (`statusCode: 200`).
+5. Re-apply the stage Slack app from **`PAXminer/manifest-<stage>.json`** after removing slash commands so Slack drops stale `/kotter-report`.
 
 ### Weaselbot → PAXMiner cutover checklist
 

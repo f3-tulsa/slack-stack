@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 os.environ.setdefault("DB_ENCRYPTION_KEY", "test-encryption-key-32chars!!")
 os.environ.setdefault("PM_SLACK_TOKEN", "xoxb-test-token")
 os.environ.setdefault("PM_SLACK_SIGNING_SECRET", "test-signing-secret-16")
-os.environ.setdefault("KOTTER_FUNCTION_NAME", "paxminer-test-paxminer-kotter")
 os.environ.setdefault("STAGE", "test")
 
 
@@ -168,46 +167,6 @@ def test_config_submit_clear_on_success():
                     handle_config_submit(ack, body, client, logger)
 
     ack.assert_called_once_with(response_action="clear")
-
-
-def test_kotter_send_invokes_async():
-    from slack_app import handle_kotter_send_now
-
-    ack = MagicMock()
-    client = MagicMock()
-    respond = MagicMock()
-    request = MagicMock()
-    request.headers = {}
-    logger = MagicMock()
-    body = {"user": {"id": "U1"}}
-
-    with patch("slack_app.is_slack_admin", return_value=True):
-        with patch("slack_app._queue_manual_kotter") as mock_queue:
-            handle_kotter_send_now(ack, body, client, respond, request, logger)
-
-    ack.assert_called_once_with()
-    mock_queue.assert_called_once()
-    assert "queued" in respond.call_args.kwargs.get("text", "").lower()
-
-
-def test_kotter_send_retry_does_not_invoke():
-    from slack_app import handle_kotter_send_now
-
-    ack = MagicMock()
-    client = MagicMock()
-    respond = MagicMock()
-    request = MagicMock()
-    request.headers = {"x-slack-retry-num": ["1"]}
-    logger = MagicMock()
-    body = {"user": {"id": "U1"}}
-
-    with patch("slack_app.is_slack_admin", return_value=True):
-        with patch("slack_app._queue_manual_kotter") as mock_queue:
-            handle_kotter_send_now(ack, body, client, respond, request, logger)
-
-    ack.assert_called_once_with()
-    mock_queue.assert_not_called()
-    assert "already queued" in respond.call_args.kwargs.get("text", "").lower()
 
 
 def _assert_modals_with_inputs_have_submit(views: list[dict]) -> None:
