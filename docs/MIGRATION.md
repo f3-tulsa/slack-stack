@@ -14,7 +14,15 @@ The main script is **`migration/migrate_data.py`**. It can:
 
 ### Weaselbot → PAXMiner cutover
 
-Run **`migration/migrate_weaselbot_to_paxminer.py --env <stage>`** to copy Weaselbot config columns into `paxminer_<stage>.regions`, add achievement rule columns on regional `achievements_list`, and seed default rules. Re-runs skip config/seed writes once columns exist; pass **`--force`** to re-upsert achievement seeds (and re-copy config only while `weaselbot_<stage>` still exists). When ready, **`--drop-weaselbot-schema`** drops the old schema. A receipt under `migration/receipts/` includes the full console log. See **[DEPLOY.md](DEPLOY.md)** cutover checklist.
+Run **`python migration/paxminer_migrate.py --env <stage> --all`** to orchestrate all PAXMiner DB phases:
+
+1. **weaselbot** — copy Weaselbot config into `paxminer_<stage>.regions`, add achievement rule columns on regional `achievements_list`, seed default rules.
+2. **scheduler** — create schedule tables, seed builtin definitions/schedules from `PAXminer/report_defaults.json`.
+3. **drop-legacy-columns** — remove deprecated `send_*` and channel columns from `regions`.
+
+Deploy updated Slackblast + PAXMiner application code **before** `--all` (or before `drop-legacy-columns` alone). Re-runs are idempotent; pass **`--force`** on the weaselbot phase to re-upsert achievement seeds. When ready, **`--drop-weaselbot-schema`** drops the old schema. A receipt under `migration/receipts/` includes the full console log. See **[DEPLOY.md](DEPLOY.md)** cutover checklist.
+
+Individual phases: `--phase weaselbot`, `--phase scheduler`, or `--phase drop-legacy-columns`. Legacy scripts `migrate_weaselbot_to_paxminer.py` and `add_report_scheduler.py` are deprecated wrappers around these phases.
 
 ## Setup
 
@@ -25,9 +33,9 @@ Run **`migration/migrate_weaselbot_to_paxminer.py --env <stage>`** to copy Wease
 ## Recommended order
 
 1. `python migration/migrate_data.py --env test` (or `--env prod`).
-2. `python migration/migrate_weaselbot_to_paxminer.py --env test` (if migrating from Weaselbot).
-3. **(Test only, optional)** `python migration/remap_qsignups.py --env test --csv path/to/mapping.csv` if channel/team IDs differ from source.
-4. **Deploy** — `./deploy.sh --env test|prod` so the image bucket exists (slackblast stack).
+2. **Deploy** — `./deploy.sh --env test|prod` so the image bucket exists and updated PAXMiner/Slackblast code is live.
+3. `python migration/paxminer_migrate.py --env test --all` (if migrating from Weaselbot or upgrading schedule schema).
+4. **(Test only, optional)** `python migration/remap_qsignups.py --env test --csv path/to/mapping.csv` if channel/team IDs differ from source.
 5. **`python migration/migrate_images.py --env test|prod`** if the bucket was not available during step 1.
 
 ## Artifacts
@@ -36,7 +44,7 @@ Reports and checkpoints are written under `migration/` (often gitignored). Human
 
 ## After migration
 
-Continue with **[DEPLOY.md](DEPLOY.md)** for Slack OAuth install URLs, `CREATE_OAUTH_TABLES` one-shot flags, and smoke tests.
+Continue with **[DEPLOY.md](DEPLOY.md)** for Slack OAuth install URLs, `CREATE_OAUTH_TABLES` one-shot flags, Schedule channel setup, and smoke tests.
 
 ## Environment reference
 

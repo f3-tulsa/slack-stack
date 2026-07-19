@@ -28,8 +28,8 @@ agents). Cursor also loads these alongside `.cursor/rules/`.
 Review and add/update tests as part of the **same** change — not a follow-up.
 
 - **Dev / unit tests** — run in CI (`.github/workflows/ci.yml`), e.g.
-  `PAXminer/tests/` via `pytest`. Add or adjust coverage for new behavior and
-  regressions.
+  `PAXminer/tests/` and `migration/tests/` via `pytest`. Add or adjust coverage
+  for new behavior and regressions.
 - **Deploy smoke tests** — kept-warm Lambda invokes in `run_smoke_test_lambdas`
   / `invoke_one` in `deploy.sh`. Update these when adding functions or changing
   deploy-time behavior.

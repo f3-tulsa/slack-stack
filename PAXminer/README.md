@@ -6,11 +6,11 @@ Part of the **[slack-stack](../README.md)** monorepo. Deploy with SAM (`PAXminer
 
 PAXminer pulls workout (“backblast”) data from regional Slack workspaces, normalizes it, and stores it in a shared MySQL/TiDB database. It also generates charts and stats, runs **data-driven achievements** (grant, revoke, leaderboard, almost-there), and sends **Kotter** reports.
 
-Each region has its own **schema** in the same database; registry rows in `paxminer.regions` point Lambdas at the right schema, channels, toggles, timezone, and encrypted Slack token. Deploy passes **`PM_SLACK_TOKEN`**, **`PM_SLACK_SIGNING_SECRET`**, **`PM_ACHIEVEMENTS_WEBHOOK_SECRET`**, **`F3_REGION_NAME`**, and **`STAGE`** via SAM; the Lambda **encrypts** the bot token with **`DB_ENCRYPTION_KEY`** and **upserts** it into `paxminer.regions` on cold start.
+Each region has its own **schema** in the same database; registry rows in `paxminer.regions` point Lambdas at the right schema, timezone, achievement toggles, and encrypted Slack token. Deploy passes **`PM_SLACK_TOKEN`**, **`PM_SLACK_SIGNING_SECRET`**, **`PM_ACHIEVEMENTS_WEBHOOK_SECRET`**, **`F3_REGION_NAME`**, and **`STAGE`** via SAM; the Lambda **encrypts** the bot token with **`DB_ENCRYPTION_KEY`** and **upserts** it into `paxminer.regions` on cold start.
 
 ## Scheduling (unified)
 
-When **`PM_USE_SCHEDULE_DISPATCHER=true`**, posting cadence and destinations come from PAXMiner-owned tables (not the legacy `send_*` flags):
+Posting cadence and destinations come from PAXMiner-owned schedule tables (always-on; no feature flag):
 
 | Table | Role |
 |-------|------|
@@ -18,61 +18,59 @@ When **`PM_USE_SCHEDULE_DISPATCHER=true`**, posting cadence and destinations com
 | `paxminer.region_schedules` | When/where (destination, frequency, `time_of_day`, enabled) |
 | `paxminer.regions.timezone` | Region TZ (default `America/Chicago`) for due-now evaluation |
 
-`ScheduleFunction` ticks every **15 minutes**, evaluates region-local now, and runs due items (idempotent via `last_run_on` / `last_run_status`). Configure via `/config-paxminer` → **Schedule**. **Restore Defaults** merges builtin schedule rows; **Delete All** clears schedules first if you want a clean reseed.
+`ScheduleFunction` ticks every **15 minutes**, evaluates region-local now, and runs due items (idempotent via `last_run_on` / `last_run_status`). Configure via `/config-paxminer` → **Schedule**. **Restore Defaults** merges builtin schedule rows from **`report_defaults.json`** (all six builtins enabled); **Delete All** clears schedules first if you want a clean reseed.
 
-Legacy columns `firstf_channel`, `achievement_channel`, `kotter_channel` and `send_*` flags remain for seeding / cutover fallback and are **deprecated** as the primary config surface.
+Builtin defaults seed **`specific_channels`** destinations with an **empty** channel list — those items stay **skipped** until an admin picks a channel under Schedule. `dm_all_pax` and `all_ao_channels` destinations fan out immediately once due.
 
-Migration: `migration/add_report_scheduler.py --env test|prod`.
+Migration: `python migration/paxminer_migrate.py --env test|prod --all` (phases: weaselbot → scheduler → drop-legacy-columns). Deploy updated Slackblast + PAXMiner code **before** `--all`. Legacy scripts `migrate_weaselbot_to_paxminer.py` and `add_report_scheduler.py` are deprecated wrappers.
+
+**Production cutover order:** (1) deploy updated Slackblast + PAXMiner code, (2) run `paxminer_migrate.py --all`, (3) set Schedule channels and disable any unwanted fan-out.
 
 ## What PAXMiner posts
 
 ### Text messages (channels + DMs)
 
-| Message | When (legacy / schedule) | Enabled by (legacy flag) | Destination(s) | Config channel (legacy) |
-|---------|--------------------------|--------------------------|----------------|-------------------------|
-| Achievement **granted** (+ emoji reaction) | Daily achievements run | `send_achievements` | Achievement channel **and** a DM to the PAX (+ the AO channel if `post_to_ao`) | `achievement_channel` |
-| Achievement **revoked** | Daily achievements run | `send_achievements` | Achievement channel (+ AO channel if `post_to_ao`) | `achievement_channel` |
-| **Achievement leaderboard (YTD)** | Monthly / schedule | `send_achievement_leaderboard` | Schedule destinations (default: achievement channel) | `achievement_channel` |
-| **"Almost there"** progress list | With leaderboard | `send_achievement_leaderboard` | Same as leaderboard | `achievement_channel` |
-| **Kotter / AOQ report** | Monthly / schedule + manual | `send_aoq_reports` | Schedule destinations (default: kotter channel) | `kotter_channel` |
+| Message | When | Enabled by | Destination(s) |
+|---------|------|------------|----------------|
+| Achievement **granted** (+ emoji reaction) | Daily achievements run | `send_achievements` | Achievement channel **and** a DM to the PAX (+ the AO channel if `post_to_ao`) |
+| Achievement **revoked** | Daily achievements run | `send_achievements` | Achievement channel (+ AO channel if `post_to_ao`) |
+| **Achievement leaderboard (YTD)** | Schedule (default: monthly) | Schedule row `enabled` | Schedule destinations |
+| **"Almost there"** progress list | With leaderboard | Schedule row `enabled` | Same as leaderboard |
+| **Kotter / AOQ report** | Schedule + **Run Now** | Schedule row `enabled` | Schedule destinations |
 
-Achievement **grant/revoke** evaluation stays on the daily Achievements Lambda + webhook (not the unified schedule).
+Daily achievement **grant/revoke** uses `achievement_channel` from `/config-paxminer` (not the schedule). Leaderboards, Kotter, and charts are schedule-driven.
 
 ### Chart images (`files_upload_v2`)
 
-| Chart | When (legacy / schedule) | Enabled by (legacy flag) | Destination(s) | Config channel (legacy) |
-|-------|--------------------------|--------------------------|----------------|-------------------------|
-| **PAX attendance** charts | Monthly / schedule | `send_pax_charts` | **DM to each PAX** (or specific PAX) | gated by `firstf_channel` historically |
-| **Q charts per AO** | Monthly / schedule | `send_q_charts` | **Each AO channel** or specific channels | per-AO `channel_id` |
-| **Q region summary** | Monthly / schedule | `send_q_charts` | Region / specific channels | `firstf_channel` |
-| **Region leaderboard** | Monthly / schedule | `send_region_leaderboard` | Specific / AO channels | `firstf_channel` |
-| **AO leaderboard** | Monthly / schedule | `send_ao_leaderboard` | **Each AO channel** or specific | per-AO `channel_id` |
-| **Custom reports** | Schedule only | (definition) | Chart PNG or Block Kit table | schedule destinations |
+| Chart | When | Destination(s) |
+|-------|------|----------------|
+| **PAX attendance** charts | Schedule (default: monthly) | **DM to each PAX** (or specific PAX) |
+| **Q charts per AO** | Schedule | **Each AO channel** or specific channels |
+| **Q region summary** | Schedule | Region / specific channels |
+| **Region leaderboard** | Schedule | Specific / AO channels |
+| **AO leaderboard** | Schedule | **Each AO channel** or specific |
+| **Custom reports** | Schedule | Chart PNG or Block Kit table |
 
 ### Interactive / ephemeral
 
 | Surface | Trigger | Notes |
 |---------|---------|-------|
-| `/config-paxminer` hub | slash | admin-only; timezone + Achievements / Reports / Kotter / Schedule |
+| `/config-paxminer` hub | slash | admin-only; timezone + Achievements on Save; hub buttons for Reports / Kotter thresholds / Schedule |
 | Schedule / Reports modals | hub buttons | line-item schedule, report builder, Delete All, Restore Defaults, Run Now (DMs result) |
 | App Home | `app_home_opened` | minimal stub; full dashboard later |
 
-## Lambdas (six functions)
+## Lambdas (four functions)
 
 | Function | Trigger | Role |
 |----------|---------|------|
 | **slack** | Function URL + keep-warm every 5 min | Bolt front door; async-invokes ScheduleFunction for Run Now |
 | **sync** | Daily | User/channel sync |
-| **charts** | Monthly (skipped when dispatcher on) | Legacy chart fan-out |
 | **achievements** | Daily + webhook | Grant/revoke |
-| **kotter** | Monthly EventBridge (skipped when dispatcher on; smoke still runs) | Kotter generation |
-| **schedule** | `rate(15 minutes)` + async fan-out / Run Now | Unified dispatcher (manual Kotter via Run Now) |
+| **schedule** | `rate(15 minutes)` + async fan-out / Run Now | Unified dispatcher for charts, leaderboards, Kotter, and custom reports |
 
 Function URL outputs: **`SlackFunctionUrl`**, **`AchievementsFunctionUrl`**.
 
-Cutover: migrate DB → deploy with `PM_USE_SCHEDULE_DISPATCHER=false` → seed/UI → set `true` → legacy monthly Chart/Kotter EventBridge becomes no-op.
-
-**Run Now:** Schedule list → select item → **Run Now** async-invokes ScheduleFunction immediately (`force=True`), even when `PM_USE_SCHEDULE_DISPATCHER` is off (the tick stays gated). The worker DMs the requesting admin with success / skipped / error (no `paxminer_logs` post for manual runs), and the list shows `last_run_status` / `last_run_on`. The Slack app **Messages** tab must stay enabled (`messages_tab_enabled: true`) so those DMs are visible.
+**Run Now:** Schedule list → select item → **Run Now** async-invokes ScheduleFunction immediately (`force=True`). The worker DMs the requesting admin with success / skipped / error (no `paxminer_logs` post for manual runs), and the list shows `last_run_status` / `last_run_on`. The Slack app **Messages** tab must stay enabled (`messages_tab_enabled: true`) so those DMs are visible.
 
 ### Operational log (`paxminer_logs`)
 
@@ -82,8 +80,6 @@ Best-effort lines in the region's `#paxminer_logs` channel (same channel used by
 |-------|----------------|
 | Achievement granted / revoked | `- Achievement (Tulsa): granted 'Ironman' to <@U…>` |
 | Achievement region failure | `- Achievement (Tulsa): FAILED - …` |
-| Kotter posted (legacy batch) | `- Kotter report (Tulsa): posted to <#C…> (n MIA, …)` |
-| Kotter region failure | `- Kotter report (Tulsa): FAILED - …` |
 | Automatic schedule run | `- Schedule (Tulsa) #3 (kotter): success - posted to 1 channel(s)` |
 
 Manual **Run Now** does **not** post here; the admin gets a DM instead.
@@ -108,4 +104,5 @@ Use **[manifest.json](manifest.json)**. After deploy, **`manifest-{test|prod}.js
 
 ```bash
 cd PAXminer && python -m pytest tests/ -q
+pytest -q migration/tests   # from repo root (orchestrator unit tests)
 ```

@@ -58,7 +58,7 @@ All deploy configuration is driven by environment variables. Copy [`.env.deploy.
 
 ### PAXMiner and Slack
 
-**PAXMiner** uses **`PM_SLACK_TOKEN`** and **`PM_SLACK_SIGNING_SECRET`**. Signing secret and slash/interactivity traffic go to the lightweight **SlackFunction** (Bolt, kept warm every 5 minutes). Heavy workers (sync/charts/achievements/kotter) get the bot token; on **Lambda cold start** they encrypt with **`DB_ENCRYPTION_KEY`** and **upsert** into **`paxminer_<stage>.regions`**. Achievements webhook auth uses **`PM_ACHIEVEMENTS_WEBHOOK_SECRET`** on both PAXMiner and slackblast Lambdas.
+**PAXMiner** uses **`PM_SLACK_TOKEN`** and **`PM_SLACK_SIGNING_SECRET`**. Signing secret and slash/interactivity traffic go to the lightweight **SlackFunction** (Bolt, kept warm every 5 minutes). Heavy workers (sync/achievements/schedule) get the bot token; on **Lambda cold start** they encrypt with **`DB_ENCRYPTION_KEY`** and **upsert** into **`paxminer_<stage>.regions`**. Achievements webhook auth uses **`PM_ACHIEVEMENTS_WEBHOOK_SECRET`** on both PAXMiner and slackblast Lambdas.
 
 **slackblast** (`SB_*`) and **qsignups** (`QS_*`) use their own Slack (and Google) env vars as below.
 
@@ -117,7 +117,7 @@ If you skip this, slash commands and modals can fail (e.g. missing auth, `expire
 Scheduled PAXMiner Lambdas read **`slack_token`**, channel IDs, and feature toggles from **`paxminer_<stage>.regions`**. Slackblast links via **`slackblast_<stage>.regions.paxminer_schema`** and invokes the achievements Function URL after backblast writes when URL + webhook secret are configured.
 
 - Ensure **`PM_SLACK_TOKEN`**, **`PM_SLACK_SIGNING_SECRET`**, **`PM_ACHIEVEMENTS_WEBHOOK_SECRET`**, **`F3_REGION_NAME`**, and **`STAGE`** are set on deploy.
-- Configure channels, Kotter thresholds, charts, and achievement catalog via **`/config-paxminer`** (workspace admin).
+- Configure timezone, daily achievements, report schedules, Kotter thresholds, and achievement catalog via **`/config-paxminer`** (workspace admin).
 - Optional AO celebration: **`/config-slackblast` → General** when PAXMiner is linked.
 
 ### Manual Lambda invocation (PAXMiner)
@@ -129,11 +129,10 @@ The **GitHub Actions** deploy workflow runs a **smoke-test** step that synchrono
 - `paxminer-<stage>-paxminer-sync` — `{}` (**live** sync — intended)
 - `paxminer-<stage>-paxminer-slack` — `{}` (**warm path** — confirms the Bolt image boots; returns `body: "warm"`)
 - `paxminer-<stage>-paxminer-achievements` — `{"source":"smoke"}` (**dry-run** — no awards/Slack posts)
-- `paxminer-<stage>-paxminer-kotter` — `{"source":"smoke"}` (**dry-run**)
-- `paxminer-<stage>-paxminer-schedule` — `{"source":"smoke","dry_run":true}` (**dry-run** due list)
 - `paxminer-<stage>-paxminer-achievements` — `{"source":"smoke","feature":"achievement_leaderboard"}` (**dry-run**)
+- `paxminer-<stage>-paxminer-schedule` — `{"source":"smoke","dry_run":true}` (**dry-run** due list)
 
-Any invoke with `"source":"smoke"` evaluates only and returns counts; bare `{}` remains the live EventBridge/scheduled path for achievements and Kotter. The SlackFunction warm ping does not forge Slack signatures — use the manual Slack smoke checklist after cutover.
+Any invoke with `"source":"smoke"` evaluates only and returns counts; bare `{}` remains the live EventBridge/scheduled path for sync and achievements. The SlackFunction warm ping does not forge Slack signatures — use the manual Slack smoke checklist after cutover.
 
 To **manually trigger** the same Lambdas (replace `test` with your stage):
 
@@ -155,26 +154,19 @@ aws lambda invoke \
   /tmp/pm-ach.json && cat /tmp/pm-ach.json
 
 aws lambda invoke \
-  --function-name paxminer-test-paxminer-kotter \
-  --cli-binary-format raw-in-base64-out \
-  --payload '{"source":"smoke"}' \
-  /tmp/pm-kotter.json && cat /tmp/pm-kotter.json
-
-aws lambda invoke \
   --function-name paxminer-test-paxminer-achievements \
   --cli-binary-format raw-in-base64-out \
   --payload '{"source":"smoke","feature":"achievement_leaderboard"}' \
   /tmp/pm-lb.json && cat /tmp/pm-lb.json
+
+aws lambda invoke \
+  --function-name paxminer-test-paxminer-schedule \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{"source":"smoke","dry_run":true}' \
+  /tmp/pm-schedule.json && cat /tmp/pm-schedule.json
 ```
 
-Optional: monthly charts:
-
-```bash
-aws lambda invoke --function-name paxminer-test-paxminer-charts \
-  --cli-binary-format raw-in-base64-out --payload '{}' /tmp/pm-charts.json && cat /tmp/pm-charts.json
-```
-
-Admins can manually send Kotter (and other reports) from Slack via **`/config-paxminer` → Schedule → Run Now** (SlackFunction acks and async-invokes **ScheduleFunction** for that one schedule item; the worker DMs the admin the outcome). Run Now works even when **`PM_USE_SCHEDULE_DISPATCHER`** is off (only the 15-minute tick is gated). Slash commands and interactivity use **`SlackFunctionUrl`** from the PAXMiner manifest.
+Admins can manually send Kotter (and other reports) from Slack via **`/config-paxminer` → Schedule → Run Now** (SlackFunction acks and async-invokes **ScheduleFunction** for that one schedule item; the worker DMs the admin the outcome). Slash commands and interactivity use **`SlackFunctionUrl`** from the PAXMiner manifest.
 
 With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if needed.
 
@@ -192,16 +184,16 @@ With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if nee
 
 ### Weaselbot → PAXMiner cutover checklist
 
-1. Run **`migration/migrate_weaselbot_to_paxminer.py --env <stage>`** (copy config + achievement rule columns).
-2. Deploy **PAXMiner** then **slackblast** (CI waits for PAXMiner when both run so **`AchievementsFunctionUrl`** is available).
+1. Deploy **PAXMiner** then **slackblast** (CI waits for PAXMiner when both run so **`AchievementsFunctionUrl`** is available).
+2. Run **`python migration/paxminer_migrate.py --env <stage> --all`** (weaselbot fold-in, scheduler tables/seed, drop legacy `regions` columns). Deploy updated application code **before** this step.
 3. Update **PAXMiner** Slack app from **`PAXminer/manifest-<stage>.json`** (**`SlackFunctionUrl`**, `reactions:write`).
 4. Re-install or verify **slackblast** OAuth if needed; confirm achievement webhook env on slackblast Lambda.
-5. Configure **`/config-paxminer`** (channels, toggles, achievement catalog).
+5. Configure **`/config-paxminer`**: achievement channel/toggles, then **Schedule** destinations (set channels for `specific_channels` rows; disable any unwanted fan-out).
 6. Smoke-invoke the PAXMiner Lambdas (see above) and run the Slack Bolt manual smoke.
 7. **Uninstall** the legacy WeaselBot Slack app from the workspace.
-8. When stable, drop **`weaselbot_<stage>`** schema and delete any remaining **weaselbot** CloudFormation stack (optional `--drop-weaselbot-schema` on migration script).
+8. When stable, drop **`weaselbot_<stage>`** schema and delete any remaining **weaselbot** CloudFormation stack (optional `--drop-weaselbot-schema` on the weaselbot phase).
 
-**Free tier note:** Six container Lambdas (including the kept-warm Slack front door and the 15-minute schedule tick) plus Function URLs and EventBridge schedules fit typical light regional usage, but monitor Lambda invocations, log storage, and ECR if you run multiple stages. Set **`PM_USE_SCHEDULE_DISPATCHER=true`** only after running `migration/add_report_scheduler.py` and verifying Schedule UI / dry-run smoke.
+**Free tier note:** Four container Lambdas (including the kept-warm Slack front door and the 15-minute schedule tick) plus Function URLs and EventBridge schedules fit typical light regional usage, but monitor Lambda invocations, log storage, and ECR if you run multiple stages.
 
 ### Manual Lambda invocation (qsignups)
 
@@ -340,7 +332,7 @@ Same names as in `.env.deploy.*` for `deploy.sh` (where applicable):
 - **`RUN_EXTEND_SCHEDULE=true`** — QSignups extend-schedule nonce (only affects **qsignups** when that job runs).
 - **`ENABLE_XRAY=true`** — X-Ray on slackblast and qsignups (when those jobs run).
 
-CI and `deploy.sh` always run `sam build` with **`--no-cached`**. Post-deploy **smoke tests** (only when PAXMiner was deployed in that run) invoke live sync plus dry-run achievements, Kotter, and leaderboard (`"source":"smoke"` — no Slack posts or award writes).
+CI and `deploy.sh` always run `sam build` with **`--no-cached`**. Post-deploy **smoke tests** (only when PAXMiner was deployed in that run) invoke live sync plus dry-run achievements, achievement leaderboard, and schedule due-list (`"source":"smoke"` — no Slack posts or award writes).
 
 ### After deploy
 
