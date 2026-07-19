@@ -246,7 +246,11 @@ def is_due_today(schedule: dict[str, Any], local_date: date) -> bool:
 
 
 def already_ran_successfully(schedule: dict[str, Any], local_date: date) -> bool:
-    """Skip when last_run_on is today and status is not error."""
+    """Skip when last_run_on is today and status is success.
+
+    ``running``, ``skipped``, ``error``, or empty status do not count — a crashed
+    Run Now must not block the scheduled tick for the rest of the day.
+    """
     last_run = schedule.get("last_run_on")
     if last_run is None:
         return False
@@ -257,7 +261,7 @@ def already_ran_successfully(schedule: dict[str, Any], local_date: date) -> bool
     if last_run != local_date:
         return False
     status = (schedule.get("last_run_status") or "").strip().lower()
-    return status != "error"
+    return status == "success"
 
 
 def is_due_now(
@@ -321,4 +325,17 @@ def format_schedule_summary(schedule: dict[str, Any], definition: dict[str, Any]
     freq = schedule.get("frequency_type") or "?"
     tod = parse_time_of_day(schedule.get("time_of_day"))
     enabled = "on" if schedule.get("enabled") else "off"
-    return f"*{name}* — {dest} / {freq} @ {tod.strftime('%H:%M')} ({enabled})"
+    line = f"*{name}* — {dest} / {freq} @ {tod.strftime('%H:%M')} ({enabled})"
+    status = (schedule.get("last_run_status") or "").strip()
+    last_on = schedule.get("last_run_on")
+    if status or last_on:
+        if isinstance(last_on, datetime):
+            last_s = last_on.date().isoformat()
+        elif isinstance(last_on, date):
+            last_s = last_on.isoformat()
+        elif last_on:
+            last_s = str(last_on)[:10]
+        else:
+            last_s = "?"
+        line += f" — last run: {status or '?'} ({last_s})"
+    return line

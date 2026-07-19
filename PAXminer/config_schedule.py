@@ -180,6 +180,7 @@ def _schedules_list_modal(
     timezone_name: str = "America/Chicago",
     page: int = 0,
     notice: str | None = None,
+    selected_schedule_id: int | None = None,
 ) -> dict:
     blocks: list[dict] = []
     if notice:
@@ -205,24 +206,30 @@ def _schedules_list_modal(
             for s in page_rows
         ]
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}})
+        options = [
+            _opt(
+                str(s["id"]),
+                f"{s.get('definition_name') or s['id']} ({'on' if s.get('enabled') else 'off'})",
+            )
+            for s in page_rows
+        ]
+        pick_element: dict = {
+            "type": "static_select",
+            "action_id": SELECT_SCHEDULE_ACTION_ID,
+            "placeholder": {"type": "plain_text", "text": "Choose…"},
+            "options": options,
+        }
+        if selected_schedule_id is not None:
+            initial = _find_option(options, str(selected_schedule_id))
+            if initial:
+                pick_element["initial_option"] = initial
         blocks.append(
             {
                 "type": "input",
                 "block_id": "schedule_pick",
                 "optional": True,
                 "label": {"type": "plain_text", "text": "Select schedule item"},
-                "element": {
-                    "type": "static_select",
-                    "action_id": SELECT_SCHEDULE_ACTION_ID,
-                    "placeholder": {"type": "plain_text", "text": "Choose…"},
-                    "options": [
-                        _opt(
-                            str(s["id"]),
-                            f"{s.get('definition_name') or s['id']} ({'on' if s.get('enabled') else 'off'})",
-                        )
-                        for s in page_rows
-                    ],
-                },
+                "element": pick_element,
             }
         )
     else:

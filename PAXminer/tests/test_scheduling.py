@@ -74,6 +74,15 @@ def test_already_ran_successfully():
         {"last_run_on": date(2026, 7, 19), "last_run_status": "error"},
         date(2026, 7, 19),
     )
+    # Crashed / in-flight Run Now must not block the tick
+    assert not already_ran_successfully(
+        {"last_run_on": date(2026, 7, 19), "last_run_status": "running"},
+        date(2026, 7, 19),
+    )
+    assert not already_ran_successfully(
+        {"last_run_on": date(2026, 7, 19), "last_run_status": "skipped"},
+        date(2026, 7, 19),
+    )
 
 
 def test_custom_interval_days():
@@ -154,3 +163,160 @@ def test_reports_list_and_edit_modals_have_submit():
     ):
         assert view.get("type") == "modal"
         assert view.get("submit")
+
+
+def test_format_schedule_summary_includes_last_run():
+    from scheduling import format_schedule_summary
+
+    line = format_schedule_summary(
+        {
+            "id": 3,
+            "destination_type": "specific_channels",
+            "frequency_type": "weekly",
+            "time_of_day": "13:00:00",
+            "enabled": 1,
+            "last_run_status": "success",
+            "last_run_on": date(2026, 7, 18),
+        },
+        {"name": "Kotter"},
+    )
+    assert "Kotter" in line
+    assert "last run: success (2026-07-18)" in line
+
+
+def test_schedules_list_preserves_selected_option():
+    from config_schedule import SELECT_SCHEDULE_ACTION_ID, _schedules_list_modal
+
+    schedules = [
+        {
+            "id": 9,
+            "definition_name": "Kotter",
+            "destination_type": "specific_channels",
+            "frequency_type": "weekly",
+            "time_of_day": "07:00:00",
+            "enabled": 1,
+            "last_run_status": "skipped",
+            "last_run_on": date(2026, 7, 18),
+        }
+    ]
+    view = _schedules_list_modal(
+        "T1", "f3test", schedules, selected_schedule_id=9
+    )
+    pick = next(b for b in view["blocks"] if b.get("block_id") == "schedule_pick")
+    assert pick["element"]["action_id"] == SELECT_SCHEDULE_ACTION_ID
+    assert pick["element"]["initial_option"]["value"] == "9"
+    assert "last run: skipped" in view["blocks"][1]["text"]["text"]
+
+
+def test_format_run_result_variants():
+    from schedule_runner import format_run_result
+
+    text, _ = format_run_result(
+        {"schedule_id": 1, "report_type": "kotter", "ok": True, "channel_count": 2, "duration_s": 1.5}
+    )
+    assert "success" in text and "2 channel" in text
+
+    text, _ = format_run_result(
+        {"schedule_id": 2, "report_type": "kotter", "ok": True, "skipped": "no destinations configured"}
+    )
+    assert "skipped" in text and "no destinations" in text
+
+    text, _ = format_run_result(
+        {"schedule_id": 3, "report_type": "kotter", "ok": False, "error": "boom"}
+    )
+    assert "failed" in text and "boom" in text
+
+
+def test_resolve_destinations_empty_specific_channels():
+    from schedule_runner import resolve_destinations
+
+    assert resolve_destinations(
+        None,
+        {"destination_type": "specific_channels", "destination_channels": []},
+    ) == []
+    assert resolve_destinations(
+        None,
+        {"destination_type": "specific_channels", "destination_channels": "[]"},
+    ) == []
+
+
+def test_dispatch_skips_empty_specific_channels_without_expanding():
+    from unittest.mock import MagicMock, patch
+
+    from schedule_runner import _dispatch_report
+
+    region = {"schema_name": "f3test", "slack_token": "enc"}
+    schedule = {
+        "destination_type": "specific_channels",
+        "destination_channels": [],
+    }
+    definition = {"report_type": "pax_charts"}
+    mock_conn = MagicMock()
+    with patch("schedule_runner.connect_from_env", return_value=mock_conn):
+        with patch("schedule_runner.decrypt_field", return_value="xoxb-test"):
+            with patch("monthly_charts.PAXcharter.run_pax_charter") as mock_pax:
+                result = _dispatch_report(None, "paxminer_test", region, schedule, definition)
+    assert result.get("skipped") == "no destinations configured"
+    mock_pax.assert_not_called()
+
+
+def test_queue_run_now_payload_includes_notify_user():
+    import json
+    from unittest.mock import MagicMock, patch
+
+    import slack_schedule
+
+    mock_client = MagicMock()
+    with patch.dict("os.environ", {"SCHEDULE_FUNCTION_NAME": "paxminer-test-schedule"}):
+        with patch("boto3.client", return_value=mock_client):
+            slack_schedule.queue_run_now(42, "U123")
+    kwargs = mock_client.invoke.call_args.kwargs
+    assert kwargs["InvocationType"] == "Event"
+    payload = json.loads(kwargs["Payload"].decode("utf-8"))
+    assert payload == {
+        "source": "run_now",
+        "schedule_id": 42,
+        "force": True,
+        "notify_user": "U123",
+    }
+
+
+def test_schedule_handler_notifies_user_on_completion():
+    import json
+    from unittest.mock import MagicMock, patch
+
+    from handlers import schedule_handler
+
+    result = {"schedule_id": 7, "ok": True, "report_type": "kotter", "channel_count": 1}
+    row = {"id": 7, "schema_name": "f3test", "report_definition_id": 1}
+    region = {"schema_name": "f3test", "slack_token": "enc"}
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchone.side_effect = [row, region]
+
+    with patch("handlers.connect_from_env", return_value=mock_conn):
+        with patch("handlers._pm_schema", return_value="paxminer_test"):
+            with patch("handlers._registry_database", return_value="paxminer_test"):
+                with patch(
+                    "schedule_runner.run_one_schedule_item", return_value=result
+                ) as mock_run:
+                    with patch("schedule_runner.notify_run_result") as mock_notify:
+                        resp = schedule_handler(
+                            {
+                                "source": "run_now",
+                                "schedule_id": 7,
+                                "force": True,
+                                "notify_user": "U9",
+                            },
+                            None,
+                        )
+    assert resp["statusCode"] == 200
+    body = json.loads(resp["body"])
+    assert body["ok"] is True
+    mock_run.assert_called_once()
+    mock_notify.assert_called_once()
+    assert mock_notify.call_args.args[1] == "U9"
+    assert mock_notify.call_args.args[2] == result

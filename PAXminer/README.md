@@ -72,6 +72,8 @@ Function URL outputs: **`SlackFunctionUrl`**, **`AchievementsFunctionUrl`**.
 
 Cutover: migrate DB → deploy with `PM_USE_SCHEDULE_DISPATCHER=false` → seed/UI → set `true` → legacy monthly Chart/Kotter EventBridge becomes no-op.
 
+**Run Now:** Schedule list → select item → **Run Now** async-invokes ScheduleFunction immediately (`force=True`), even when `PM_USE_SCHEDULE_DISPATCHER` is off (the tick stays gated). The worker DMs the requesting admin with success / skipped / error, and the list shows `last_run_status` / `last_run_on`.
+
 ## Slack app manifest
 
 Use **[manifest.json](manifest.json)**. After deploy, **`manifest-{test|prod}.json`** substitutes **`SlackFunctionUrl`**. Includes **App Home** + `app_home_opened`. Do **not** add `incoming-webhook`.

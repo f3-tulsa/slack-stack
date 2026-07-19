@@ -65,6 +65,27 @@ from slack_http import is_slack_admin
 LOG = logging.getLogger(__name__)
 
 
+def queue_run_now(schedule_id: int, user_id: str) -> None:
+    """Async-invoke ScheduleFunction for a forced Run Now (DMs ``user_id`` on completion)."""
+    import boto3
+
+    fn = os.environ.get("SCHEDULE_FUNCTION_NAME", "").strip()
+    if not fn:
+        raise RuntimeError("SCHEDULE_FUNCTION_NAME not configured")
+    boto3.client("lambda").invoke(
+        FunctionName=fn,
+        InvocationType="Event",
+        Payload=json.dumps(
+            {
+                "source": "run_now",
+                "schedule_id": int(schedule_id),
+                "force": True,
+                "notify_user": user_id or "",
+            }
+        ).encode("utf-8"),
+    )
+
+
 def register_schedule_listeners(app) -> None:
     """Attach schedule/report listeners to a Bolt App."""
 
@@ -81,7 +102,16 @@ def register_schedule_listeners(app) -> None:
         ack()
         return True
 
-    def _refresh_schedule_list(client, body, team_id, regional_schema, region, notice=None, page=0):
+    def _refresh_schedule_list(
+        client,
+        body,
+        team_id,
+        regional_schema,
+        region,
+        notice=None,
+        page=0,
+        selected_id=None,
+    ):
         pm = paxminer_schema_from_env()
         conn = connect_from_env(
             os.environ.get("PAXMINER_REGISTRY_DATABASE")
@@ -100,6 +130,7 @@ def register_schedule_listeners(app) -> None:
                     timezone_name=region.get("timezone") or "America/Chicago",
                     page=page,
                     notice=notice,
+                    selected_schedule_id=selected_id,
                 ),
             )
         finally:
@@ -432,32 +463,22 @@ def register_schedule_listeners(app) -> None:
                 client, body, team_id, regional_schema, region or {}, notice="Select a schedule item first."
             )
             return
-        import boto3
-
-        fn = os.environ.get("SCHEDULE_FUNCTION_NAME", "").strip()
-        if not fn:
-            _refresh_schedule_list(
-                client,
-                body,
-                team_id,
-                regional_schema,
-                region,
-                notice="SCHEDULE_FUNCTION_NAME not configured.",
-            )
-            return
+        user_id = (body.get("user") or {}).get("id", "")
         try:
-            boto3.client("lambda").invoke(
-                FunctionName=fn,
-                InvocationType="Event",
-                Payload=json.dumps(
-                    {"source": "run_now", "schedule_id": sid, "force": True}
-                ).encode("utf-8"),
-            )
-            notice = f"Queued Run Now for schedule #{sid}."
+            queue_run_now(sid, user_id)
+            notice = f"Running schedule #{sid} now — I'll DM you the result."
         except Exception as exc:
             logger.exception("Run Now failed")
             notice = f"Run Now failed: {str(exc)[:200]}"
-        _refresh_schedule_list(client, body, team_id, regional_schema, region, notice=notice)
+        _refresh_schedule_list(
+            client,
+            body,
+            team_id,
+            regional_schema,
+            region,
+            notice=notice,
+            selected_id=sid,
+        )
 
     @app.action("paxminer_schedule_page_prev")
     @app.action("paxminer_schedule_page_next")

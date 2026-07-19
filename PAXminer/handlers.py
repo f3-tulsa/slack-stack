@@ -302,6 +302,9 @@ def schedule_handler(event, context):
 
     # Fan-out / Run Now path
     if event.get("schedule_id") is not None:
+        from schedule_runner import notify_run_result
+
+        notify_user = (event.get("notify_user") or "").strip()
         conn = connect_from_env(registry_db)
         try:
             with conn.cursor() as cur:
@@ -311,6 +314,13 @@ def schedule_handler(event, context):
                 )
                 row = cur.fetchone()
             if not row:
+                result = {
+                    "schedule_id": event.get("schedule_id"),
+                    "ok": False,
+                    "error": "not found",
+                }
+                if notify_user:
+                    notify_run_result(None, notify_user, result)
                 return {"statusCode": 404, "body": json.dumps({"ok": False, "error": "not found"})}
             result = run_one_schedule_item(
                 conn,
@@ -319,10 +329,32 @@ def schedule_handler(event, context):
                 dry_run=dry_run,
                 force=bool(event.get("force")),
             )
+            if notify_user:
+                region = None
+                schema_name = row.get("schema_name") or ""
+                if schema_name:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            f"SELECT * FROM `{pm}`.`regions` WHERE schema_name=%s LIMIT 1",
+                            (schema_name,),
+                        )
+                        region = cur.fetchone()
+                notify_run_result(region, notify_user, result)
             return {"statusCode": 200, "body": json.dumps({"ok": True, "result": result})}
         except Exception:
             logging.exception("schedule item failed")
-            return {"statusCode": 500, "body": json.dumps({"ok": False, "error": traceback.format_exc()})}
+            err_body = {"ok": False, "error": traceback.format_exc()}
+            if notify_user:
+                notify_run_result(
+                    None,
+                    notify_user,
+                    {
+                        "schedule_id": event.get("schedule_id"),
+                        "ok": False,
+                        "error": "schedule item failed (see CloudWatch)",
+                    },
+                )
+            return {"statusCode": 500, "body": json.dumps(err_body)}
         finally:
             conn.close()
 

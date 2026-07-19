@@ -174,7 +174,7 @@ aws lambda invoke --function-name paxminer-test-paxminer-charts \
   --cli-binary-format raw-in-base64-out --payload '{}' /tmp/pm-charts.json && cat /tmp/pm-charts.json
 ```
 
-Admins can manually send Kotter (and other reports) from Slack via **`/config-paxminer` → Schedule → Run Now** (SlackFunction acks and async-invokes **ScheduleFunction** for that one schedule item). Slash commands and interactivity use **`SlackFunctionUrl`** from the PAXMiner manifest.
+Admins can manually send Kotter (and other reports) from Slack via **`/config-paxminer` → Schedule → Run Now** (SlackFunction acks and async-invokes **ScheduleFunction** for that one schedule item; the worker DMs the admin the outcome). Run Now works even when **`PM_USE_SCHEDULE_DISPATCHER`** is off (only the 15-minute tick is gated). Slash commands and interactivity use **`SlackFunctionUrl`** from the PAXMiner manifest.
 
 With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if needed.
 

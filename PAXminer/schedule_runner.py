@@ -112,6 +112,74 @@ def _load_region(conn, pm_schema: str, schema_name: str) -> dict | None:
         return cur.fetchone()
 
 
+def _result_status(dispatch_result: dict | None) -> str:
+    """Map a producer return value to last_run_status."""
+    if not isinstance(dispatch_result, dict):
+        return "success"
+    if dispatch_result.get("skipped"):
+        return "skipped"
+    if dispatch_result.get("ok") is False or dispatch_result.get("error"):
+        return "error"
+    if "delivered" in dispatch_result and int(dispatch_result.get("delivered") or 0) == 0:
+        return "skipped"
+    return "success"
+
+
+def format_run_result(result: dict) -> tuple[str, list[dict] | None]:
+    """Human-readable summary for Run Now result DMs."""
+    sid = result.get("schedule_id")
+    report_type = result.get("report_type") or "?"
+    duration = result.get("duration_s")
+    dur = f" ({duration}s)" if duration is not None else ""
+    if result.get("dry_run"):
+        text = f"Schedule #{sid} ({report_type}): dry run — would run{dur}."
+        return text, None
+    if result.get("error") and not result.get("ok", True):
+        text = f"Schedule #{sid} ({report_type}): *failed*{dur}\n`{str(result.get('error'))[:500]}`"
+        return text, None
+    skipped = result.get("skipped") or (result.get("result") or {}).get("skipped")
+    if skipped:
+        text = f"Schedule #{sid} ({report_type}): *skipped* — {skipped}{dur}"
+        return text, None
+    channels = result.get("channel_count")
+    users = result.get("user_count")
+    dest_bits = []
+    if channels is not None:
+        dest_bits.append(f"{channels} channel(s)")
+    if users is not None:
+        dest_bits.append(f"{users} user DM(s)")
+    dest = (", ".join(dest_bits) if dest_bits else "destinations resolved")
+    text = f"Schedule #{sid} ({report_type}): *success* — posted to {dest}{dur}."
+    return text, None
+
+
+def notify_run_result(
+    region: dict | None,
+    user_id: str,
+    result: dict,
+    *,
+    token: str | None = None,
+) -> None:
+    """DM the requesting admin with the Run Now outcome. Never raises."""
+    if not user_id:
+        return
+    try:
+        tok = token
+        if not tok and region and region.get("slack_token"):
+            tok = decrypt_field(region["slack_token"])
+        if not tok:
+            tok = (os.environ.get("PM_SLACK_TOKEN") or "").strip() or None
+        if not tok:
+            LOG.warning("notify_run_result: no Slack token available")
+            return
+        text, blocks = format_run_result(result)
+        client = slack_client(tok)
+        dm = open_dm_channel(client, user_id)
+        post_message(client, dm, text, blocks=blocks)
+    except Exception:
+        LOG.exception("notify_run_result failed user_id=%s", user_id)
+
+
 def run_one_schedule_item(
     registry_conn,
     pm_schema: str,
@@ -126,6 +194,13 @@ def run_one_schedule_item(
     schema_name = schedule.get("schema_name") or ""
     region = _load_region(registry_conn, pm_schema, schema_name)
     if not region:
+        try:
+            tz_guess = "America/Chicago"
+            mark_schedule_status(
+                registry_conn, pm_schema, schedule_id, region_local_now(tz_guess).date(), "error"
+            )
+        except Exception:
+            LOG.exception("mark error status failed schedule_id=%s", schedule_id)
         return {"schedule_id": schedule_id, "ok": False, "error": "region not found"}
 
     tz_name = region.get("timezone") or "America/Chicago"
@@ -137,6 +212,7 @@ def run_one_schedule_item(
 
     definition = _load_definition(registry_conn, pm_schema, int(schedule["report_definition_id"]))
     if not definition:
+        mark_schedule_status(registry_conn, pm_schema, schedule_id, local_date, "error")
         return {"schedule_id": schedule_id, "ok": False, "error": "definition not found"}
 
     report_type = definition.get("report_type") or ""
@@ -166,14 +242,22 @@ def run_one_schedule_item(
             schedule,
             definition,
         )
-        mark_schedule_status(registry_conn, pm_schema, schedule_id, local_date, "success")
-        return {
+        status = _result_status(result)
+        mark_schedule_status(registry_conn, pm_schema, schedule_id, local_date, status)
+        out = {
             "schedule_id": schedule_id,
-            "ok": True,
+            "ok": status != "error",
             "report_type": report_type,
             "result": result,
+            "status": status,
             "duration_s": round(time.time() - started, 2),
+            "channel_count": result.get("channel_count") if isinstance(result, dict) else None,
+            "user_count": result.get("user_count") if isinstance(result, dict) else None,
         }
+        if status == "skipped":
+            out["skipped"] = (result or {}).get("skipped") or "no delivery"
+            out["ok"] = True
+        return out
     except Exception as e:
         LOG.exception(
             "schedule failed schema=%s schedule_id=%s report_type=%s",
@@ -187,6 +271,7 @@ def run_one_schedule_item(
             "ok": False,
             "report_type": report_type,
             "error": str(e),
+            "status": "error",
             "duration_s": round(time.time() - started, 2),
         }
 
@@ -207,6 +292,7 @@ def _dispatch_report(
     token = decrypt_field(token_enc)
     report_type = definition["report_type"]
     plot_dir = os.environ.get("CHART_PLOT_DIR", "/tmp/paxminer_plots")
+    dest_type = schedule.get("destination_type") or ""
 
     regional = connect_from_env(schema_name)
     try:
@@ -214,61 +300,97 @@ def _dispatch_report(
         channel_ids = [t["id"] for t in targets if t["kind"] == "channel"]
         user_ids = [t["id"] for t in targets if t["kind"] == "user"]
 
+        # Empty configured destinations = skip (do not fall back to "all users" / legacy).
+        if dest_type in ("specific_channels", "dm_specific_pax") and not targets:
+            return {
+                "skipped": "no destinations configured",
+                "channel_count": 0,
+                "user_count": 0,
+            }
+        if dest_type == "all_ao_channels" and not channel_ids:
+            return {"skipped": "no AO channels found", "channel_count": 0, "user_count": 0}
+        if dest_type == "dm_all_pax" and not user_ids:
+            return {"skipped": "no PAX users found", "channel_count": 0, "user_count": 0}
+        if not targets and dest_type:
+            return {
+                "skipped": "no destinations configured",
+                "channel_count": 0,
+                "user_count": 0,
+            }
+
         if report_type == "pax_charts":
             from monthly_charts.PAXcharter import run_pax_charter
 
-            return run_pax_charter(
+            # Pass the list as-is (including empty). Never coerce [] → None (all users).
+            result = run_pax_charter(
                 regional,
                 token,
                 schema_name,
                 plot_dir=plot_dir,
-                user_ids=user_ids or None,
+                user_ids=user_ids,
             )
+            if isinstance(result, dict):
+                result = dict(result)
+                result.setdefault("user_count", len(user_ids))
+                result.setdefault("channel_count", 0)
+            return result
         if report_type == "q_charts":
             from monthly_charts.Qcharter import run_q_charter
 
-            return run_q_charter(
+            result = run_q_charter(
                 regional,
                 token,
                 schema_name,
                 region.get("region") or schema_name,
-                channel_ids[0] if channel_ids else (region.get("firstf_channel") or ""),
+                channel_ids[0] if channel_ids else "",
                 plot_dir=plot_dir,
-                destinations=channel_ids or None,
-                post_per_ao=(schedule.get("destination_type") == "all_ao_channels"),
+                destinations=channel_ids,
+                post_per_ao=(dest_type == "all_ao_channels"),
             )
+            if isinstance(result, dict):
+                result = dict(result)
+                result.setdefault("channel_count", len(channel_ids))
+            return result
         if report_type == "region_leaderboard":
             from monthly_charts.Leaderboard_Charter import run_region_leaderboard
 
-            dest = channel_ids[0] if channel_ids else (region.get("firstf_channel") or "")
-            return run_region_leaderboard(
+            dest = channel_ids[0] if channel_ids else ""
+            result = run_region_leaderboard(
                 regional,
                 token,
                 schema_name,
                 region.get("region") or schema_name,
                 dest,
                 plot_dir=plot_dir,
-                destinations=channel_ids or None,
+                destinations=channel_ids,
             )
+            if isinstance(result, dict):
+                result = dict(result)
+                result.setdefault("channel_count", len(channel_ids))
+            return result
         if report_type == "ao_leaderboard":
             from monthly_charts.LeaderboardByAO_Charter import run_ao_leaderboard
 
-            return run_ao_leaderboard(
+            result = run_ao_leaderboard(
                 regional,
                 token,
                 schema_name,
                 region.get("region") or schema_name,
-                region.get("firstf_channel") or "",
+                channel_ids[0] if channel_ids else "",
                 plot_dir=plot_dir,
-                destinations=channel_ids or None,
-                post_per_ao=(schedule.get("destination_type") == "all_ao_channels"),
+                destinations=channel_ids,
+                post_per_ao=(dest_type == "all_ao_channels"),
             )
+            if isinstance(result, dict):
+                result = dict(result)
+                result.setdefault("channel_count", len(channel_ids))
+            return result
         if report_type == "achievement_leaderboard":
             from achievements.leaderboard import run_leaderboard_for_region
 
-            # Temporarily override achievement_channel for multi-dest delivery.
+            region = dict(region)
+            region["send_achievement_leaderboard"] = 1
             if channel_ids:
-                region = dict(region)
                 region["achievement_channel"] = channel_ids[0]
             result = run_leaderboard_for_region(registry_conn, pm_schema, region)
             client = slack_client(token)
@@ -278,6 +400,9 @@ def _dispatch_report(
                         post_message(client, cid, result["text"], blocks=result.get("blocks"))
                     except Exception:
                         LOG.exception("extra achievement_leaderboard post failed channel=%s", cid)
+            if isinstance(result, dict):
+                result = dict(result)
+                result.setdefault("channel_count", len(channel_ids))
             return result
         if report_type == "kotter":
             from kotter.kotter_report import run_kotter_for_region
@@ -286,6 +411,12 @@ def _dispatch_report(
             region["send_aoq_reports"] = 1
             if channel_ids:
                 region["kotter_channel"] = channel_ids[0]
+            elif not region.get("kotter_channel"):
+                return {
+                    "skipped": "no destinations configured",
+                    "channel_count": 0,
+                    "user_count": 0,
+                }
             result = run_kotter_for_region(registry_conn, pm_schema, region, dry_run=False)
             client = slack_client(token)
             if len(channel_ids) > 1 and result.get("text"):
@@ -294,9 +425,12 @@ def _dispatch_report(
                         post_message(client, cid, result["text"], blocks=result.get("blocks"))
                     except Exception:
                         LOG.exception("extra kotter post failed channel=%s", cid)
+            if isinstance(result, dict):
+                result = dict(result)
+                result.setdefault("channel_count", len(channel_ids) or (1 if region.get("kotter_channel") else 0))
             return result
         if report_type == "custom_report":
-            return run_custom_report(
+            result = run_custom_report(
                 regional,
                 token,
                 schema_name,
@@ -306,6 +440,11 @@ def _dispatch_report(
                 timezone_name=region.get("timezone"),
                 plot_dir=plot_dir,
             )
+            if isinstance(result, dict):
+                result = dict(result)
+                result.setdefault("channel_count", len(channel_ids))
+                result.setdefault("user_count", len(user_ids))
+            return result
         raise RuntimeError(f"unknown report_type={report_type}")
     finally:
         regional.close()
