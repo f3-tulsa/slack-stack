@@ -31,7 +31,8 @@ PAXMiner runs in the background and in Slack admin flows:
 - **Leaderboard / almost-there:** Monthly YTD top-10 and “almost there” nudges in the achievement channel (when enabled).
 - **Kotter reports:** Monthly posting/Q reminders to the Kotter channel.
 - **`/config-paxminer`** (workspace admins): Timezone, Achievements / Reports / Kotter / Schedule hubs (including Schedule **Run Now** for a single report item), and legacy seed fields until schedule cutover.
-- Manual Kotter (and other reports): use **Schedule → select item → Run Now** (one region / one schedule item). There is no `/kotter-report` slash command.
+- Manual Kotter (and other reports): use **Schedule → select item → Run Now** (one region / one schedule item). There is no `/kotter-report` slash command. Run Now DMs you the result in the PAXMiner **Messages** tab; it does not post to `#paxminer_logs`.
+- **`#paxminer_logs`:** Operational summaries for automatic runs — achievement grants/revokes, Kotter posts, and scheduled report success/skip/failure (with error detail on failure). Open that channel to audit background activity.
 
 There is no `/tag-achievement` command; awards are computed from attendance data, not manual tags.
 

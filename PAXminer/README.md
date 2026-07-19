@@ -72,11 +72,25 @@ Function URL outputs: **`SlackFunctionUrl`**, **`AchievementsFunctionUrl`**.
 
 Cutover: migrate DB → deploy with `PM_USE_SCHEDULE_DISPATCHER=false` → seed/UI → set `true` → legacy monthly Chart/Kotter EventBridge becomes no-op.
 
-**Run Now:** Schedule list → select item → **Run Now** async-invokes ScheduleFunction immediately (`force=True`), even when `PM_USE_SCHEDULE_DISPATCHER` is off (the tick stays gated). The worker DMs the requesting admin with success / skipped / error, and the list shows `last_run_status` / `last_run_on`.
+**Run Now:** Schedule list → select item → **Run Now** async-invokes ScheduleFunction immediately (`force=True`), even when `PM_USE_SCHEDULE_DISPATCHER` is off (the tick stays gated). The worker DMs the requesting admin with success / skipped / error (no `paxminer_logs` post for manual runs), and the list shows `last_run_status` / `last_run_on`. The Slack app **Messages** tab must stay enabled (`messages_tab_enabled: true`) so those DMs are visible.
+
+### Operational log (`paxminer_logs`)
+
+Best-effort lines in the region's `#paxminer_logs` channel (same channel used by beatdown/user sync):
+
+| Event | Example line |
+|-------|----------------|
+| Achievement granted / revoked | `- Achievement (Tulsa): granted 'Ironman' to <@U…>` |
+| Achievement region failure | `- Achievement (Tulsa): FAILED - …` |
+| Kotter posted (legacy batch) | `- Kotter report (Tulsa): posted to <#C…> (n MIA, …)` |
+| Kotter region failure | `- Kotter report (Tulsa): FAILED - …` |
+| Automatic schedule run | `- Schedule (Tulsa) #3 (kotter): success - posted to 1 channel(s)` |
+
+Manual **Run Now** does **not** post here; the admin gets a DM instead.
 
 ## Slack app manifest
 
-Use **[manifest.json](manifest.json)**. After deploy, **`manifest-{test|prod}.json`** substitutes **`SlackFunctionUrl`**. Includes **App Home** + `app_home_opened`. Do **not** add `incoming-webhook`.
+Use **[manifest.json](manifest.json)**. After deploy, **`manifest-{test|prod}.json`** substitutes **`SlackFunctionUrl`**. Includes **App Home** (Home + Messages tabs) + `app_home_opened`. Do **not** add `incoming-webhook`.
 
 ## Layout (high level)
 
