@@ -108,14 +108,6 @@ def sync_handler(event, context):
 def chart_handler(event, context):
     logging.info("PAXminer chart_handler start")
     from paxminer_db import connect_from_env
-    from schedule_runner import use_schedule_dispatcher
-
-    if use_schedule_dispatcher():
-        logging.info("PM_USE_SCHEDULE_DISPATCHER set — skipping legacy chart_handler")
-        return {
-            "statusCode": 200,
-            "body": json.dumps({"ok": True, "skipped": "schedule_dispatcher"}),
-        }
 
     pm = _pm_schema()
     registry_db = _registry_database()
@@ -253,16 +245,8 @@ def kotter_handler(event, context):
     """Scheduled / async-invoked Kotter runner (no Slack HTTP — see slack_app)."""
     logging.info("PAXminer kotter_handler start")
     from kotter.kotter_report import run_kotter
-    from schedule_runner import use_schedule_dispatcher
 
-    # Smoke tests still run; monthly EventBridge is skipped when the unified
-    # schedule dispatcher owns cadence. Manual Kotter is via Schedule Run Now.
     event = event or {}
-    source = str(event.get("source") or "")
-    if use_schedule_dispatcher() and source != "smoke":
-        logging.info("PM_USE_SCHEDULE_DISPATCHER set — skipping legacy kotter schedule")
-        return http_response(200, {"ok": True, "skipped": "schedule_dispatcher"})
-
     pm = _pm_schema()
     registry_db = _registry_database()
 
@@ -292,7 +276,6 @@ def schedule_handler(event, context):
         async_invoke_schedule_item,
         list_due_schedules,
         run_one_schedule_item,
-        use_schedule_dispatcher,
     )
 
     event = event or {}
@@ -358,10 +341,6 @@ def schedule_handler(event, context):
             return {"statusCode": 500, "body": json.dumps(err_body)}
         finally:
             conn.close()
-
-    if not use_schedule_dispatcher() and event.get("source") != "smoke":
-        logging.info("PM_USE_SCHEDULE_DISPATCHER off — schedule tick no-op")
-        return {"statusCode": 200, "body": json.dumps({"ok": True, "skipped": "dispatcher_off"})}
 
     conn = connect_from_env(registry_db)
     try:

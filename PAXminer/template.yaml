@@ -52,12 +52,6 @@ Parameters:
   ScheduleTick:
     Type: String
     Default: rate(15 minutes)
-  PmUseScheduleDispatcher:
-    Type: String
-    Default: "false"
-    AllowedValues:
-      - "true"
-      - "false"
   HomeRegionDateTiers:
     Type: String
     Default: "30,60,90,120"
@@ -169,7 +163,6 @@ Resources:
           CHART_REGION_REGEX: !Ref ChartRegionRegex
           DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
           CHART_PERIOD_OFFSET_DAYS: !Ref ChartPeriodOffsetDays
-          PM_USE_SCHEDULE_DISPATCHER: !Ref PmUseScheduleDispatcher
           STAGE: !Ref Stage
           F3_REGION_NAME: !Ref F3RegionName
           PM_SLACK_TOKEN: !Ref PmSlackToken
@@ -253,7 +246,6 @@ Resources:
           PAXMINER_REGISTRY_DATABASE: !Ref PaxminerRegistryDatabase
           DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
           HOME_REGION_DATE_TIERS: !Ref HomeRegionDateTiers
-          PM_USE_SCHEDULE_DISPATCHER: !Ref PmUseScheduleDispatcher
           STAGE: !Ref Stage
           F3_REGION_NAME: !Ref F3RegionName
           PM_SLACK_TOKEN: !Ref PmSlackToken
@@ -302,7 +294,6 @@ Resources:
           DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
           CHART_PERIOD_OFFSET_DAYS: !Ref ChartPeriodOffsetDays
           HOME_REGION_DATE_TIERS: !Ref HomeRegionDateTiers
-          PM_USE_SCHEDULE_DISPATCHER: !Ref PmUseScheduleDispatcher
           SCHEDULE_FUNCTION_NAME: !Sub "${AWS::StackName}-paxminer-schedule"
           STAGE: !Ref Stage
           F3_REGION_NAME: !Ref F3RegionName

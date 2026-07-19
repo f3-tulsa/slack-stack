@@ -481,7 +481,6 @@ deploy_paxminer() {
       "PmSlackToken=${PM_SLACK_TOKEN}" \
       "PmSlackSigningSecret=${PM_SLACK_SIGNING_SECRET}" \
       "PmAchievementsWebhookSecret=${PM_ACHIEVEMENTS_WEBHOOK_SECRET}" \
-      "PmUseScheduleDispatcher=${PM_USE_SCHEDULE_DISPATCHER:-false}" \
     2>&1 | tee -a "$RECEIPT_FILE"
   return "${PIPESTATUS[0]}"
 }

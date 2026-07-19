@@ -86,14 +86,6 @@ def mark_schedule_status(conn, pm_schema: str, schedule_id: int, local_date: dat
     conn.commit()
 
 
-def use_schedule_dispatcher() -> bool:
-    return os.environ.get("PM_USE_SCHEDULE_DISPATCHER", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    )
-
-
 def _load_definition(conn, pm_schema: str, definition_id: int) -> dict | None:
     with conn.cursor() as cur:
         cur.execute(
