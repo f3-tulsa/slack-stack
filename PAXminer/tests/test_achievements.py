@@ -659,3 +659,119 @@ def test_run_daily_posts_failure_log():
     assert results[0]["error"] == "db down"
     mock_fail.assert_called_once()
     assert mock_fail.call_args.args[0]["region"] == "Tulsa"
+
+
+def _kotter_region_row():
+    return {
+        "send_aoq_reports": 1,
+        "schema_name": "f3test",
+        "kotter_channel": "C_KOTTER",
+        "slack_token": "enc",
+        "region": "Tulsa",
+        "NO_POST_THRESHOLD": 2,
+        "REMINDER_WEEKS": 8,
+        "HOME_AO_CAPTURE": 8,
+        "NO_Q_THRESHOLD_WEEKS": 4,
+        "NO_Q_THRESHOLD_POSTS": 4,
+    }
+
+
+def test_kotter_emits_paxminer_log_when_enabled():
+    from kotter import kotter_report as kotter_mod
+
+    # Recent enough activity so MIA/lowq/noq filters yield empty frames.
+    nation = pd.DataFrame(
+        {
+            "email": ["a@ex.com"],
+            "user_id": ["U1"],
+            "ao_id": ["C1"],
+            "ao": ["AO1"],
+            "date": [pd.Timestamp(date.today())],
+            "q_flag": [1],
+            "region": ["f3test"],
+        }
+    )
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.return_value = [{"schema_name": "f3test"}]
+    log_calls: list[str] = []
+
+    with patch.object(kotter_mod.pd, "read_sql", return_value=nation.drop(columns=["region"])):
+        with patch.object(kotter_mod, "attach_home_regions", return_value=nation.copy()):
+            with patch.object(kotter_mod, "decrypt_field", return_value="xoxb-test"):
+                with patch.object(kotter_mod, "slack_client", return_value=MagicMock()):
+                    with patch.object(kotter_mod, "post_message"):
+                        with patch.object(
+                            kotter_mod,
+                            "post_log",
+                            side_effect=lambda c, t, **k: log_calls.append(t),
+                        ):
+                            result = kotter_mod.run_kotter_for_region(
+                                mock_conn,
+                                "paxminer",
+                                _kotter_region_row(),
+                                emit_paxminer_log=True,
+                            )
+
+    assert result.get("posted") is True
+    assert len(log_calls) == 1
+    assert "Kotter report (Tulsa)" in log_calls[0]
+    assert "posted to <#C_KOTTER>" in log_calls[0]
+
+
+def test_kotter_skips_paxminer_log_when_disabled():
+    from kotter import kotter_report as kotter_mod
+
+    nation = pd.DataFrame(
+        {
+            "email": ["a@ex.com"],
+            "user_id": ["U1"],
+            "ao_id": ["C1"],
+            "ao": ["AO1"],
+            "date": [pd.Timestamp(date.today())],
+            "q_flag": [1],
+            "region": ["f3test"],
+        }
+    )
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.return_value = [{"schema_name": "f3test"}]
+
+    with patch.object(kotter_mod.pd, "read_sql", return_value=nation.drop(columns=["region"])):
+        with patch.object(kotter_mod, "attach_home_regions", return_value=nation.copy()):
+            with patch.object(kotter_mod, "decrypt_field", return_value="xoxb-test"):
+                with patch.object(kotter_mod, "slack_client", return_value=MagicMock()):
+                    with patch.object(kotter_mod, "post_message"):
+                        with patch.object(kotter_mod, "post_log") as mock_log:
+                            kotter_mod.run_kotter_for_region(
+                                mock_conn,
+                                "paxminer",
+                                _kotter_region_row(),
+                                emit_paxminer_log=False,
+                            )
+    mock_log.assert_not_called()
+
+
+def test_run_kotter_posts_failure_log():
+    from kotter import kotter_report as kotter_mod
+
+    region_row = _kotter_region_row()
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.return_value = [region_row]
+
+    with patch.object(
+        kotter_mod, "run_kotter_for_region", side_effect=RuntimeError("slack down")
+    ):
+        with patch.object(kotter_mod, "_post_kotter_failure_log") as mock_fail:
+            results = kotter_mod.run_kotter(mock_conn, "paxminer")
+
+    assert results[0]["error"] == "slack down"
+    mock_fail.assert_called_once()
+    assert mock_fail.call_args.args[0]["region"] == "Tulsa"
