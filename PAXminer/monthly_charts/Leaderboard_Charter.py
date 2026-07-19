@@ -9,6 +9,7 @@ The graph then is sent it to the 1st F channel in a Slack message.
 from __future__ import annotations
 
 import datetime
+import logging
 import os
 import sys
 from pathlib import Path
@@ -39,6 +40,7 @@ def run_region_leaderboard(
     region: str,
     firstf: str,
     plot_dir: str | Path = "/tmp/paxminer_plots",
+    destinations: list[str] | None = None,
 ) -> dict:
     plot_base = Path(plot_dir) / schema
     plot_base.mkdir(parents=True, exist_ok=True)
@@ -49,6 +51,7 @@ def run_region_leaderboard(
 
     thismonth, thismonthname, thismonthnamelong, yearnum = _leaderboard_period()
     total_graphs = 0
+    channels = list(destinations) if destinations else ([firstf] if firstf else [])
 
     try:
         with mydb.cursor() as cursor:
@@ -89,18 +92,22 @@ def run_region_leaderboard(
         plt.ylabel("# Posts for " + thismonthname + ", " + yearnum)
         out_m = plot_base / f"PAX_Leaderboard_{region}{thismonthname}{yearnum}.jpg"
         plt.savefig(str(out_m), bbox_inches="tight")
-        slack.files_upload_v2(
-            channel=firstf,
-            initial_comment="Hey "
+        comment = (
+            "Hey "
             + region
             + "! Check out the current posting leaderboards for "
             + thismonthnamelong
             + ", "
             + yearnum
-            + " as well as for Year to Date (includes all beatdowns, rucks, Qsource, etc.). Here are the top 20 posters! T-CLAPS to these HIMs.",
-            file=str(out_m),
+            + " as well as for Year to Date (includes all beatdowns, rucks, Qsource, etc.). "
+            "Here are the top 20 posters! T-CLAPS to these HIMs."
         )
-        total_graphs += 1
+        for ch in channels:
+            try:
+                slack.files_upload_v2(channel=ch, initial_comment=comment, file=str(out_m))
+                total_graphs += 1
+            except Exception:
+                logging.exception("Region leaderboard upload failed channel=%s", ch)
         plt.close("all")
 
     try:
@@ -141,8 +148,12 @@ def run_region_leaderboard(
         plt.ylabel("# Posts for " + yearnum + " - Year To Date")
         out_y = plot_base / f"PAX_Leaderboard_YTD_{region}{yearnum}.jpg"
         plt.savefig(str(out_y), bbox_inches="tight")
-        slack.files_upload_v2(file=str(out_y), channel=firstf)
-        total_graphs += 1
+        for ch in channels:
+            try:
+                slack.files_upload_v2(file=str(out_y), channel=ch)
+                total_graphs += 1
+            except Exception:
+                logging.exception("Region leaderboard YTD upload failed channel=%s", ch)
         plt.close("all")
 
     return {"schema": schema, "graphs": total_graphs}

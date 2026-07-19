@@ -15,7 +15,7 @@ labels: bug
 
 ## Environment
 
-- **App:** (e.g. qsignups, slackblast, PAXminer, weaselbot)
+- **App:** (e.g. qsignups, slackblast, PAXminer)
 - **Deploy target:** (test / prod / local)
 - **Database:** (e.g. TiDB / MySQL)
 

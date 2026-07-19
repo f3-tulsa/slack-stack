@@ -1,0 +1,733 @@
+import os
+from datetime import date
+from unittest.mock import MagicMock, patch
+
+import pandas as pd
+import pytest
+
+os.environ.setdefault("DB_ENCRYPTION_KEY", "test-encryption-key-32chars!!")
+
+
+def test_achievement_seeds_have_rule_columns():
+    from achievements.achievement_rules import ACHIEVEMENT_SEEDS, RULE_COLUMNS
+
+    assert len(ACHIEVEMENT_SEEDS) == 14
+    for seed in ACHIEVEMENT_SEEDS:
+        for col in RULE_COLUMNS:
+            assert col in seed
+            assert seed[col] is not None
+
+
+def test_period_bucket_for_date():
+    from achievements.engine import period_bucket_for_date
+
+    assert period_bucket_for_date(date(2026, 3, 15), "month") == 3
+    assert period_bucket_for_date(date(2026, 3, 15), "year") == 2026
+
+
+def test_verify_achievements_webhook_secret():
+    from slack_http import verify_achievements_webhook_secret
+
+    os.environ["PM_ACHIEVEMENTS_WEBHOOK_SECRET"] = "webhook-secret-value"
+    assert verify_achievements_webhook_secret(
+        {"X-Paxminer-Achievements-Webhook-Secret": "webhook-secret-value"}
+    )
+    assert not verify_achievements_webhook_secret(
+        {"X-Paxminer-Achievements-Webhook-Secret": "wrong"}
+    )
+
+
+def test_build_kotter_message_monthly_copy():
+    from kotter.kotter_report import build_kotter_message
+
+    text, blocks = build_kotter_message(pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
+    assert "monthly" in text.lower()
+    assert "weekly" not in text.lower()
+    assert blocks
+    assert blocks[0]["type"] == "header"
+
+
+def test_load_nation_attendance_coerces_bad_dates():
+    from achievements.attendance import load_nation_attendance
+
+    frame = pd.DataFrame(
+        {
+            "email": ["a@x.com", "b@x.com"],
+            "user_name": ["A", "B"],
+            "user_id": ["U1", "U2"],
+            "ao_id": ["C1", "C2"],
+            "ao": ["ao1", "ao2"],
+            "date": ["2026-07-01", "date"],
+            "q_flag": [0, 1],
+            "backblast": ["bb", "bb"],
+        }
+    )
+    with patch("achievements.attendance.pd.read_sql", return_value=frame):
+        out = load_nation_attendance(MagicMock(), ["f3ttown"])
+    assert len(out) == 1
+    assert str(out.iloc[0]["date"].date()) == "2026-07-01"
+
+
+def test_kotter_nation_coerces_bad_dates():
+    """Bad bd_date values must not abort run_kotter_for_region."""
+    from kotter import kotter_report as kotter_mod
+
+    bad_frame = pd.DataFrame(
+        {
+            "email": ["a@x.com", "b@x.com"],
+            "user_id": ["U1", "U2"],
+            "ao_id": ["C1", "C2"],
+            "ao": ["ao1", "ao2"],
+            "date": ["2026-07-01", "date"],
+            "q_flag": [0, 1],
+        }
+    )
+    region_row = {
+        "send_aoq_reports": 1,
+        "schema_name": "f3ttown",
+        "kotter_channel": "C_KOTTER",
+        "slack_token": "enc",
+        "region": "f3ttown",
+        "NO_POST_THRESHOLD": 2,
+        "REMINDER_WEEKS": 2,
+        "HOME_AO_CAPTURE": 8,
+        "NO_Q_THRESHOLD_WEEKS": 4,
+        "NO_Q_THRESHOLD_POSTS": 4,
+    }
+    conn = MagicMock()
+    cur = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cur
+    conn.cursor.return_value.__exit__.return_value = False
+    cur.fetchall.return_value = [{"schema_name": "f3ttown"}]
+
+    def _attach(_conn, df, _schemas):
+        out = df.copy()
+        out["region"] = "f3ttown"
+        return out
+
+    with (
+        patch.object(kotter_mod.pd, "read_sql", return_value=bad_frame),
+        patch.object(kotter_mod, "attach_home_regions", side_effect=_attach),
+        patch.object(kotter_mod, "build_kotter_message", return_value=("ok", [])),
+    ):
+        result = kotter_mod.run_kotter_for_region(
+            conn, "paxminer_test", region_row, dry_run=True
+        )
+    assert result.get("dry_run") is True
+    assert "error" not in result
+
+
+def test_leaderboard_tie_break_by_display_name():
+    from achievements.leaderboard import build_leaderboard_message
+
+    awarded = pd.DataFrame(
+        {
+            "pax_id": ["U1", "U2", "U3"],
+            "id": [1, 2, 3],
+        }
+    )
+    users = pd.DataFrame(
+        {
+            "user_id": ["U1", "U2", "U3"],
+            "user_name": ["Zed", "Amy", "Bob"],
+        }
+    )
+    text, blocks = build_leaderboard_message(awarded, users)
+    assert text.index("<@U2>") < text.index("<@U3>") < text.index("<@U1>")
+    assert blocks
+    assert any(b.get("type") == "header" for b in blocks)
+
+
+def test_almost_there_excludes_awarded_and_caps_gap():
+    from achievements.leaderboard import build_almost_there_message
+
+    nation = pd.DataFrame(
+        {
+            "region": ["f3test"] * 3,
+            "user_id": ["U1", "U2", "U3"],
+            "email": ["a", "b", "c"],
+            "date": pd.to_datetime(["2026-07-01"] * 3),
+            "ao_id": [1, 1, 1],
+            "q_flag": [0, 0, 0],
+            "activity": ["beatdown"] * 3,
+        }
+    )
+    rules = [
+        {
+            "id": 1,
+            "name": "Golden Boy",
+            "metric": "posts",
+            "activity": "beatdown",
+            "period": "year",
+            "threshold": 50,
+        }
+    ]
+    awarded = pd.DataFrame(
+        {
+            "pax_id": ["U1"],
+            "achievement_id": [1],
+            "date_awarded": [date(2026, 7, 1)],
+        }
+    )
+    users = pd.DataFrame({"user_id": ["U1", "U2", "U3"], "user_name": ["A", "B", "C"]})
+
+    with patch("achievements.leaderboard.period_bucket_for_today", return_value=2026):
+        with patch("achievements.leaderboard._progress_for_rule") as mock_prog:
+            mock_prog.return_value = pd.DataFrame(
+                {
+                    "user_id": ["U1", "U2", "U3"],
+                    "gap": [1, 2, 3],
+                    "achievement_id": [1, 1, 1],
+                    "name": ["Golden Boy"] * 3,
+                    "threshold": [50] * 3,
+                }
+            )
+            text, blocks = build_almost_there_message(nation, rules, awarded, "f3test", users)
+
+    assert "U1" not in text
+    assert "<@U2>" in text
+    assert "3 posts away" not in text
+    assert blocks
+
+
+def test_run_achievements_skips_duplicate_grants():
+    from achievements.runner import run_achievements_for_region
+
+    rule = {
+        "id": 1,
+        "name": "Test",
+        "verb": "testing",
+        "metric": "posts",
+        "activity": "beatdown",
+        "period": "year",
+        "threshold": 1,
+    }
+    region_row = {
+        "send_achievements": 1,
+        "achievement_channel": "C1",
+        "slack_token": "enc",
+        "region": "test",
+    }
+    awarded_row = {
+        "id": 99,
+        "achievement_id": 1,
+        "pax_id": "U1",
+        "date_awarded": date(2026, 7, 1),
+        "period": "year",
+    }
+    qual = pd.DataFrame(
+        {
+            "pax_id": ["U1"],
+            "achievement_id": [1],
+            "date_awarded": [date(2026, 7, 1)],
+            "period_bucket": [2026],
+        }
+    )
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [
+        [rule],
+        [awarded_row],
+        [{"schema_name": "f3test"}],
+    ]
+
+    with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.load_nation_attendance", return_value=pd.DataFrame()):
+                with patch("achievements.runner.attach_home_regions", side_effect=lambda _c, n, _s: n):
+                    with patch("achievements.runner.evaluate_rule", return_value=qual):
+                        result = run_achievements_for_region(
+                            mock_conn,
+                            pm_schema="paxminer_test",
+                            regional_schema="f3test",
+                            region_row=region_row,
+                            dry_run=True,
+                        )
+
+    assert result["grants"] == 0
+    assert result["revokes"] == 0
+
+
+def test_run_achievements_revokes_on_daily_when_unqualified():
+    from achievements.runner import run_achievements_for_region
+
+    rule = {
+        "id": 1,
+        "name": "Test",
+        "verb": "testing",
+        "metric": "posts",
+        "activity": "beatdown",
+        "period": "year",
+        "threshold": 50,
+    }
+    region_row = {
+        "send_achievements": 1,
+        "achievement_channel": "C1",
+        "slack_token": "enc",
+        "region": "test",
+    }
+    awarded_row = {
+        "id": 99,
+        "achievement_id": 1,
+        "pax_id": "U1",
+        "date_awarded": date(2026, 7, 1),
+        "period": "year",
+    }
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [
+        [rule],
+        [awarded_row],
+        [{"schema_name": "f3test"}],
+    ]
+
+    with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.load_nation_attendance", return_value=pd.DataFrame()):
+                with patch("achievements.runner.attach_home_regions", side_effect=lambda _c, n, _s: n):
+                    with patch("achievements.runner.evaluate_rule", return_value=pd.DataFrame()):
+                        result = run_achievements_for_region(
+                            mock_conn,
+                            pm_schema="paxminer_test",
+                            regional_schema="f3test",
+                            region_row=region_row,
+                            pax_user_ids=None,
+                            dry_run=True,
+                        )
+
+    assert result["grants"] == 0
+    assert result["revokes"] == 1
+
+
+def test_run_achievements_scoped_revoke_only_for_webhook_pax():
+    from achievements.runner import run_achievements_for_region
+
+    rule = {
+        "id": 1,
+        "name": "Test",
+        "verb": "testing",
+        "metric": "posts",
+        "activity": "beatdown",
+        "period": "year",
+        "threshold": 50,
+    }
+    region_row = {
+        "send_achievements": 1,
+        "achievement_channel": "C1",
+        "slack_token": "enc",
+        "region": "test",
+    }
+    awarded_rows = [
+        {
+            "id": 99,
+            "achievement_id": 1,
+            "pax_id": "U1",
+            "date_awarded": date(2026, 7, 1),
+            "period": "year",
+        },
+        {
+            "id": 100,
+            "achievement_id": 1,
+            "pax_id": "U2",
+            "date_awarded": date(2026, 7, 1),
+            "period": "year",
+        },
+    ]
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [
+        [rule],
+        awarded_rows,
+        [{"schema_name": "f3test"}],
+    ]
+
+    with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.load_nation_attendance", return_value=pd.DataFrame()):
+                with patch("achievements.runner.attach_home_regions", side_effect=lambda _c, n, _s: n):
+                    with patch("achievements.runner.evaluate_rule", return_value=pd.DataFrame()):
+                        result = run_achievements_for_region(
+                            mock_conn,
+                            pm_schema="paxminer_test",
+                            regional_schema="f3test",
+                            region_row=region_row,
+                            pax_user_ids={"U1"},
+                            dry_run=True,
+                        )
+
+    assert result["revokes"] == 1
+
+
+def test_run_achievements_grants_and_posts():
+    from achievements.runner import run_achievements_for_region
+
+    rule = {
+        "id": 1,
+        "name": "Test",
+        "verb": "testing",
+        "metric": "posts",
+        "activity": "beatdown",
+        "period": "year",
+        "threshold": 1,
+    }
+    region_row = {
+        "send_achievements": 1,
+        "achievement_channel": "C1",
+        "slack_token": "enc",
+        "region": "test",
+    }
+    qual = pd.DataFrame(
+        {
+            "pax_id": ["U1"],
+            "achievement_id": [1],
+            "date_awarded": [date(2026, 7, 1)],
+            "period_bucket": [2026],
+        }
+    )
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [
+        [rule],
+        [],
+        [{"schema_name": "f3test"}],
+    ]
+
+    with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.load_nation_attendance", return_value=pd.DataFrame()):
+                with patch("achievements.runner.attach_home_regions", side_effect=lambda _c, n, _s: n):
+                    with patch("achievements.runner.evaluate_rule", return_value=qual):
+                        with patch("achievements.runner.post_message") as mock_post:
+                            with patch("achievements.runner.open_dm_channel", return_value="D1"):
+                                result = run_achievements_for_region(
+                                    mock_conn,
+                                    pm_schema="paxminer_test",
+                                    regional_schema="f3test",
+                                    region_row=region_row,
+                                    dry_run=False,
+                                )
+
+    assert result["grants"] == 1
+    assert result["revokes"] == 0
+    insert_calls = [c for c in mock_cur.execute.call_args_list if "INSERT INTO" in str(c)]
+    assert insert_calls
+    assert mock_post.call_count >= 2  # channel + DM
+    mock_conn.commit.assert_called_once()
+
+
+def test_validate_achievement_code():
+    from config_paxminer import _validate_achievement
+
+    errors = _validate_achievement(
+        {
+            "name": "X",
+            "description": "d",
+            "verb": "v",
+            "code": "Bad Code",
+            "metric": "posts",
+            "activity": "beatdown",
+            "period": "year",
+            "threshold": 1,
+        }
+    )
+    assert "code" in errors
+
+
+def test_parse_kotter_form_non_numeric_falls_back_to_defaults():
+    from config_schedule import parse_kotter_form
+
+    parsed = parse_kotter_form(
+        {
+            "view": {
+                "state": {
+                    "values": {
+                        "NO_POST_THRESHOLD": {"val": {"value": "abc"}},
+                        "REMINDER_WEEKS": {"val": {"value": ""}},
+                        "HOME_AO_CAPTURE": {"val": {"value": "nope"}},
+                        "NO_Q_THRESHOLD_WEEKS": {"val": {"value": "3.5"}},
+                        "NO_Q_THRESHOLD_POSTS": {"val": {"value": None}},
+                    }
+                }
+            }
+        }
+    )
+    assert parsed["NO_POST_THRESHOLD"] == 2
+    assert parsed["REMINDER_WEEKS"] == 2
+    assert parsed["HOME_AO_CAPTURE"] == 8
+    assert parsed["NO_Q_THRESHOLD_WEEKS"] == 4
+    assert parsed["NO_Q_THRESHOLD_POSTS"] == 4
+
+
+def test_parse_achievement_form_non_numeric_threshold_is_none():
+    from config_paxminer import _parse_achievement_form, _validate_achievement
+
+    values = _parse_achievement_form(
+        {
+            "view": {
+                "state": {
+                    "values": {
+                        "name": {"val": {"value": "Six Pack"}},
+                        "description": {"val": {"value": "d"}},
+                        "verb": {"val": {"value": "posting"}},
+                        "code": {"val": {"value": "six_pack"}},
+                        "metric": {"val": {"selected_option": {"value": "posts"}}},
+                        "activity": {"val": {"selected_option": {"value": "beatdown"}}},
+                        "period": {"val": {"selected_option": {"value": "week"}}},
+                        "threshold": {"val": {"value": "abc"}},
+                    }
+                }
+            }
+        }
+    )
+    assert values["threshold"] is None
+    errors = _validate_achievement(values)
+    assert errors.get("threshold") == "Enter a whole number"
+
+
+def test_config_modal_hub_has_timezone_and_section_buttons():
+    from config_paxminer import _config_modal, _parse_modal_values
+    from config_schedule import (
+        OPEN_KOTTER_CONFIG_ACTION_ID,
+        OPEN_REPORTS_ACTION_ID,
+        OPEN_SCHEDULE_ACTION_ID,
+    )
+
+    modal = _config_modal(
+        {
+            "send_achievements": 1,
+            "achievement_channel": "C12345678",
+            "timezone": "America/Chicago",
+            "team_id": "T1",
+            "schema_name": "f3test",
+        }
+    )
+    by_id = {b["block_id"]: b for b in modal["blocks"] if "block_id" in b}
+    assert "timezone" in by_id
+    assert by_id["timezone"]["element"]["type"] == "static_select"
+    assert "hub_actions" in by_id
+    action_ids = {e["action_id"] for e in by_id["hub_actions"]["elements"]}
+    assert OPEN_SCHEDULE_ACTION_ID in action_ids
+    assert OPEN_REPORTS_ACTION_ID in action_ids
+    assert OPEN_KOTTER_CONFIG_ACTION_ID in action_ids
+
+    assert "send_achievements" in by_id
+    assert by_id["send_achievements"]["element"]["type"] == "checkboxes"
+    assert "kotter_channel" not in by_id
+    assert "firstf_channel" not in by_id
+    assert "features" not in by_id
+    ach_ch = by_id["achievement_channel"]
+    assert ach_ch.get("optional") is True
+    assert ach_ch["element"]["type"] == "channels_select"
+    assert ach_ch["element"].get("initial_channel", "").startswith("C")
+
+    parsed = _parse_modal_values(
+        {
+            "view": {
+                "state": {
+                    "values": {
+                        "timezone": {
+                            "val": {"selected_option": {"value": "America/Chicago"}}
+                        },
+                        "send_achievements": {
+                            "val": {"selected_options": [{"value": "achievements"}]}
+                        },
+                        "achievement_channel": {"val": {"selected_channel": "C11111111"}},
+                    }
+                }
+            }
+        }
+    )
+    assert parsed == {
+        "timezone": "America/Chicago",
+        "send_achievements": 1,
+        "achievement_channel": "C11111111",
+    }
+
+
+def test_achievements_handler_webhook_unauthorized():
+    from handlers import achievements_handler
+
+    resp = achievements_handler(
+        {
+            "requestContext": {"http": {"method": "POST"}},
+            "headers": {"X-Paxminer-Achievements-Webhook-Secret": "wrong"},
+            "body": "{}",
+        },
+        None,
+    )
+    assert resp["statusCode"] == 401
+
+
+def test_achievements_handler_webhook_success():
+    import json
+
+    os.environ["PM_ACHIEVEMENTS_WEBHOOK_SECRET"] = "webhook-secret-value"
+    region_row = {
+        "send_achievements": 1,
+        "achievement_channel": "C1",
+        "slack_token": "enc",
+        "region": "test",
+        "schema_name": "f3test",
+    }
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchone.return_value = region_row
+
+    with patch("handlers.connect_from_env", return_value=mock_conn):
+        with patch(
+            "achievements.runner.run_achievements_for_region",
+            return_value={"grants": 1, "revokes": 0},
+        ) as mock_run:
+            from handlers import achievements_handler
+
+            resp = achievements_handler(
+                {
+                    "requestContext": {"http": {"method": "POST"}},
+                    "headers": {"X-Paxminer-Achievements-Webhook-Secret": "webhook-secret-value"},
+                    "body": json.dumps(
+                        {
+                            "schema": "f3test",
+                            "pax_user_ids": ["U1", "U2"],
+                            "post_to_ao": True,
+                            "ao_channel_id": "C_AO",
+                        }
+                    ),
+                },
+                None,
+            )
+
+    assert resp["statusCode"] == 200
+    body = json.loads(resp["body"])
+    assert body["ok"] is True
+    assert mock_run.call_args.kwargs["regional_schema"] == "f3test"
+    assert mock_run.call_args.kwargs["pax_user_ids"] == {"U1", "U2"}
+    assert mock_run.call_args.kwargs["post_to_ao"] is True
+    assert mock_run.call_args.kwargs["ao_channel_id"] == "C_AO"
+
+
+def test_achievements_emit_per_event_paxminer_logs():
+    """Grant and revoke each emit a paxminer_logs line."""
+    from achievements import runner as runner_mod
+
+    rule = {
+        "id": 1,
+        "name": "Ironman",
+        "verb": "posting 30 times",
+        "code": "ironman",
+        "period": "year",
+    }
+    awarded = pd.DataFrame(
+        [
+            {
+                "id": 99,
+                "achievement_id": 1,
+                "pax_id": "U_REVOKE",
+                "date_awarded": date(2026, 1, 5),
+                "period": "year",
+                "code": "ironman",
+            }
+        ]
+    )
+    qualified = pd.DataFrame(
+        [
+            {
+                "pax_id": "U_GRANT",
+                "date_awarded": date(2026, 7, 1),
+                "period_bucket": 2026,
+            }
+        ]
+    )
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    # _load_rules then schemas list (_load_awarded_ytd is patched)
+    mock_cur.fetchall.side_effect = [
+        [rule],
+        [{"schema_name": "f3test"}],
+    ]
+
+    region_row = {
+        "send_achievements": 1,
+        "achievement_channel": "C_ACH",
+        "slack_token": "enc",
+        "region": "Tulsa",
+        "schema_name": "f3test",
+    }
+    log_lines: list[str] = []
+
+    def capture_log(client, text, **kwargs):
+        log_lines.append(text)
+
+    with patch.object(runner_mod, "decrypt_field", return_value="xoxb-test"):
+        with patch.object(runner_mod, "slack_client", return_value=MagicMock()):
+            with patch.object(runner_mod, "post_message"):
+                with patch.object(runner_mod, "open_dm_channel", return_value="D1"):
+                    with patch.object(runner_mod, "post_log", side_effect=capture_log):
+                        with patch.object(
+                            runner_mod, "load_nation_attendance", return_value=pd.DataFrame()
+                        ):
+                            with patch.object(
+                                runner_mod, "attach_home_regions", return_value=pd.DataFrame()
+                            ):
+                                with patch.object(
+                                    runner_mod, "evaluate_rule", return_value=qualified
+                                ):
+                                    with patch.object(
+                                        runner_mod, "_load_awarded_ytd", return_value=awarded
+                                    ):
+                                        result = runner_mod.run_achievements_for_region(
+                                            mock_conn,
+                                            pm_schema="paxminer",
+                                            regional_schema="f3test",
+                                            region_row=region_row,
+                                        )
+
+    assert result == {"grants": 1, "revokes": 1}
+    assert any("granted 'Ironman' to <@U_GRANT>" in line for line in log_lines)
+    assert any("revoked 'Ironman' from <@U_REVOKE>" in line for line in log_lines)
+    assert all("Tulsa" in line for line in log_lines)
+
+
+def test_run_daily_posts_failure_log():
+    from achievements import runner as runner_mod
+
+    region_row = {
+        "region": "Tulsa",
+        "schema_name": "f3test",
+        "slack_token": "enc",
+        "send_achievements": 1,
+    }
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.return_value = [region_row]
+
+    with patch.object(
+        runner_mod,
+        "run_achievements_for_region",
+        side_effect=RuntimeError("db down"),
+    ):
+        with patch.object(runner_mod, "_post_achievement_failure_log") as mock_fail:
+            results = runner_mod.run_daily(mock_conn, "paxminer")
+
+    assert results[0]["error"] == "db down"
+    mock_fail.assert_called_once()
+    assert mock_fail.call_args.args[0]["region"] == "Tulsa"
+

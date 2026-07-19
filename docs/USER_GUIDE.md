@@ -20,17 +20,20 @@ If your region does not set the PAXminer regional link for QSignups, only Slack 
 - **Strava:** Link activities when enabled.
 - **Email / Postie:** Optional outbound email flows where configured.
 - **`/config-slackblast`**, **`/config-welcome-message`:** Admin-style configuration for region and welcome content.
+- **Achievements coupling:** When PAXMiner is linked, saving a backblast can trigger achievement evaluation for affected PAX. In **General Settings**, admins can enable **Also post achievement unlocks to the AO channel** (only shown when PAXMiner is linked).
 
-## PAXminer
+## PAXMiner
 
-- Runs in the background: mines backblasts, tracks attendance, builds monthly charts and stats.
-- Data flows from Slack channels into the regional database; you usually interact via posted charts or region-specific commands (see [PAXminer README](../PAXminer/README.md)).
+PAXMiner runs in the background and in Slack admin flows:
 
-## Weaselbot
+- **Sync:** Daily user/channel sync.
+- **Achievements:** Data-driven rules grant and revoke awards. Unlocks post to the configured achievement channel and DM the PAX; optional AO channel posts come from Slackblast when enabled.
+- **Scheduled reports:** Charts, leaderboards, Kotter, and custom reports run on the unified schedule (default monthly). Items with no destination channel configured are skipped until an admin sets one.
+- **`/config-paxminer`** (workspace admins): Timezone and daily achievement toggles/channel on Save; hub buttons for achievement rules, report definitions, Kotter thresholds, and **Schedule** (including **Run Now** for a single report item).
+- Manual Kotter (and other reports): use **Schedule → select item → Run Now** (one region / one schedule item). There is no `/kotter-report` slash command. Run Now DMs you the result in the PAXMiner **Messages** tab; it does not post to `#paxminer_logs`.
+- **`#paxminer_logs`:** Operational summaries for automatic runs — achievement grants/revokes, Kotter posts, and scheduled report success/skip/failure (with error detail on failure). Open that channel to audit background activity.
 
-- **Achievements:** Badges and milestones based on attendance and activity rules.
-- **Kotter reports:** Summaries for Kotter channels or admins.
-- **Configuration:** Achievement channels and tiers are set per region (see [weaselbot README](../weaselbot/README.md)).
+There is no `/tag-achievement` command; awards are computed from attendance data, not manual tags.
 
 ## Getting help
 

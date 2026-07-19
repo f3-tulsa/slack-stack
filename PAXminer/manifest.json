@@ -1,14 +1,27 @@
 {
   "display_information": {
     "name": "PAXMiner",
-    "description": "Collect PAX data and send monthly charts to Slack.",
+    "description": "PAX data sync, charts, achievements, and Kotter reports.",
     "background_color": "#2c2d30"
   },
   "features": {
     "bot_user": {
       "display_name": "PAXMiner",
       "always_online": true
-    }
+    },
+    "app_home": {
+      "home_tab_enabled": true,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": true
+    },
+    "slash_commands": [
+      {
+        "command": "/config-paxminer",
+        "description": "Configure PAXMiner channels, achievements, and charts",
+        "should_escape": false,
+        "url": "__HOSTNAME__"
+      }
+    ]
   },
   "oauth_config": {
     "scopes": {
@@ -19,10 +32,11 @@
         "channels:read",
         "chat:write",
         "chat:write.public",
+        "commands",
         "files:write",
         "groups:read",
         "im:write",
-        "incoming-webhook",
+        "reactions:write",
         "users.profile:read",
         "users:read.email",
         "users:read"
@@ -30,6 +44,14 @@
     }
   },
   "settings": {
+    "event_subscriptions": {
+      "request_url": "__HOSTNAME__",
+      "bot_events": ["app_home_opened"]
+    },
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "__HOSTNAME__"
+    },
     "org_deploy_enabled": false,
     "socket_mode_enabled": false,
     "token_rotation_enabled": false
