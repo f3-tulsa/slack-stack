@@ -30,7 +30,7 @@ usage() {
 Usage: $0 --env test|prod [options]
 
 Options:
-  --stack paxminer|weaselbot|slackblast|qsignups   default: all
+  --stack paxminer|slackblast|qsignups   default: all
   --build-only
   --confirm              prompt for SAM changeset confirmation
   --bootstrap            deploy infra/template.bootstrap.yaml (OIDC + SAM artifact bucket), then continue
@@ -107,12 +107,13 @@ prereq_hint() {
   case "$cmd" in
     aws)
       echo "Install AWS CLI v2: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+      echo "If the CLI is installed but the session expired, reauthenticate with: aws login"
       ;;
     sam)
       echo "Install AWS SAM CLI: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html"
       ;;
     docker)
-      echo "Install Docker (required for PAXminer and Weaselbot image builds): https://docs.docker.com/get-docker/"
+      echo "Install Docker (required for PAXMiner image builds): https://docs.docker.com/get-docker/"
       ;;
     python3)
       echo "Install Python 3 (used for manifest URL substitution)."
@@ -128,6 +129,23 @@ require_cmd() {
   if ! command -v "$c" >/dev/null 2>&1; then
     echo "Error: required command '$c' not found." >&2
     prereq_hint "$c" >&2
+    exit 1
+  fi
+}
+
+# True when this run will call AWS APIs (deploy/smoke/CFN, or --bootstrap).
+# --build-only alone (optionally with --setup-github) does not need live AWS creds.
+needs_aws_credentials() {
+  [[ "$BUILD_ONLY" != true ]] || [[ "$DO_BOOTSTRAP" == true ]]
+}
+
+# Fail before expensive sam build / Docker image work when the session is dead.
+require_aws_credentials() {
+  local err
+  if ! err="$(aws sts get-caller-identity --region "$AWS_REGION" 2>&1)"; then
+    echo "Error: AWS credentials are missing or expired (checked before build/deploy)." >&2
+    echo "$err" >&2
+    echo "Reauthenticate with 'aws login' (or 'aws sso login' if you use SSO), then re-run." >&2
     exit 1
   fi
 }
@@ -228,9 +246,11 @@ run_setup_github() {
   gh variable set STAGE --env "$STAGE" --body "$STAGE" -R "$repo"
   gh variable set AWS_REGION --env "$STAGE" --body "$AWS_REGION" -R "$repo"
   gh variable set PAXMINER_SCHEMA --env "$STAGE" --body "$PAXMINER_SCHEMA" -R "$repo"
-  gh variable set WEASELBOT_SCHEMA --env "$STAGE" --body "$WEASELBOT_SCHEMA" -R "$repo"
   gh variable set SLACKBLAST_SCHEMA --env "$STAGE" --body "$SLACKBLAST_SCHEMA" -R "$repo"
   gh variable set QSIGNUPS_SCHEMA --env "$STAGE" --body "$QSIGNUPS_SCHEMA" -R "$repo"
+  [[ -n "${PM_REGIONAL_SCHEMA:-}" ]] && \
+    gh variable set PM_REGIONAL_SCHEMA --env "$STAGE" \
+      --body "$PM_REGIONAL_SCHEMA" -R "$repo"
   gh variable set IMAGE_S3_BUCKET --env "$STAGE" --body "$IMAGE_S3_BUCKET" -R "$repo"
   gh variable set DATABASE_TLS_ENABLED --env "$STAGE" --body "$DATABASE_TLS_ENABLED" -R "$repo"
   gh variable set F3_REGION_NAME --env "$STAGE" --body "$F3_REGION_NAME" -R "$repo"
@@ -246,7 +266,8 @@ run_setup_github() {
   gh secret set DATABASE_PASSWORD --env "$STAGE" --body "$DATABASE_PASSWORD" -R "$repo"
   gh secret set DB_ENCRYPTION_KEY --env "$STAGE" --body "$DB_ENCRYPTION_KEY" -R "$repo"
   gh secret set PM_SLACK_TOKEN --env "$STAGE" --body "$PM_SLACK_TOKEN" -R "$repo"
-  gh secret set WB_SLACK_TOKEN --env "$STAGE" --body "$WB_SLACK_TOKEN" -R "$repo"
+  gh secret set PM_SLACK_SIGNING_SECRET --env "$STAGE" --body "$PM_SLACK_SIGNING_SECRET" -R "$repo"
+  gh secret set PM_ACHIEVEMENTS_WEBHOOK_SECRET --env "$STAGE" --body "$PM_ACHIEVEMENTS_WEBHOOK_SECRET" -R "$repo"
   gh secret set SB_SLACK_TOKEN --env "$STAGE" --body "$SB_SLACK_TOKEN" -R "$repo"
   gh secret set SB_SLACK_SIGNING_SECRET --env "$STAGE" --body "$SB_SLACK_SIGNING_SECRET" -R "$repo"
   gh secret set SB_SLACK_CLIENT_SECRET --env "$STAGE" --body "$SB_SLACK_CLIENT_SECRET" -R "$repo"
@@ -266,9 +287,15 @@ require_cmd aws
 require_cmd sam
 require_cmd python3
 
+# Validate AWS auth before Docker/SAM build (and before bootstrap CFN calls).
+# Without this, an expired session only fails after a long local container build.
+if needs_aws_credentials; then
+  require_aws_credentials
+fi
+
 needs_docker() {
   case "$STACK" in
-    all|paxminer|weaselbot) return 0 ;;
+    all|paxminer) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -292,7 +319,6 @@ if [[ "${#DB_ENCRYPTION_KEY}" -lt 16 ]]; then
   exit 1
 fi
 : "${PAXMINER_SCHEMA:?}"
-: "${WEASELBOT_SCHEMA:?}"
 : "${SLACKBLAST_SCHEMA:?}"
 : "${QSIGNUPS_SCHEMA:?}"
 : "${IMAGE_S3_BUCKET:?}"
@@ -310,8 +336,13 @@ fi
 
 : "${F3_REGION_NAME:?}"
 : "${PM_SLACK_TOKEN:?}"
-: "${WB_SLACK_TOKEN:?}"
+: "${PM_SLACK_SIGNING_SECRET:?}"
+: "${PM_ACHIEVEMENTS_WEBHOOK_SECRET:?}"
 : "${F3_REGION_SLACK_TEAM_ID:?}"
+if [[ "${#PM_ACHIEVEMENTS_WEBHOOK_SECRET}" -lt 16 ]]; then
+  echo "ERROR: PM_ACHIEVEMENTS_WEBHOOK_SECRET must be at least 16 characters (got ${#PM_ACHIEVEMENTS_WEBHOOK_SECRET})" >&2
+  exit 1
+fi
 
 export AWS_DEFAULT_REGION="${AWS_REGION}"
 
@@ -331,22 +362,26 @@ SAM_DEPLOY_EXTRA+=(--no-fail-on-empty-changeset --capabilities CAPABILITY_IAM)
 #   2) _BOOTSTRAP_DEPLOY_BUCKET (set in the same process when ./deploy.sh ran --bootstrap)
 #   3) CloudFormation output DeploymentBucketName from BOOTSTRAP_STACK_NAME (same as CI)
 #   4) Last resort: --resolve-s3 (warn — likely wrong bucket for this role)
+#
+# --build-only never calls sam deploy, so skip bucket resolution (avoids a soft CFN probe).
 SAM_S3_BUCKET_ARGS=()
-if [[ -n "${DEPLOYMENT_S3_BUCKET:-}" ]]; then
-  SAM_S3_BUCKET_ARGS=(--s3-bucket "$DEPLOYMENT_S3_BUCKET")
-elif [[ -n "${_BOOTSTRAP_DEPLOY_BUCKET:-}" ]]; then
-  SAM_S3_BUCKET_ARGS=(--s3-bucket "$_BOOTSTRAP_DEPLOY_BUCKET")
-else
-  _resolved_deploy_bucket=""
-  _resolved_deploy_bucket="$(cf_output "$BOOTSTRAP_STACK_NAME" "DeploymentBucketName")"
-  if [[ -n "$_resolved_deploy_bucket" && "$_resolved_deploy_bucket" != "None" ]]; then
-    SAM_S3_BUCKET_ARGS=(--s3-bucket "$_resolved_deploy_bucket")
-    echo "SAM artifact bucket (from stack ${BOOTSTRAP_STACK_NAME}): ${_resolved_deploy_bucket}"
+if [[ "$BUILD_ONLY" != true ]]; then
+  if [[ -n "${DEPLOYMENT_S3_BUCKET:-}" ]]; then
+    SAM_S3_BUCKET_ARGS=(--s3-bucket "$DEPLOYMENT_S3_BUCKET")
+  elif [[ -n "${_BOOTSTRAP_DEPLOY_BUCKET:-}" ]]; then
+    SAM_S3_BUCKET_ARGS=(--s3-bucket "$_BOOTSTRAP_DEPLOY_BUCKET")
   else
-    echo "WARN: Could not resolve DeploymentBucketName from stack '${BOOTSTRAP_STACK_NAME}'." >&2
-    echo "      Falling back to --resolve-s3. The deploy IAM role may lack s3:PutObject on SAM's" >&2
-    echo "      default bucket; set DEPLOYMENT_S3_BUCKET in your env file or run --bootstrap." >&2
-    SAM_S3_BUCKET_ARGS=(--resolve-s3)
+    _resolved_deploy_bucket=""
+    _resolved_deploy_bucket="$(cf_output "$BOOTSTRAP_STACK_NAME" "DeploymentBucketName")"
+    if [[ -n "$_resolved_deploy_bucket" && "$_resolved_deploy_bucket" != "None" ]]; then
+      SAM_S3_BUCKET_ARGS=(--s3-bucket "$_resolved_deploy_bucket")
+      echo "SAM artifact bucket (from stack ${BOOTSTRAP_STACK_NAME}): ${_resolved_deploy_bucket}"
+    else
+      echo "WARN: Could not resolve DeploymentBucketName from stack '${BOOTSTRAP_STACK_NAME}'." >&2
+      echo "      Falling back to --resolve-s3. The deploy IAM role may lack s3:PutObject on SAM's" >&2
+      echo "      default bucket; set DEPLOYMENT_S3_BUCKET in your env file or run --bootstrap." >&2
+      SAM_S3_BUCKET_ARGS=(--resolve-s3)
+    fi
   fi
 fi
 
@@ -372,7 +407,6 @@ log_receipt() {
 
 # -1 = not run, 0 = success, >0 = failure
 PAX_RC=-1
-WEASEL_RC=-1
 SB_RC=-1
 QS_RC=-1
 
@@ -445,40 +479,17 @@ deploy_paxminer() {
       "Stage=${STAGE}" \
       "F3RegionName=${F3_REGION_NAME}" \
       "PmSlackToken=${PM_SLACK_TOKEN}" \
-    2>&1 | tee -a "$RECEIPT_FILE"
-  return "${PIPESTATUS[0]}"
-}
-
-deploy_weaselbot() {
-  sam build -t weaselbot/template.yaml ${SAM_BUILD_EXTRA[@]+"${SAM_BUILD_EXTRA[@]}"} 2>&1 | tee -a "$RECEIPT_FILE"
-  local brc="${PIPESTATUS[0]}"
-  if [[ "$brc" -ne 0 ]]; then return "$brc"; fi
-  [[ "$BUILD_ONLY" == true ]] && return 0
-  sam deploy \
-    --stack-name "weaselbot-${STAGE}" \
-    "${SAM_DEPLOY_EXTRA[@]}" \
-    --resolve-image-repos \
-    "${SAM_S3_BUCKET_ARGS[@]}" \
-    --parameter-overrides \
-      "DatabaseHost=${DATABASE_HOST}" \
-      "DatabasePort=${DATABASE_PORT}" \
-      "DatabaseUser=${DATABASE_USER}" \
-      "DatabasePassword=${DATABASE_PASSWORD}" \
-      "DatabaseTlsEnabled=${DATABASE_TLS_ENABLED}" \
-      "DbEncryptionKey=${DB_ENCRYPTION_KEY}" \
-      "PaxminerSchema=${PAXMINER_SCHEMA}_${STAGE}" \
-      "WeaselbotSchema=${WEASELBOT_SCHEMA}_${STAGE}" \
-      "Stage=${STAGE}" \
-      "F3RegionName=${F3_REGION_NAME}" \
-      "WbSlackToken=${WB_SLACK_TOKEN}" \
-      "WbSlackSigningSecret=${WB_SLACK_SIGNING_SECRET}" \
-      "F3RegionSlackTeamId=${F3_REGION_SLACK_TEAM_ID}" \
-      "WeaselbotPaxminerRegionalSchemas=${WEASELBOT_PAXMINER_REGIONAL_SCHEMAS:-}" \
+      "PmSlackSigningSecret=${PM_SLACK_SIGNING_SECRET}" \
+      "PmAchievementsWebhookSecret=${PM_ACHIEVEMENTS_WEBHOOK_SECRET}" \
     2>&1 | tee -a "$RECEIPT_FILE"
   return "${PIPESTATUS[0]}"
 }
 
 deploy_slackblast() {
+  local achievements_url="${PM_ACHIEVEMENTS_URL:-}"
+  if [[ -z "$achievements_url" && "${PAX_RC:-1}" -eq 0 ]]; then
+    achievements_url="$(get_stack_output "paxminer-${STAGE}" "AchievementsFunctionUrl")"
+  fi
   sam build -t slackblast/template.yaml --use-container ${SAM_BUILD_EXTRA[@]+"${SAM_BUILD_EXTRA[@]}"} 2>&1 | tee -a "$RECEIPT_FILE"
   local brc="${PIPESTATUS[0]}"
   if [[ "$brc" -ne 0 ]]; then return "$brc"; fi
@@ -502,6 +513,8 @@ deploy_slackblast() {
       "DatabaseTlsEnabled=${DATABASE_TLS_ENABLED}" \
       "DatabaseSchema=${SLACKBLAST_SCHEMA}_${STAGE}" \
       "PaxminerSchema=${PAXMINER_SCHEMA}_${STAGE}" \
+      "PmAchievementsUrl=${achievements_url}" \
+      "PmAchievementsWebhookSecret=${PM_ACHIEVEMENTS_WEBHOOK_SECRET}" \
       "SlackToken=${SB_SLACK_TOKEN}" \
       "SlackSigningSecret=${SB_SLACK_SIGNING_SECRET}" \
       "SlackClientSecret=${SB_SLACK_CLIENT_SECRET}" \
@@ -541,7 +554,7 @@ deploy_qsignups() {
       "DatabasePassword=${DATABASE_PASSWORD}" \
       "DatabaseTlsEnabled=${DATABASE_TLS_ENABLED}" \
       "DatabaseSchema=${QSIGNUPS_SCHEMA}_${STAGE}" \
-      "PaxminerRegionalSchema=${WEASELBOT_PAXMINER_REGIONAL_SCHEMAS:-}" \
+      "PmRegionalSchema=${PM_REGIONAL_SCHEMA:-}" \
       "SlackToken=${QS_SLACK_TOKEN}" \
       "SlackSigningSecret=${QS_SLACK_SIGNING_SECRET}" \
       "SlackClientSecret=${QS_SLACK_CLIENT_SECRET}" \
@@ -556,18 +569,18 @@ deploy_qsignups() {
   return "${PIPESTATUS[0]}"
 }
 
+PAX_RC=-1
+SB_RC=-1
+QS_RC=-1
+
 case "$STACK" in
   all)
     deploy_paxminer; PAX_RC=$?
-    deploy_weaselbot; WEASEL_RC=$?
     deploy_slackblast; SB_RC=$?
     deploy_qsignups; QS_RC=$?
     ;;
   paxminer)
     deploy_paxminer; PAX_RC=$?
-    ;;
-  weaselbot)
-    deploy_weaselbot; WEASEL_RC=$?
     ;;
   slackblast)
     deploy_slackblast; SB_RC=$?
@@ -576,7 +589,7 @@ case "$STACK" in
     deploy_qsignups; QS_RC=$?
     ;;
   *)
-    echo "Unknown stack: $STACK"
+    echo "Unknown stack: $STACK (weaselbot retired — use paxminer)"
     usage
     ;;
 esac
@@ -596,7 +609,7 @@ fi
 
 log_receipt ""
 log_receipt "--- Stack outputs (CloudFormation) ---"
-for name in "paxminer-${STAGE}" "weaselbot-${STAGE}" "slackblast-${STAGE}" "qsignups-${STAGE}"; do
+for name in "paxminer-${STAGE}" "slackblast-${STAGE}" "qsignups-${STAGE}"; do
   if aws cloudformation describe-stacks --stack-name "$name" --region "$AWS_REGION" &>/dev/null; then
     log_receipt "# $name"
     aws cloudformation describe-stacks --stack-name "$name" --region "$AWS_REGION" \
@@ -606,16 +619,15 @@ done
 
 log_receipt ""
 log_receipt "--- Stage-specific Slack manifests ---"
-WB_API_URL=""
+PM_SLACK_URL=""
 SB_API_URL=""
 QS_API_URL=""
-if [[ "$WEASEL_RC" -eq 0 ]]; then
-  WB_FULL="$(get_stack_output "weaselbot-${STAGE}" "KotterApi")"
-  WB_API_URL="$(api_base_from_events_url "$WB_FULL")"
-  if [[ -n "$WB_API_URL" ]]; then
-    write_stage_manifest_subst "weaselbot" "$WB_API_URL" || log_receipt "WARN: could not write weaselbot manifest-${STAGE}.json"
+if [[ "$PAX_RC" -eq 0 ]]; then
+  PM_SLACK_URL="$(get_stack_output "paxminer-${STAGE}" "SlackFunctionUrl")"
+  if [[ -n "$PM_SLACK_URL" ]]; then
+    write_stage_manifest_subst "PAXminer" "$PM_SLACK_URL" || log_receipt "WARN: could not write PAXminer manifest-${STAGE}.json"
   else
-    log_receipt "WARN: KotterApi output missing; skip weaselbot manifest generation"
+    write_stage_manifest_copy "PAXminer" || log_receipt "WARN: could not write PAXminer manifest-${STAGE}.json"
   fi
 fi
 if [[ "$SB_RC" -eq 0 ]]; then
@@ -636,9 +648,6 @@ if [[ "$QS_RC" -eq 0 ]]; then
     log_receipt "WARN: QSignupsApi output missing; skip qsignups manifest generation"
   fi
 fi
-if [[ "$PAX_RC" -eq 0 ]]; then
-  write_stage_manifest_copy "PAXminer" || log_receipt "WARN: could not write PAXminer manifest-${STAGE}.json"
-fi
 
 log_receipt ""
 log_receipt "=== Deploy summary ==="
@@ -651,19 +660,18 @@ summarize_row() {
   printf '%-22s %s\n' "$label" "$st" | tee -a "$RECEIPT_FILE"
 }
 summarize_row "paxminer-${STAGE}" "$PAX_RC"
-summarize_row "weaselbot-${STAGE}" "$WEASEL_RC"
 summarize_row "slackblast-${STAGE}" "$SB_RC"
 summarize_row "qsignups-${STAGE}" "$QS_RC"
 log_receipt ""
 log_receipt "API base URLs (for Slack manifests):"
-log_receipt "  weaselbot: ${WB_API_URL:-n/a}"
+log_receipt "  paxminer slack: ${PM_SLACK_URL:-n/a}"
 log_receipt "  slackblast: ${SB_API_URL:-n/a}"
 log_receipt "  qsignups:   ${QS_API_URL:-n/a}"
 log_receipt ""
 log_receipt "Receipt file: ${RECEIPT_FILE}"
 
 ANY_FAIL=0
-for rc in "$PAX_RC" "$WEASEL_RC" "$SB_RC" "$QS_RC"; do
+for rc in "$PAX_RC" "$SB_RC" "$QS_RC"; do
   if [[ "$rc" -gt 0 ]]; then ANY_FAIL=1; break; fi
 done
 
@@ -709,12 +717,38 @@ run_smoke_test_lambdas() {
     echo "OK ${fn} statusCode=200"
     return 0
   }
+  invoke_one_payload() {
+    local fn="$1"
+    local payload="$2"
+    echo "--- Invoking ${fn} ---"
+    aws lambda invoke \
+      --function-name "$fn" \
+      --invocation-type RequestResponse \
+      --cli-binary-format raw-in-base64-out \
+      --payload "$payload" \
+      --log-type Tail \
+      /tmp/lambda-payload-deploy-sh.json > /tmp/lambda-meta-deploy-sh.json \
+      --region "$AWS_REGION" || return 1
+    local sc
+    sc=$(jq -r '.statusCode // empty' /tmp/lambda-payload-deploy-sh.json 2>/dev/null || echo "")
+    if [[ -z "$sc" || "$sc" == "null" ]]; then
+      sc=$(jq -r '.ok // empty' /tmp/lambda-payload-deploy-sh.json 2>/dev/null || echo "")
+      [[ "$sc" == "true" ]] && sc=200
+    fi
+    if [[ "$sc" != "200" ]]; then
+      echo "ERROR: Lambda ${fn} returned statusCode=${sc}"
+      return 1
+    fi
+    echo "OK ${fn} statusCode=200"
+    return 0
+  }
   local smoke_rc=0
   if [[ "$PAX_RC" -eq 0 ]]; then
     invoke_one "paxminer-${STAGE}-paxminer-sync" || smoke_rc=1
-  fi
-  if [[ "$WEASEL_RC" -eq 0 ]]; then
-    invoke_one "weaselbot-${STAGE}-weaselbot-achievements" || smoke_rc=1
+    invoke_one "paxminer-${STAGE}-paxminer-slack" || smoke_rc=1
+    invoke_one_payload "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke"}' || smoke_rc=1
+    invoke_one_payload "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke","feature":"achievement_leaderboard"}' || smoke_rc=1
+    invoke_one_payload "paxminer-${STAGE}-paxminer-schedule" '{"source":"smoke","dry_run":true}' || smoke_rc=1
   fi
   return "$smoke_rc"
 }

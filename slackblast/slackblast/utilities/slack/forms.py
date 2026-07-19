@@ -1,5 +1,4 @@
 from utilities import constants
-from utilities.database.orm import PaxminerRegion
 from utilities.slack import actions, orm
 
 BACKBLAST_FORM = orm.BlockView(
@@ -207,15 +206,12 @@ CONFIG_FORM = orm.BlockView(
                     label=":speech_balloon: Welcomebot Settings",
                     action=actions.CONFIG_WELCOME_MESSAGE,
                 ),
-                # orm.ButtonElement(
-                #     label=":robot_face: Weaselbot Settings",
-                #     action=actions.CONFIG_WEASELBOT,
-                # ),
-                orm.ButtonElement(
-                    label=":pick: Paxminer Settings",
-                    action=actions.CONFIG_PAXMINER,
-                ),
             ],
+        ),
+        orm.ContextBlock(
+            element=orm.ContextElement(
+                initial_value="Not seeing something? PAXMiner options (achievements, Kotter, charts) are in `/config-paxminer`.",
+            ),
         ),
     ]
 )
@@ -349,6 +345,21 @@ CONFIG_GENERAL_FORM = orm.BlockView(
             action=actions.CONFIG_PREBLAST_MOLESKINE_TEMPLATE,
             optional=True,
             element=orm.RichTextInputElement(),
+        ),
+        orm.InputBlock(
+            label="Also post achievement unlocks to the AO channel?",
+            action=actions.CONFIG_POST_ACHIEVEMENTS_TO_AO,
+            optional=False,
+            element=orm.RadioButtonsElement(
+                initial_value="no",
+                options=orm.as_selector_options(names=["Yes", "No"], values=["yes", "no"]),
+            ),
+        ),
+        orm.ContextBlock(
+            action=actions.CONFIG_POST_ACHIEVEMENTS_TO_AO_CONTEXT,
+            element=orm.ContextElement(
+                initial_value="Requires PAXMiner linked to this workspace. Achievement catalog and channels are configured in `/config-paxminer`.",
+            ),
         ),
     ]
 )
@@ -487,209 +498,6 @@ LOADING_FORM = orm.BlockView(
 ERROR_FORM = orm.BlockView(
     blocks=[
         orm.SectionBlock(label=":warning: the following error occurred:", action=actions.ERROR_FORM_MESSAGE),
-    ]
-)
-
-ACHIEVEMENT_FORM = orm.BlockView(
-    blocks=[
-        orm.InputBlock(
-            label="Achievement",
-            action=actions.ACHIEVEMENT_SELECT,
-            optional=False,
-            element=orm.StaticSelectElement(placeholder="Select the achievement..."),
-        ),
-        orm.ContextBlock(
-            element=orm.ContextElement(
-                initial_value="Don't see the achievement you're looking for? Talk to your Weasel Shaker / Tech Q about getting it added!",  # noqa: E501
-            ),
-        ),
-        orm.InputBlock(
-            label="Select the PAX",
-            action=actions.ACHIEVEMENT_PAX,
-            optional=False,
-            element=orm.MultiUsersSelectElement(placeholder="Select the PAX..."),
-        ),
-        orm.InputBlock(
-            label="Achievement Date",
-            action=actions.ACHIEVEMENT_DATE,
-            optional=False,
-            element=orm.DatepickerElement(placeholder="Select the date..."),
-        ),
-        orm.ContextBlock(
-            element=orm.ContextElement(
-                initial_value="Please use a date in the period the achievement was earned, as some achievements can be earned for several periods.",  # noqa: E501
-            ),
-        ),
-    ]
-)
-
-WEASELBOT_CONFIG_FORM = orm.BlockView(
-    blocks=[
-        orm.InputBlock(
-            label="Which Weaselbot features should be enabled?",
-            action=actions.WEASELBOT_ENABLE_FEATURES,
-            element=orm.CheckboxInputElement(
-                options=orm.as_selector_options(
-                    names=["Achievements", "Kotter Reports"],
-                    values=["achievements", "kotter_reports"],
-                )
-            ),
-        ),
-        orm.InputBlock(
-            label="Which channel should achievements be posted to?",
-            action=actions.WEASELBOT_ACHIEVEMENT_CHANNEL,
-            optional=True,
-            element=orm.ChannelsSelectElement(placeholder="Select the channel..."),
-        ),
-        orm.InputBlock(
-            label="Which user or channel should Kotter Reports be posted to?",
-            action=actions.WEASELBOT_KOTTER_CHANNEL,
-            optional=True,
-            element=orm.ConversationsSelectElement(placeholder="Select the user or channel..."),
-        ),
-        orm.ContextBlock(
-            element=orm.ContextElement(
-                initial_value="Please note that Weaselbot will need to be manually added to private channels if selected.",  # noqa: E501
-            ),
-        ),
-        orm.InputBlock(
-            label="How many weeks of no posting should put a PAX on the Kotter Report?",
-            action=actions.WEASELBOT_KOTTER_WEEKS,
-            optional=True,
-            element=orm.NumberInputElement(placeholder="Enter the number of weeks...", is_decimal_allowed=False),
-        ),
-        orm.InputBlock(
-            label="After how many weeks of no posting should a PAX be removed from the Kotter Report?",
-            action=actions.WEASELBOT_KOTTER_REMOVE_WEEKS,
-            optional=True,
-            element=orm.NumberInputElement(placeholder="Enter the number of weeks...", is_decimal_allowed=False),
-        ),
-        orm.InputBlock(
-            label="How many weeks of activity should be used to base a PAX's home AO?",
-            action=actions.WEASELBOT_HOME_AO_WEEKS,
-            optional=True,
-            element=orm.NumberInputElement(placeholder="Enter the number of weeks...", is_decimal_allowed=False),
-        ),
-        orm.InputBlock(
-            label="After how many weeks of no Qing should a PAX be put on the Q list?",
-            action=actions.WEASELBOT_Q_WEEKS,
-            optional=True,
-            element=orm.NumberInputElement(placeholder="Enter the number of weeks...", is_decimal_allowed=False),
-        ),
-        orm.InputBlock(
-            label="What should be the minimum number of posts over that time to be eligible for the Q list?",
-            action=actions.WEASELBOT_Q_POSTS,
-            optional=True,
-            element=orm.NumberInputElement(placeholder="Enter the number of posts...", is_decimal_allowed=False),
-        ),
-    ]
-)
-
-PAXMINER_REPORT_DICT = {
-    "names": [
-        "PAX Charts",
-        "Q Charts",
-        "AO Leaderboards",
-        "Region Leaderboard",
-    ],
-    "values": [
-        "pax_charts",
-        "q_charts",
-        "ao_leaderboards",
-        "region_leaderboard",
-    ],
-    "fields": [
-        "send_pax_charts",
-        "send_q_charts",
-        "send_ao_leaderboard",
-        "send_region_leaderboard",
-    ],
-    "schema": [
-        PaxminerRegion.send_pax_charts,
-        PaxminerRegion.send_q_charts,
-        PaxminerRegion.send_ao_leaderboard,
-        PaxminerRegion.send_region_leaderboard,
-    ],
-}
-
-CONFIG_PAXMINER_FORM = orm.BlockView(
-    blocks=[
-        orm.InputBlock(
-            label="Enable PAXMiner scraping?",
-            action=actions.CONFIG_PAXMINER_SCRAPE_ENABLE,
-            optional=False,
-            element=orm.RadioButtonsElement(
-                options=orm.as_selector_options(
-                    names=["Scraping Enabled", "Disable Scraping"], values=["enable", "disable"]
-                ),  # noqa: E501
-            ),
-        ),
-        orm.ContextBlock(
-            element=orm.ContextElement(
-                initial_value="In preparation for PAXMiner's retirement, we are asking regions to disable scraping and utilize Slackblast for all backblast creation. Disabling scraping will not impact your monthly reporting.",  # noqa: E501
-            ),
-        ),
-        # orm.InputBlock(
-        #     label="Which channels should be scraped by PAXMiner?",
-        #     action=actions.CONFIG_PAXMINER_SCRAPE_CHANNELS,
-        #     element=orm.MultiChannelsSelectElement(placeholder="Select some channels..."),
-        # ),
-        orm.InputBlock(
-            label="Which monthly reports should be enabled?",
-            action=actions.CONFIG_PAXMINER_ENABLE_REPORTS,
-            element=orm.CheckboxInputElement(
-                options=orm.as_selector_options(
-                    names=PAXMINER_REPORT_DICT["names"],
-                    values=PAXMINER_REPORT_DICT["values"],
-                )
-            ),
-            optional=False,
-        ),
-        orm.InputBlock(
-            label="Which channel should region reports be posted to?",
-            action=actions.CONFIG_PAXMINER_1STF_CHANNEL,
-            optional=False,
-            element=orm.ChannelsSelectElement(placeholder="Select the channel..."),
-        ),
-        orm.InputBlock(
-            label="Which channels should be enabled for monthly reporting?",
-            action=actions.CONFIG_PAXMINER_REPORT_CHANNELS,
-            element=orm.MultiChannelsSelectElement(placeholder="Select some channels..."),
-        ),
-        orm.SectionBlock(
-            label="""
-*Report Descriptions*
-
-*PAX Charts:*
-- One graph sent to each PAX. YTD posting summary, broken down by month and bisected by AO. Contains a total YTD in the upper right
-*Q Charts:*
-- Graph sent to each AO channel of who has Q'd in the last month.
-- Graph sent to the firstf channel, who has Q'd in the last month across the region bisected by AO.
-*AO Leaderboards:*
-- Two Graphs Sent to each AO channel
-- PAX posts in last month
-- PAX posts YTD
-*Region:*
-- Graph sent to the firstf channel of PAX Posts in the last month
-- Graph sent to the firstf channel of PAX Posts YTD.
-"""  # noqa: E501
-        ),
-    ]
-)
-
-CONFIG_NO_PAXMINER_FORM = orm.BlockView(
-    blocks=[
-        orm.SectionBlock(
-            label="PAXMiner doesn't appear to be configured for this Slack workspace. Ask a workspace admin to connect PAXMiner for your region.",  # noqa: E501
-        )
-    ]
-)
-
-NO_WEASELBOT_CONFIG_FORM = orm.BlockView(
-    blocks=[
-        orm.SectionBlock(
-            label="Weaselbot and/or PAXMiner doesn't appear to be configured for this Slack workspace. Ask a workspace admin to set up Weaselbot and PAXMiner.",  # noqa: E501
-        )
     ]
 )
 

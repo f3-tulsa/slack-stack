@@ -12,7 +12,7 @@
 ## Database
 
 - **Encryption key mismatch:** `DB_ENCRYPTION_KEY` used at **migration** time must match **deploy** for that stage; otherwise reads fail or data looks corrupt.
-- **Regional schema not linked (QSignups):** If **`PAXMINER_REGIONAL_SCHEMA`** is unset, Site Q / past-Q detection is skipped; only Slack admins get calendar management.
+- **Regional schema not linked (QSignups):** If **`PM_REGIONAL_SCHEMA`** is unset, Site Q / past-Q detection is skipped; only Slack admins get calendar management.
 
 ## PAXminer container upgrade
 

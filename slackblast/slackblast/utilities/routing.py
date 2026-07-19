@@ -1,4 +1,4 @@
-from features import backblast, config, custom_fields, preblast, strava, weaselbot, welcome
+from features import backblast, config, custom_fields, preblast, strava, welcome
 from utilities import builders
 from utilities.slack import actions
 
@@ -17,7 +17,6 @@ COMMAND_MAPPER = {
     "/preblast": (preblast.build_preblast_form, True),
     "/config-welcome-message": (welcome.build_welcome_message_form, True),
     "/config-slackblast": (config.build_config_form, True),
-    "/tag-achievement": (weaselbot.build_achievement_form, True),
 }
 
 VIEW_MAPPER = {
@@ -31,9 +30,6 @@ VIEW_MAPPER = {
     actions.STRAVA_MODIFY_CALLBACK_ID: (strava.handle_strava_modify, False),
     actions.CUSTOM_FIELD_ADD_CALLBACK_ID: (custom_fields.handle_custom_field_add, False),
     actions.CUSTOM_FIELD_MENU_CALLBACK_ID: (custom_fields.handle_custom_field_menu, False),
-    actions.ACHIEVEMENT_CALLBACK_ID: (weaselbot.handle_achievements_tag, False),
-    actions.WEASELBOT_CONFIG_CALLBACK_ID: (weaselbot.handle_config_form, False),
-    actions.CONFIG_PAXMINER_CALLBACK_ID: (config.handle_config_paxminer_post, False),
 }
 
 ACTION_MAPPER = {
@@ -52,12 +48,10 @@ ACTION_MAPPER = {
     actions.CUSTOM_FIELD_DELETE: (custom_fields.delete_custom_field, False),
     actions.PREBLAST_NEW_BUTTON: (preblast.build_preblast_form, True),
     actions.PREBLAST_EDIT_BUTTON: (preblast.handle_preblast_edit_button, True),
-    actions.CONFIG_WEASELBOT: (weaselbot.build_config_form, False),
     actions.CONFIG_WELCOME_MESSAGE: (welcome.build_welcome_message_form, False),
     actions.CONFIG_EMAIL: (config.build_config_email_form, False),
     actions.CONFIG_GENERAL: (config.build_config_general_form, False),
     actions.CONFIG_WELCOME_MESSAGE: (welcome.build_welcome_config_form, False),
-    actions.CONFIG_PAXMINER: (config.build_config_paxminer_form, False),
 }
 
 VIEW_CLOSED_MAPPER = {

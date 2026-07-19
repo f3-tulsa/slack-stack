@@ -141,3 +141,111 @@ def test_handle_backblast_post_app_q_uses_submitter_for_db_q_user_id(
     assert created_backblast_records[0].q_user_id == "U_SUBMITTER"
 
 
+@patch("features.backblast.trigger_achievement_webhook")
+@patch("features.backblast.get_channel_id", return_value=None)
+@patch("features.backblast.replace_user_channel_ids", return_value="moleskin with names")
+@patch("features.backblast.parse_rich_block", return_value="moleskin text")
+@patch("features.backblast.get_channel_name", return_value="downrange")
+def test_handle_backblast_post_triggers_achievement_webhook_when_coupled(
+    _mock_channel_name,
+    _mock_parse,
+    _mock_replace,
+    _mock_get_channel_id,
+    mock_webhook,
+):
+    form = MagicMock()
+    form.get_selected_values.return_value = _base_backblast_data()
+
+    body = {
+        "view": {"callback_id": actions.BACKBLAST_CALLBACK_ID},
+        "user": {"id": "U_SUBMITTER"},
+    }
+    client = MagicMock()
+    client.chat_postMessage.return_value = {"ts": "123.456", "message": {"edited": {"ts": "123.457"}}}
+    client.chat_getPermalink.return_value = {"permalink": "https://example.com/backblast"}
+
+    region_record = MagicMock()
+    region_record.paxminer_schema = "f3testregion"
+    region_record.strava_enabled = False
+    region_record.workspace_name = "test-workspace"
+    region_record.email_enabled = 0
+    region_record.postie_format = False
+    region_record.post_achievements_to_ao = 1
+
+    with (
+        patch("features.backblast.copy.deepcopy", return_value=form),
+        patch("features.backblast.add_custom_field_blocks", side_effect=lambda f, _r: f),
+        patch(
+            "features.backblast.get_user_names",
+            side_effect=lambda *_args, **_kwargs: (["DRQ"], ["https://avatar"])
+            if _kwargs.get("return_urls")
+            else ["PAX One"],
+        ),
+        patch("features.backblast.DbManager.find_records", return_value=[]),
+        patch("features.backblast.DbManager.create_record", return_value=MagicMock()),
+        patch("features.backblast.DbManager.create_records", return_value=None),
+        patch("features.backblast.ensure_users_in_db", return_value=None),
+    ):
+        backblast.handle_backblast_post(
+            body=body,
+            client=client,
+            logger=MagicMock(),
+            context={"user_id": "U_SUBMITTER"},
+            region_record=region_record,
+        )
+
+    mock_webhook.assert_called_once()
+    kwargs = mock_webhook.call_args.kwargs
+    assert kwargs["region_record"] is region_record
+    assert "U_DRQ" in kwargs["pax_user_ids"]
+    assert "U_PAX1" in kwargs["pax_user_ids"]
+    assert kwargs["post_to_ao"] is True
+    assert kwargs["ao_channel_id"] == "C_DOWNRANGE"
+
+
+@patch("features.backblast.trigger_achievement_webhook")
+@patch("features.backblast.replace_user_channel_ids", return_value="moleskin with names")
+@patch("features.backblast.parse_rich_block", return_value="moleskin text")
+@patch("features.backblast.get_channel_name", return_value="downrange")
+def test_handle_backblast_post_skips_webhook_when_uncoupled(
+    _mock_channel_name,
+    _mock_parse,
+    _mock_replace,
+    mock_webhook,
+):
+    form = MagicMock()
+    form.get_selected_values.return_value = _base_backblast_data()
+
+    body = {
+        "view": {"callback_id": actions.BACKBLAST_CALLBACK_ID},
+        "user": {"id": "U_OP"},
+    }
+    client = MagicMock()
+    client.chat_postMessage.return_value = {"ts": "123.456"}
+    client.chat_getPermalink.return_value = {"permalink": "https://example.com/backblast"}
+
+    region_record = MagicMock()
+    region_record.paxminer_schema = None
+    region_record.strava_enabled = False
+    region_record.workspace_name = "test-workspace"
+    region_record.email_enabled = 0
+    region_record.postie_format = False
+
+    with (
+        patch("features.backblast.copy.deepcopy", return_value=form),
+        patch("features.backblast.add_custom_field_blocks", side_effect=lambda f, _r: f),
+        patch(
+            "features.backblast.get_user_names",
+            side_effect=lambda *_args, **_kwargs: (["DRQ"], []) if _kwargs.get("return_urls") else ["PAX One"],
+        ),
+    ):
+        backblast.handle_backblast_post(
+            body=body,
+            client=client,
+            logger=MagicMock(),
+            context={"user_id": "U_OP"},
+            region_record=region_record,
+        )
+
+    mock_webhook.assert_not_called()
+

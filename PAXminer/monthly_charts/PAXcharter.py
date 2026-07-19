@@ -40,9 +40,12 @@ def run_pax_charter(
     plot_dir: str | Path = "/tmp/paxminer_plots",
     region_method: str = "v2",
     log_to_file: bool = False,
+    user_ids: list[str] | None = None,
 ) -> dict:
     """
     Build per-PAX attendance charts and DM via Slack (v2) or legacy channel upload (v1).
+
+    When ``user_ids`` is provided, only those users receive charts (schedule destinations).
     """
     plot_base = Path(plot_dir) / schema
     plot_base.mkdir(parents=True, exist_ok=True)
@@ -83,6 +86,10 @@ def run_pax_charter(
             data = next_cursor
         else:
             break
+
+    if user_ids is not None:
+        allowed = set(user_ids)
+        users_df = users_df[users_df["user_id"].isin(allowed)].copy()
 
     for _index, row in users_df.iterrows():
         un_tmp = row["user_name"]

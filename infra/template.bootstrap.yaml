@@ -4,7 +4,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   slack-stack bootstrap: GitHub OIDC deploy role, deployment artifact bucket,
-  and least-privilege policy for SAM deploy of PAXminer, weaselbot, slackblast, qsignups.
+  and least-privilege policy for SAM deploy of PAXminer, slackblast, qsignups.
 
 Parameters:
   GitHubRepository:
@@ -170,7 +170,6 @@ Resources:
               StringLike:
                 iam:RoleName:
                   - paxminer-*
-                  - weaselbot-*
                   - slackblast-*
                   - qsignups-*
           - Sid: IAMManageSlackStackRoles
@@ -189,7 +188,6 @@ Resources:
               - iam:UpdateAssumeRolePolicy
             Resource:
               - !Sub "arn:aws:iam::${AWS::AccountId}:role/paxminer-*"
-              - !Sub "arn:aws:iam::${AWS::AccountId}:role/weaselbot-*"
               - !Sub "arn:aws:iam::${AWS::AccountId}:role/slackblast-*"
               - !Sub "arn:aws:iam::${AWS::AccountId}:role/qsignups-*"
           - Sid: Lambda
@@ -219,7 +217,6 @@ Resources:
               - lambda:GetFunctionUrlConfig
             Resource:
               - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:paxminer-*"
-              - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:weaselbot-*"
               - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:slackblast-*"
               - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:qsignups-*"
           - Sid: ApiGateway
@@ -238,8 +235,6 @@ Resources:
             Resource:
               - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/paxminer-*"
               - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/paxminer-*:*"
-              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/weaselbot-*"
-              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/weaselbot-*:*"
               - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/slackblast-*"
               - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/slackblast-*:*"
               - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/qsignups-*"

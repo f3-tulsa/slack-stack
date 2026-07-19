@@ -22,17 +22,6 @@ updates:
       minor-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
-  - package-ecosystem: docker
-    directory: /weaselbot
-    schedule:
-      interval: weekly
-      day: saturday
-      time: "13:00"
-      timezone: America/Chicago
-    groups:
-      minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /PAXminer
     schedule:
@@ -46,17 +35,6 @@ updates:
         update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /PAXminer/database_management
-    schedule:
-      interval: weekly
-      day: saturday
-      time: "13:00"
-      timezone: America/Chicago
-    groups:
-      minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-  - package-ecosystem: pip
-    directory: /weaselbot
     schedule:
       interval: weekly
       day: saturday

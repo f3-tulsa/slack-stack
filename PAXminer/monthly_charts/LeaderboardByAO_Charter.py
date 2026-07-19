@@ -44,6 +44,8 @@ def run_ao_leaderboard(
     region: str,
     firstf: str,
     plot_dir: str | Path = "/tmp/paxminer_plots",
+    destinations: list[str] | None = None,
+    post_per_ao: bool = True,
 ) -> dict:
     _ = region, firstf
     plot_base = Path(plot_dir) / schema
@@ -55,6 +57,7 @@ def run_ao_leaderboard(
 
     thismonth, thismonthname, thismonthnamelong, yearnum = _lb_ao_period()
     total_graphs = 0
+    fallback_channels = list(destinations) if destinations else []
 
     try:
         with mydb.cursor() as cursor:
@@ -67,7 +70,11 @@ def run_ao_leaderboard(
 
     for _index, row in aos_df.iterrows():
         ao = row["ao"]
-        channel_id = row["channel_id"]
+        # Per-AO posts go to the AO channel; otherwise fan-out to schedule destinations.
+        upload_channels = [row["channel_id"]] if post_per_ao else list(fallback_channels)
+        if not upload_channels:
+            continue
+        channel_id = upload_channels[0]
         try:
             with mydb.cursor() as cursor:
                 sql = """
@@ -109,29 +116,39 @@ def run_ao_leaderboard(
             plt.ylabel("# Posts for " + thismonthname + ", " + yearnum)
             out_m = plot_base / f"PAX_Leaderboard_{ao}{thismonthname}{yearnum}.jpg"
             plt.savefig(str(out_m), bbox_inches="tight")
-            max_attempts = 5
-            for attempt in range(max_attempts):
-                try:
-                    slack.files_upload_v2(
-                        channel=channel_id,
-                        initial_comment="Hey "
-                        + ao
-                        + "! Here are the posting leaderboards for "
-                        + thismonthnamelong
-                        + ", "
-                        + yearnum
-                        + " as well as for Year to Date (includes all beatdowns, rucks, Qsource, etc.) with the top 20 posters! T-CLAPS to these HIMs.",
-                        file=str(out_m),
-                    )
-                    total_graphs += 1
-                    break
-                except SlackApiError as e:
-                    if e.response.status_code == 429:
-                        delay = int(e.response.headers["Retry-After"])
-                        _LOG.info("AO leaderboard: rate limited, retrying in %s seconds (ao=%s)", delay, ao)
-                        time.sleep(delay)
-                    else:
-                        raise e
+            comment = (
+                "Hey "
+                + ao
+                + "! Here are the posting leaderboards for "
+                + thismonthnamelong
+                + ", "
+                + yearnum
+                + " as well as for Year to Date (includes all beatdowns, rucks, Qsource, etc.) "
+                "with the top 20 posters! T-CLAPS to these HIMs."
+            )
+            for ch in upload_channels:
+                max_attempts = 5
+                for attempt in range(max_attempts):
+                    try:
+                        slack.files_upload_v2(
+                            channel=ch,
+                            initial_comment=comment,
+                            file=str(out_m),
+                        )
+                        total_graphs += 1
+                        break
+                    except SlackApiError as e:
+                        if e.response.status_code == 429:
+                            delay = int(e.response.headers["Retry-After"])
+                            _LOG.info(
+                                "AO leaderboard: rate limited, retrying in %s seconds (ao=%s)",
+                                delay,
+                                ao,
+                            )
+                            time.sleep(delay)
+                        else:
+                            _LOG.exception("AO leaderboard upload failed ao=%s channel=%s", ao, ch)
+                            break
             plt.close("all")
 
         try:
@@ -174,19 +191,25 @@ def run_ao_leaderboard(
             plt.ylabel("# Posts for " + yearnum + " - Year To Date")
             out_y = plot_base / f"PAX_Leaderboard_YTD_{ao}{yearnum}.jpg"
             plt.savefig(str(out_y), bbox_inches="tight")
-            max_attempts = 5
-            for attempt in range(max_attempts):
-                try:
-                    slack.files_upload_v2(file=str(out_y), channel=channel_id)
-                    total_graphs += 1
-                    break
-                except SlackApiError as e:
-                    if e.response.status_code == 429:
-                        delay = int(e.response.headers["Retry-After"])
-                        _LOG.info("AO leaderboard YTD: rate limited, retrying in %s seconds (ao=%s)", delay, ao)
-                        time.sleep(delay)
-                    else:
-                        raise e
+            for ch in upload_channels:
+                max_attempts = 5
+                for attempt in range(max_attempts):
+                    try:
+                        slack.files_upload_v2(file=str(out_y), channel=ch)
+                        total_graphs += 1
+                        break
+                    except SlackApiError as e:
+                        if e.response.status_code == 429:
+                            delay = int(e.response.headers["Retry-After"])
+                            _LOG.info(
+                                "AO leaderboard YTD: rate limited, retrying in %s seconds (ao=%s)",
+                                delay,
+                                ao,
+                            )
+                            time.sleep(delay)
+                        else:
+                            _LOG.exception("AO leaderboard YTD upload failed ao=%s channel=%s", ao, ch)
+                            break
             plt.close("all")
 
     return {"schema": schema, "graphs": total_graphs}
