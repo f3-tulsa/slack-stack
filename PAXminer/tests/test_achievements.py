@@ -546,3 +546,116 @@ def test_achievements_handler_webhook_success():
     assert mock_run.call_args.kwargs["pax_user_ids"] == {"U1", "U2"}
     assert mock_run.call_args.kwargs["post_to_ao"] is True
     assert mock_run.call_args.kwargs["ao_channel_id"] == "C_AO"
+
+
+def test_achievements_emit_per_event_paxminer_logs():
+    """Grant and revoke each emit a paxminer_logs line."""
+    from achievements import runner as runner_mod
+
+    rule = {
+        "id": 1,
+        "name": "Ironman",
+        "verb": "posting 30 times",
+        "code": "ironman",
+        "period": "year",
+    }
+    awarded = pd.DataFrame(
+        [
+            {
+                "id": 99,
+                "achievement_id": 1,
+                "pax_id": "U_REVOKE",
+                "date_awarded": date(2026, 1, 5),
+                "period": "year",
+                "code": "ironman",
+            }
+        ]
+    )
+    qualified = pd.DataFrame(
+        [
+            {
+                "pax_id": "U_GRANT",
+                "date_awarded": date(2026, 7, 1),
+                "period_bucket": 2026,
+            }
+        ]
+    )
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    # _load_rules then schemas list (_load_awarded_ytd is patched)
+    mock_cur.fetchall.side_effect = [
+        [rule],
+        [{"schema_name": "f3test"}],
+    ]
+
+    region_row = {
+        "send_achievements": 1,
+        "achievement_channel": "C_ACH",
+        "slack_token": "enc",
+        "region": "Tulsa",
+        "schema_name": "f3test",
+    }
+    log_lines: list[str] = []
+
+    def capture_log(client, text, **kwargs):
+        log_lines.append(text)
+
+    with patch.object(runner_mod, "decrypt_field", return_value="xoxb-test"):
+        with patch.object(runner_mod, "slack_client", return_value=MagicMock()):
+            with patch.object(runner_mod, "post_message"):
+                with patch.object(runner_mod, "open_dm_channel", return_value="D1"):
+                    with patch.object(runner_mod, "post_log", side_effect=capture_log):
+                        with patch.object(
+                            runner_mod, "load_nation_attendance", return_value=pd.DataFrame()
+                        ):
+                            with patch.object(
+                                runner_mod, "attach_home_regions", return_value=pd.DataFrame()
+                            ):
+                                with patch.object(
+                                    runner_mod, "evaluate_rule", return_value=qualified
+                                ):
+                                    with patch.object(
+                                        runner_mod, "_load_awarded_ytd", return_value=awarded
+                                    ):
+                                        result = runner_mod.run_achievements_for_region(
+                                            mock_conn,
+                                            pm_schema="paxminer",
+                                            regional_schema="f3test",
+                                            region_row=region_row,
+                                        )
+
+    assert result == {"grants": 1, "revokes": 1}
+    assert any("granted 'Ironman' to <@U_GRANT>" in line for line in log_lines)
+    assert any("revoked 'Ironman' from <@U_REVOKE>" in line for line in log_lines)
+    assert all("Tulsa" in line for line in log_lines)
+
+
+def test_run_daily_posts_failure_log():
+    from achievements import runner as runner_mod
+
+    region_row = {
+        "region": "Tulsa",
+        "schema_name": "f3test",
+        "slack_token": "enc",
+        "send_achievements": 1,
+    }
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.return_value = [region_row]
+
+    with patch.object(
+        runner_mod,
+        "run_achievements_for_region",
+        side_effect=RuntimeError("db down"),
+    ):
+        with patch.object(runner_mod, "_post_achievement_failure_log") as mock_fail:
+            results = runner_mod.run_daily(mock_conn, "paxminer")
+
+    assert results[0]["error"] == "db down"
+    mock_fail.assert_called_once()
+    assert mock_fail.call_args.args[0]["region"] == "Tulsa"

@@ -12,7 +12,7 @@ from achievements.engine import awarded_period_bucket, evaluate_rule, period_buc
 from achievements.attendance import attach_home_regions, load_nation_attendance
 from common.encryption import decrypt_field
 from slack_blocks import section
-from slack_util import open_dm_channel, ordinal_suffix, post_message, slack_client
+from slack_util import open_dm_channel, ordinal_suffix, post_log, post_message, slack_client
 
 LOG = logging.getLogger(__name__)
 
@@ -83,6 +83,7 @@ def run_achievements_for_region(
     dry_run: bool = False,
 ) -> dict:
     year = date.today().year
+    region_name = region_row.get("region") or regional_schema
     if not region_row.get("send_achievements"):
         return {"skipped": "send_achievements off"}
     channel = region_row.get("achievement_channel")
@@ -158,6 +159,10 @@ def run_achievements_for_region(
             post_message(client, channel, text, blocks=blocks)
             if post_to_ao and ao_channel_id:
                 post_message(client, ao_channel_id, text, blocks=blocks)
+            post_log(
+                client,
+                f"- Achievement ({region_name}): revoked '{rule['name']}' from <@{g['pax_id']}>",
+            )
 
         for g in grants:
             rule = g["rule"]
@@ -182,6 +187,10 @@ def run_achievements_for_region(
                 LOG.exception("DM failed pax=%s", g["pax_id"])
             if post_to_ao and ao_channel_id:
                 post_message(client, ao_channel_id, text, blocks=blocks, add_reaction=True)
+            post_log(
+                client,
+                f"- Achievement ({region_name}): granted '{rule['name']}' to <@{g['pax_id']}>",
+            )
 
         conn.commit()
 
@@ -209,4 +218,19 @@ def run_daily(conn, pm_schema: str, *, dry_run: bool = False) -> list[dict]:
         except Exception as e:
             LOG.exception("achievements region=%s", row.get("region"))
             results.append({"region": row.get("region"), "error": str(e)})
+            _post_achievement_failure_log(row, e)
     return results
+
+
+def _post_achievement_failure_log(region_row: dict, exc: Exception) -> None:
+    """Best-effort failure line to paxminer_logs. Never raises."""
+    region_name = region_row.get("region") or region_row.get("schema_name") or "?"
+    token_enc = region_row.get("slack_token")
+    if not token_enc:
+        return
+    try:
+        token = decrypt_field(token_enc)
+        client = slack_client(token)
+        post_log(client, f"- Achievement ({region_name}): FAILED - {exc}")
+    except Exception:
+        LOG.debug("achievement failure log skipped region=%s", region_name, exc_info=True)
