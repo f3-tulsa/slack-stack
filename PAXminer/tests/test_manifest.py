@@ -18,6 +18,8 @@ def test_manifest_enables_app_home_and_app_home_opened():
     data = json.loads(_MANIFEST.read_text(encoding="utf-8"))
     app_home = data["features"]["app_home"]
     assert app_home.get("home_tab_enabled") is True
+    # Messages tab must stay enabled so bot DMs (e.g. Run Now results) are visible.
+    assert app_home.get("messages_tab_enabled") is True
     events = data["settings"]["event_subscriptions"]
     assert "app_home_opened" in events.get("bot_events", [])
     assert events.get("request_url")
