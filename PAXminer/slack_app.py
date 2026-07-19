@@ -305,11 +305,11 @@ def handle_config_submit(ack, body, client, logger):
     """Named listener for config modal save — importable for unit tests."""
     user_id = (body.get("user") or {}).get("id", "")
     if not is_slack_admin(user_id, client=client):
-        ack(response_action="errors", errors={"features": "Admin required"})
+        ack(response_action="errors", errors={"timezone": "Admin required"})
         return
     team_id, _, region = _region_context_from_body(body)
     if not region:
-        ack(response_action="errors", errors={"features": "Region not found"})
+        ack(response_action="errors", errors={"timezone": "Region not found"})
         return
     values = {k: v for k, v in _parse_modal_values(body).items() if v is not None}
     pm = paxminer_schema_from_env()

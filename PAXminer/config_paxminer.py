@@ -73,23 +73,10 @@ def _achievement_summary(row: dict) -> str:
     )
 
 
-FEATURE_OPTIONS = [
-    {"text": {"type": "plain_text", "text": "Achievements"}, "value": "achievements"},
-    {"text": {"type": "plain_text", "text": "Kotter reports"}, "value": "kotter"},
-    {"text": {"type": "plain_text", "text": "Achievement leaderboard"}, "value": "leaderboard"},
-]
-
-CHART_OPTIONS = [
-    {"text": {"type": "plain_text", "text": "PAX charts"}, "value": "pax"},
-    {"text": {"type": "plain_text", "text": "Q charts"}, "value": "q"},
-    {"text": {"type": "plain_text", "text": "Region leaderboard"}, "value": "region_lb"},
-    {"text": {"type": "plain_text", "text": "AO leaderboard"}, "value": "ao_lb"},
-]
-
-
-def _selected_options(all_options: list[dict], selected_values: list[str]) -> list[dict]:
-    selected = set(selected_values)
-    return [opt for opt in all_options if opt["value"] in selected]
+ACHIEVEMENTS_ENABLE_OPTION = {
+    "text": {"type": "plain_text", "text": "Send daily achievement awards"},
+    "value": "achievements",
+}
 
 
 def _looks_like_channel_id(value: str | None) -> bool:
@@ -125,23 +112,13 @@ def _config_modal(region: dict) -> dict:
         tz_opts = [{"text": {"type": "plain_text", "text": tz}, "value": tz}] + tz_opts
     tz_initial = next((o for o in tz_opts if o["value"] == tz), tz_opts[0])
 
-    # Legacy flags still editable until schedule cutover fully owns cadence.
-    features = []
-    if region.get("send_achievements"):
-        features.append("achievements")
-    if region.get("send_aoq_reports"):
-        features.append("kotter")
-    if region.get("send_achievement_leaderboard"):
-        features.append("leaderboard")
-    feature_options = list(FEATURE_OPTIONS)
-    feature_initial = _selected_options(feature_options, features)
-    features_element: dict = {
+    achievements_element: dict = {
         "type": "checkboxes",
-        "action_id": "features",
-        "options": feature_options,
+        "action_id": "val",
+        "options": [ACHIEVEMENTS_ENABLE_OPTION],
     }
-    if feature_initial:
-        features_element["initial_options"] = feature_initial
+    if region.get("send_achievements"):
+        achievements_element["initial_options"] = [ACHIEVEMENTS_ENABLE_OPTION]
 
     return {
         "type": "modal",
@@ -205,39 +182,29 @@ def _config_modal(region: dict) -> dict:
                 "type": "divider",
             },
             {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "*Achievements*\n"
+                        "Daily award/revoke path (not scheduled). Charts, Kotter, and "
+                        "leaderboards are configured under *Schedule*."
+                    ),
+                },
+            },
+            {
                 "type": "input",
-                "block_id": "features",
+                "block_id": "send_achievements",
                 "optional": True,
-                "label": {"type": "plain_text", "text": "Legacy feature flags (until schedule cutover)"},
-                "element": features_element,
+                "label": {"type": "plain_text", "text": "Daily achievements"},
+                "element": achievements_element,
             },
             {
                 "type": "input",
                 "block_id": "achievement_channel",
                 "optional": True,
-                "label": {"type": "plain_text", "text": "Legacy achievement channel (seed/defaults)"},
+                "label": {"type": "plain_text", "text": "Achievement awards channel"},
                 "element": _channels_select_element(region.get("achievement_channel")),
-            },
-            {
-                "type": "input",
-                "block_id": "kotter_channel",
-                "optional": True,
-                "label": {"type": "plain_text", "text": "Legacy Kotter channel (seed/defaults)"},
-                "element": _channels_select_element(region.get("kotter_channel")),
-            },
-            {
-                "type": "input",
-                "block_id": "firstf_channel",
-                "optional": True,
-                "label": {"type": "plain_text", "text": "Legacy region charts channel (seed/defaults)"},
-                "element": _channels_select_element(region.get("firstf_channel")),
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "_Legacy channel fields seed Restore Defaults. Prefer Schedule destinations._",
-                },
             },
         ],
     }
@@ -464,35 +431,16 @@ def _to_int(value, default):
 
 def _parse_modal_values(payload: dict) -> dict:
     state = payload.get("view", {}).get("state", {}).get("values", {})
-    features = [o["value"] for o in state.get("features", {}).get("features", {}).get("selected_options", [])]
+    achievements = [
+        o["value"]
+        for o in state.get("send_achievements", {}).get("val", {}).get("selected_options", [])
+    ]
     tz_sel = state.get("timezone", {}).get("val", {}).get("selected_option") or {}
     timezone = (tz_sel.get("value") or "America/Chicago").strip()
     return {
         "timezone": timezone,
-        "send_achievements": 1 if "achievements" in features else 0,
-        "send_aoq_reports": 1 if "kotter" in features else 0,
-        "send_achievement_leaderboard": 1 if "leaderboard" in features else 0,
+        "send_achievements": 1 if "achievements" in achievements else 0,
         "achievement_channel": _selected_channel(state, "achievement_channel"),
-        "kotter_channel": _selected_channel(state, "kotter_channel"),
-        "firstf_channel": _selected_channel(state, "firstf_channel"),
-        # Chart send_* flags are owned by Schedule after cutover; keep prior DB values
-        # unless still present in an older modal payload.
-        "send_pax_charts": 1
-        if "pax"
-        in [o["value"] for o in state.get("charts", {}).get("charts", {}).get("selected_options", [])]
-        else None,
-        "send_q_charts": 1
-        if "q"
-        in [o["value"] for o in state.get("charts", {}).get("charts", {}).get("selected_options", [])]
-        else None,
-        "send_region_leaderboard": 1
-        if "region_lb"
-        in [o["value"] for o in state.get("charts", {}).get("charts", {}).get("selected_options", [])]
-        else None,
-        "send_ao_leaderboard": 1
-        if "ao_lb"
-        in [o["value"] for o in state.get("charts", {}).get("charts", {}).get("selected_options", [])]
-        else None,
     }
 
 

@@ -507,11 +507,7 @@ def test_config_modal_hub_has_timezone_and_section_buttons():
     modal = _config_modal(
         {
             "send_achievements": 1,
-            "send_aoq_reports": 1,
-            "send_achievement_leaderboard": 0,
             "achievement_channel": "C12345678",
-            "kotter_channel": "C23456789",
-            "firstf_channel": "C34567890",
             "timezone": "America/Chicago",
             "team_id": "T1",
             "schema_name": "f3test",
@@ -526,11 +522,15 @@ def test_config_modal_hub_has_timezone_and_section_buttons():
     assert OPEN_REPORTS_ACTION_ID in action_ids
     assert OPEN_KOTTER_CONFIG_ACTION_ID in action_ids
 
-    for block_id in ("achievement_channel", "kotter_channel", "firstf_channel"):
-        block = by_id[block_id]
-        assert block.get("optional") is True
-        assert block["element"]["type"] == "channels_select"
-        assert block["element"].get("initial_channel", "").startswith("C")
+    assert "send_achievements" in by_id
+    assert by_id["send_achievements"]["element"]["type"] == "checkboxes"
+    assert "kotter_channel" not in by_id
+    assert "firstf_channel" not in by_id
+    assert "features" not in by_id
+    ach_ch = by_id["achievement_channel"]
+    assert ach_ch.get("optional") is True
+    assert ach_ch["element"]["type"] == "channels_select"
+    assert ach_ch["element"].get("initial_channel", "").startswith("C")
 
     parsed = _parse_modal_values(
         {
@@ -540,19 +540,20 @@ def test_config_modal_hub_has_timezone_and_section_buttons():
                         "timezone": {
                             "val": {"selected_option": {"value": "America/Chicago"}}
                         },
-                        "features": {"features": {"selected_options": [{"value": "achievements"}]}},
+                        "send_achievements": {
+                            "val": {"selected_options": [{"value": "achievements"}]}
+                        },
                         "achievement_channel": {"val": {"selected_channel": "C11111111"}},
-                        "kotter_channel": {"val": {"selected_channel": "C22222222"}},
-                        "firstf_channel": {"val": {"selected_channel": ""}},
                     }
                 }
             }
         }
     )
-    assert parsed["timezone"] == "America/Chicago"
-    assert parsed["achievement_channel"] == "C11111111"
-    assert parsed["kotter_channel"] == "C22222222"
-    assert parsed["firstf_channel"] == ""
+    assert parsed == {
+        "timezone": "America/Chicago",
+        "send_achievements": 1,
+        "achievement_channel": "C11111111",
+    }
 
 
 def test_achievements_handler_webhook_unauthorized():
