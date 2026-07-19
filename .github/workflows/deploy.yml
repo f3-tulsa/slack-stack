@@ -392,7 +392,6 @@ jobs:
             invoke_one "paxminer-${STAGE}-paxminer-sync"
             invoke_one "paxminer-${STAGE}-paxminer-slack"
             invoke_one "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke"}'
-            invoke_one "paxminer-${STAGE}-paxminer-kotter" '{"source":"smoke"}'
             invoke_one "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke","feature":"achievement_leaderboard"}'
             invoke_one "paxminer-${STAGE}-paxminer-schedule" '{"source":"smoke","dry_run":true}'
           else

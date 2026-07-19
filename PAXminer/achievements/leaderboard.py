@@ -116,8 +116,6 @@ def build_almost_there_message(
 
 
 def run_leaderboard_for_region(conn, pm_schema: str, region_row: dict, *, dry_run: bool = False) -> dict:
-    if not region_row.get("send_achievement_leaderboard"):
-        return {"skipped": "send_achievement_leaderboard off"}
     schema = region_row.get("schema_name")
     channel = region_row.get("achievement_channel")
     token_enc = region_row.get("slack_token")

@@ -747,7 +747,6 @@ run_smoke_test_lambdas() {
     invoke_one "paxminer-${STAGE}-paxminer-sync" || smoke_rc=1
     invoke_one "paxminer-${STAGE}-paxminer-slack" || smoke_rc=1
     invoke_one_payload "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke"}' || smoke_rc=1
-    invoke_one_payload "paxminer-${STAGE}-paxminer-kotter" '{"source":"smoke"}' || smoke_rc=1
     invoke_one_payload "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke","feature":"achievement_leaderboard"}' || smoke_rc=1
     invoke_one_payload "paxminer-${STAGE}-paxminer-schedule" '{"source":"smoke","dry_run":true}' || smoke_rc=1
   fi

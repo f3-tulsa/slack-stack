@@ -448,7 +448,6 @@ def _dispatch_report(
             from achievements.leaderboard import run_leaderboard_for_region
 
             region = dict(region)
-            region["send_achievement_leaderboard"] = 1
             if channel_ids:
                 region["achievement_channel"] = channel_ids[0]
             result = run_leaderboard_for_region(registry_conn, pm_schema, region)
@@ -467,7 +466,6 @@ def _dispatch_report(
             from kotter.kotter_report import run_kotter_for_region
 
             region = dict(region)
-            region["send_aoq_reports"] = 1
             if channel_ids:
                 region["kotter_channel"] = channel_ids[0]
             elif not region.get("kotter_channel"):
@@ -481,7 +479,6 @@ def _dispatch_report(
                 pm_schema,
                 region,
                 dry_run=False,
-                emit_paxminer_log=False,
             )
             client = slack_client(token)
             if len(channel_ids) > 1 and result.get("text"):

@@ -52,7 +52,7 @@ should build and ship. Preserve this; do not regress it.
   digest or config changed. Keep that flag; never force-replace unchanged
   functions.
 - **Shared image = shared blast radius.** All heavy PAXMiner functions (`sync`,
-  `charts`, `achievements`, `kotter`, `schedule`) build from the same
+  `achievements`, `schedule`) build from the same
   `PAXminer/Dockerfile` (differing only by `ImageConfig.Command`), so any change
   under `PAXminer/**` rebuilds/reships all of them together. That's expected —
   don't "fix" it by splitting images without a reason. Keep Dockerfiles layered

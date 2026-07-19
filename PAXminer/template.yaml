@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: PAXminer — sync, charts, achievements, Kotter, schedule dispatcher, Slack Bolt front door (container-image Lambdas).
+Description: PAXminer — sync, achievements, schedule dispatcher, Slack Bolt front door (container-image Lambdas).
 
 Globals:
   Function:
@@ -33,22 +33,13 @@ Parameters:
   DatabaseFullRun:
     Type: String
     Default: "false"
-  ChartRegionRegex:
-    Type: String
-    Default: ""
   DbEncryptionKey:
     Type: String
     NoEcho: true
     MinLength: 16
-  ChartSchedule:
-    Type: String
-    Default: cron(0 12 1 * ? *)
   AchievementsSchedule:
     Type: String
     Default: rate(1 day)
-  KotterSchedule:
-    Type: String
-    Default: cron(0 12 1 * ? *)
   ScheduleTick:
     Type: String
     Default: rate(15 minutes)
@@ -135,48 +126,6 @@ Resources:
       LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-paxminer-sync"
       RetentionInDays: 30
 
-  ChartFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub "${AWS::StackName}-paxminer-charts"
-      PackageType: Image
-      ImageConfig:
-        Command:
-          - handlers.chart_handler
-      MemorySize: 1024
-      Timeout: 900
-      Events:
-        MonthlyCharts:
-          Type: Schedule
-          Properties:
-            Schedule: !Ref ChartSchedule
-      Environment:
-        Variables:
-          DATABASE_HOST: !Ref DatabaseHost
-          DATABASE_PORT: !Ref DatabasePort
-          DATABASE_USER: !Ref DatabaseUser
-          DATABASE_PASSWORD: !Ref DatabasePassword
-          DATABASE_TLS_ENABLED: !Ref DatabaseTlsEnabled
-          PAXMINER_SCHEMA: !Ref PaxminerSchema
-          PAXMINER_REGISTRY_DATABASE: !Ref PaxminerRegistryDatabase
-          CHART_PLOT_DIR: /tmp/paxminer_plots
-          CHART_REGION_REGEX: !Ref ChartRegionRegex
-          DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
-          CHART_PERIOD_OFFSET_DAYS: !Ref ChartPeriodOffsetDays
-          STAGE: !Ref Stage
-          F3_REGION_NAME: !Ref F3RegionName
-          PM_SLACK_TOKEN: !Ref PmSlackToken
-    Metadata:
-      DockerTag: paxminer-charts
-      DockerContext: ..
-      Dockerfile: PAXminer/Dockerfile
-
-  PaxminerChartsLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-paxminer-charts"
-      RetentionInDays: 30
-
   AchievementsFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -218,46 +167,6 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-paxminer-achievements"
-      RetentionInDays: 30
-
-  KotterFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub "${AWS::StackName}-paxminer-kotter"
-      PackageType: Image
-      ImageConfig:
-        Command:
-          - handlers.kotter_handler
-      MemorySize: 512
-      Timeout: 900
-      Events:
-        MonthlyKotter:
-          Type: Schedule
-          Properties:
-            Schedule: !Ref KotterSchedule
-      Environment:
-        Variables:
-          DATABASE_HOST: !Ref DatabaseHost
-          DATABASE_PORT: !Ref DatabasePort
-          DATABASE_USER: !Ref DatabaseUser
-          DATABASE_PASSWORD: !Ref DatabasePassword
-          DATABASE_TLS_ENABLED: !Ref DatabaseTlsEnabled
-          PAXMINER_SCHEMA: !Ref PaxminerSchema
-          PAXMINER_REGISTRY_DATABASE: !Ref PaxminerRegistryDatabase
-          DB_ENCRYPTION_KEY: !Ref DbEncryptionKey
-          HOME_REGION_DATE_TIERS: !Ref HomeRegionDateTiers
-          STAGE: !Ref Stage
-          F3_REGION_NAME: !Ref F3RegionName
-          PM_SLACK_TOKEN: !Ref PmSlackToken
-    Metadata:
-      DockerTag: paxminer-kotter
-      DockerContext: ..
-      Dockerfile: PAXminer/Dockerfile
-
-  PaxminerKotterLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-paxminer-kotter"
       RetentionInDays: 30
 
   ScheduleFunction:
@@ -362,14 +271,10 @@ Resources:
 Outputs:
   SyncFunctionArn:
     Value: !GetAtt SyncFunction.Arn
-  ChartFunctionArn:
-    Value: !GetAtt ChartFunction.Arn
   AchievementsFunctionArn:
     Value: !GetAtt AchievementsFunction.Arn
   AchievementsFunctionUrl:
     Value: !GetAtt AchievementsFunctionUrl.FunctionUrl
-  KotterFunctionArn:
-    Value: !GetAtt KotterFunction.Arn
   ScheduleFunctionArn:
     Value: !GetAtt ScheduleFunction.Arn
   SlackFunctionArn:

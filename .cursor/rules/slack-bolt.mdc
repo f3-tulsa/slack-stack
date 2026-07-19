@@ -56,6 +56,6 @@ image free of heavy imports (pandas/matplotlib). Keep the Slack front-door Lambd
 ## On-demand charts/stats (design)
 
 Future slash/`app_mention` handlers on the Slack front door should ack
-“Generating…”, async-invoke `ChartFunction` with params, and let the worker
-`files_upload_v2` to the requesting channel. Never render charts synchronously
-on the interactive path.
+“Generating…”, async-invoke `ScheduleFunction` (chart worker) with params, and let
+the worker `files_upload_v2` to the requesting channel. Never render charts
+synchronously on the interactive path.
