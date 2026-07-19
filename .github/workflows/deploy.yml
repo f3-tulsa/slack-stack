@@ -390,9 +390,11 @@ jobs:
           }
           if [[ "${RUN_PM}" == "true" ]]; then
             invoke_one "paxminer-${STAGE}-paxminer-sync"
+            invoke_one "paxminer-${STAGE}-paxminer-slack"
             invoke_one "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke"}'
             invoke_one "paxminer-${STAGE}-paxminer-kotter" '{"source":"smoke"}'
             invoke_one "paxminer-${STAGE}-paxminer-achievements" '{"source":"smoke","feature":"achievement_leaderboard"}'
+            invoke_one "paxminer-${STAGE}-paxminer-schedule" '{"source":"smoke","dry_run":true}'
           else
             echo "Skipping PAXminer smoke test (stack not deployed this run)"
           fi

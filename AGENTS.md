@@ -36,6 +36,37 @@ Review and add/update tests as part of the **same** change — not a follow-up.
 - Bug fixes get a **regression test** that fails before the fix.
 - If a change genuinely needs no test update, say so in the summary and why.
 
+## Deploys
+
+Deploys are **selective** — only the apps and functions that actually changed
+should build and ship. Preserve this; do not regress it.
+
+- **CI picks apps by path.** `.github/workflows/deploy.yml` has a
+  `detect-changes` job using `dorny/paths-filter`; each app's deploy job is
+  gated on it (`PAXminer/**`+`common/**` → paxminer, `slackblast/**`,
+  `qsignups/**`, and `infra/**` → all). When you add code, move a shared module,
+  or add a new app, **update these filters** so the right stack (and only it)
+  deploys.
+- **CloudFormation picks functions.** Every `sam deploy` uses
+  `--no-fail-on-empty-changeset`, so CFN updates only the functions whose image
+  digest or config changed. Keep that flag; never force-replace unchanged
+  functions.
+- **Shared image = shared blast radius.** All heavy PAXMiner functions (`sync`,
+  `charts`, `achievements`, `kotter`, `schedule`) build from the same
+  `PAXminer/Dockerfile` (differing only by `ImageConfig.Command`), so any change
+  under `PAXminer/**` rebuilds/reships all of them together. That's expected —
+  don't "fix" it by splitting images without a reason. Keep Dockerfiles layered
+  deps-first (copy `requirements*.txt` and `pip install` **before** copying app
+  code) so Docker's layer cache is reused on code-only changes.
+- **Local `deploy.sh` builds all stacks by default.** It has no path detection —
+  scope it with `--stack paxminer|slackblast|qsignups` to build/deploy just the
+  app you touched. `--no-cached` (SAM's artifact cache, distinct from Docker's
+  layer cache) is intentional for CI parity/reproducibility; leave it as-is.
+- Keep `deploy.sh` and `deploy.yml` in sync (bucket resolution, parameter
+  overrides, smoke-tested functions). When you add a function, add it to both
+  the smoke tests (`run_smoke_test_lambdas` locally, `post-deploy` in CI) and,
+  if it belongs to a new app, the path filters.
+
 ## Slack interactivity
 
 Use Slack Bolt + Block Kit for slash commands, modals, and buttons. Ack within
