@@ -360,7 +360,8 @@ jobs:
           set -euo pipefail
           invoke_one() {
             local fn="$1"
-            local payload="${2:-{}}"
+            local payload="${2:-}"
+            [[ -z "$payload" ]] && payload='{}'
             echo "--- Invoking ${fn} ---"
             aws lambda invoke \
               --function-name "$fn" \
