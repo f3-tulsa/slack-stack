@@ -184,7 +184,7 @@ With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if nee
 2. Update the PAXMiner Slack app from **`PAXminer/manifest-<stage>.json`** so slash-command and interactivity URLs point at **`SlackFunctionUrl`** (not the old Kotter URL).
 3. Manual Slack smoke:
    - `/config-paxminer` — modal opens, **no** empty `""` ephemeral
-   - Manage Achievements — push modal works; Save persists
+   - **PAX Achievements** hub button — push modal works; Save persists
    - Channel fields are dropdowns (not raw IDs)
    - `/kotter-report` → Send Now — queues (ephemeral “queued”)
 4. Confirm deploy smoke includes `paxminer-<stage>-paxminer-slack` warm ping (`statusCode: 200`).

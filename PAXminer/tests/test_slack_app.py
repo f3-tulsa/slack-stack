@@ -87,34 +87,6 @@ def test_config_command_non_admin_acks_ephemeral_once():
     client.views_open.assert_not_called()
 
 
-def test_manage_achievements_pushes_view():
-    from slack_app import handle_manage_achievements
-
-    ack = MagicMock()
-    client = MagicMock()
-    logger = MagicMock()
-    body = {
-        "user": {"id": "U1"},
-        "team": {"id": "T1"},
-        "trigger_id": "trig",
-        "view": {"private_metadata": '{"team_id":"T1","regional_schema":"f3tulsa_test"}'},
-    }
-    region = {"region": "tulsa", "schema_name": "f3tulsa_test"}
-
-    with patch("slack_app.is_slack_admin", return_value=True):
-        with patch("slack_app._region_context_from_body", return_value=("T1", "f3tulsa_test", region)):
-            with patch("slack_app.connect_from_env") as mock_conn:
-                mock_cur = MagicMock()
-                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
-                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
-                with patch("slack_app._load_achievements", return_value=[]):
-                    handle_manage_achievements(ack, body, client, logger)
-
-    ack.assert_called_once_with()
-    client.views_push.assert_called_once()
-    assert client.views_push.call_args.kwargs["trigger_id"] == "trig"
-
-
 def test_delete_achievement_updates_view():
     from slack_app import handle_delete_achievement
 

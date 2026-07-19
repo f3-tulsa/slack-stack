@@ -13,7 +13,6 @@ CALLBACK_ID = "paxminer-config-id"
 ACHIEVEMENTS_LIST_CALLBACK_ID = "paxminer-achievements-list-id"
 ACHIEVEMENT_EDIT_CALLBACK_ID = "paxminer-achievement-edit-id"
 
-MANAGE_ACHIEVEMENTS_ACTION_ID = "paxminer_manage_achievements"
 ADD_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_add"
 EDIT_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_edit"
 DELETE_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_delete"
@@ -238,18 +237,6 @@ def _config_modal(region: dict) -> dict:
                 "text": {
                     "type": "mrkdwn",
                     "text": "_Legacy channel fields seed Restore Defaults. Prefer Schedule destinations._",
-                },
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*Achievement catalog*\nAdd, edit, or remove achievement rules.",
-                },
-                "accessory": {
-                    "type": "button",
-                    "action_id": MANAGE_ACHIEVEMENTS_ACTION_ID,
-                    "text": {"type": "plain_text", "text": "Manage achievements"},
                 },
             },
         ],

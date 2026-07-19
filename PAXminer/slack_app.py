@@ -23,7 +23,6 @@ from config_paxminer import (
     CALLBACK_ID,
     DELETE_ACHIEVEMENT_ACTION_ID,
     EDIT_ACHIEVEMENT_ACTION_ID,
-    MANAGE_ACHIEVEMENTS_ACTION_ID,
     _achievement_edit_modal,
     _achievements_list_modal,
     _config_modal,
@@ -248,30 +247,6 @@ def _region_context_from_body(body: dict) -> tuple[str, str, dict | None]:
         return team_id, regional_schema or (region or {}).get("schema_name", ""), region
     finally:
         conn.close()
-
-
-def handle_manage_achievements(ack, body, client, logger):
-    """Push achievements list modal — importable for unit tests."""
-    user_id = (body.get("user") or {}).get("id", "")
-    if not is_slack_admin(user_id, client=client):
-        ack()
-        return
-    ack()
-    team_id, regional_schema, region = _region_context_from_body(body)
-    if not region or not regional_schema:
-        logger.warning("Manage achievements: region not found")
-        return
-    conn = connect_from_env(_registry_db())
-    try:
-        with conn.cursor() as cur:
-            achievements = _load_achievements(cur, regional_schema)
-        view = _achievements_list_modal(team_id, regional_schema, achievements)
-        client.views_push(trigger_id=body["trigger_id"], view=view)
-    finally:
-        conn.close()
-
-
-app.action(MANAGE_ACHIEVEMENTS_ACTION_ID)(handle_manage_achievements)
 
 
 def handle_add_achievement(ack, body, client, logger):
