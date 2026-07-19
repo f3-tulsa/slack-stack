@@ -328,6 +328,7 @@ def schedule_handler(event, context):
                 row,
                 dry_run=dry_run,
                 force=bool(event.get("force")),
+                manual=bool(notify_user),
             )
             if notify_user:
                 region = None

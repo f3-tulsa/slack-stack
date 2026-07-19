@@ -13,7 +13,7 @@ from typing import Any
 from common.encryption import decrypt_field
 from paxminer_db import connect_from_env
 from scheduling import is_due_now, region_local_now
-from slack_util import open_dm_channel, post_message, slack_client, upload_file
+from slack_util import open_dm_channel, post_log, post_message, slack_client, upload_file
 
 LOG = logging.getLogger(__name__)
 
@@ -153,6 +153,53 @@ def format_run_result(result: dict) -> tuple[str, list[dict] | None]:
     return text, None
 
 
+def format_schedule_log_line(region_name: str, result: dict) -> str:
+    """Channel-styled bullet for automatic schedule runs posted to paxminer_logs."""
+    sid = result.get("schedule_id")
+    report_type = result.get("report_type") or "?"
+    duration = result.get("duration_s")
+    dur = f" ({duration}s)" if duration is not None else ""
+    label = f"- Schedule ({region_name}) #{sid} ({report_type})"
+    if result.get("error") and not result.get("ok", True):
+        return f"{label}: FAILED - {str(result.get('error'))[:500]}{dur}"
+    skipped = result.get("skipped") or (result.get("result") or {}).get("skipped")
+    if skipped:
+        return f"{label}: skipped - {skipped}{dur}"
+    channels = result.get("channel_count")
+    users = result.get("user_count")
+    dest_bits = []
+    if channels is not None:
+        dest_bits.append(f"{channels} channel(s)")
+    if users is not None:
+        dest_bits.append(f"{users} user DM(s)")
+    dest = ", ".join(dest_bits) if dest_bits else "destinations resolved"
+    return f"{label}: success - posted to {dest}{dur}"
+
+
+def _post_schedule_outcome_log(region: dict | None, result: dict) -> None:
+    """Best-effort paxminer_logs line for an automatic schedule run. Never raises."""
+    region_name = "?"
+    token_enc = None
+    if region:
+        region_name = region.get("region") or region.get("schema_name") or "?"
+        token_enc = region.get("slack_token")
+    if not token_enc:
+        token = (os.environ.get("PM_SLACK_TOKEN") or "").strip() or None
+        if not token:
+            return
+    else:
+        try:
+            token = decrypt_field(token_enc)
+        except Exception:
+            LOG.debug("schedule log decrypt failed region=%s", region_name, exc_info=True)
+            return
+    try:
+        client = slack_client(token)
+        post_log(client, format_schedule_log_line(region_name, result))
+    except Exception:
+        LOG.debug("schedule outcome log failed region=%s", region_name, exc_info=True)
+
+
 def notify_run_result(
     region: dict | None,
     user_id: str,
@@ -187,8 +234,13 @@ def run_one_schedule_item(
     *,
     dry_run: bool = False,
     force: bool = False,
+    manual: bool = False,
 ) -> dict:
-    """Execute a single schedule row. force=True skips due-now check (Run Now)."""
+    """Execute a single schedule row. force=True skips due-now check (Run Now).
+
+    manual=True (Run Now) skips paxminer_logs; the admin is DMed instead.
+    Automatic tick/fan-out runs post an outcome line to paxminer_logs.
+    """
     started = time.time()
     schedule_id = int(schedule["id"])
     schema_name = schedule.get("schema_name") or ""
@@ -201,7 +253,10 @@ def run_one_schedule_item(
             )
         except Exception:
             LOG.exception("mark error status failed schedule_id=%s", schedule_id)
-        return {"schedule_id": schedule_id, "ok": False, "error": "region not found"}
+        out = {"schedule_id": schedule_id, "ok": False, "error": "region not found"}
+        if not manual and not dry_run:
+            _post_schedule_outcome_log(None, out)
+        return out
 
     tz_name = region.get("timezone") or "America/Chicago"
     local = region_local_now(tz_name)
@@ -213,7 +268,14 @@ def run_one_schedule_item(
     definition = _load_definition(registry_conn, pm_schema, int(schedule["report_definition_id"]))
     if not definition:
         mark_schedule_status(registry_conn, pm_schema, schedule_id, local_date, "error")
-        return {"schedule_id": schedule_id, "ok": False, "error": "definition not found"}
+        out = {
+            "schedule_id": schedule_id,
+            "ok": False,
+            "error": "definition not found",
+        }
+        if not manual and not dry_run:
+            _post_schedule_outcome_log(region, out)
+        return out
 
     report_type = definition.get("report_type") or ""
     LOG.info(
@@ -257,6 +319,8 @@ def run_one_schedule_item(
         if status == "skipped":
             out["skipped"] = (result or {}).get("skipped") or "no delivery"
             out["ok"] = True
+        if not manual:
+            _post_schedule_outcome_log(region, out)
         return out
     except Exception as e:
         LOG.exception(
@@ -266,7 +330,7 @@ def run_one_schedule_item(
             report_type,
         )
         mark_schedule_status(registry_conn, pm_schema, schedule_id, local_date, "error")
-        return {
+        out = {
             "schedule_id": schedule_id,
             "ok": False,
             "report_type": report_type,
@@ -274,6 +338,9 @@ def run_one_schedule_item(
             "status": "error",
             "duration_s": round(time.time() - started, 2),
         }
+        if not manual:
+            _post_schedule_outcome_log(region, out)
+        return out
 
 
 def _dispatch_report(
@@ -417,7 +484,13 @@ def _dispatch_report(
                     "channel_count": 0,
                     "user_count": 0,
                 }
-            result = run_kotter_for_region(registry_conn, pm_schema, region, dry_run=False)
+            result = run_kotter_for_region(
+                registry_conn,
+                pm_schema,
+                region,
+                dry_run=False,
+                emit_paxminer_log=False,
+            )
             client = slack_client(token)
             if len(channel_ids) > 1 and result.get("text"):
                 for cid in channel_ids[1:]:

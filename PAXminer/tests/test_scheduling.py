@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
+
+os.environ.setdefault("DB_ENCRYPTION_KEY", "test-encryption-key-32chars!!")
 
 from scheduling import (
     already_ran_successfully,
@@ -237,6 +240,40 @@ def test_format_run_result_variants():
     assert "failed" in text and "boom" in text
 
 
+def test_format_schedule_log_line_variants():
+    from schedule_runner import format_schedule_log_line
+
+    line = format_schedule_log_line(
+        "Tulsa",
+        {
+            "schedule_id": 1,
+            "report_type": "kotter",
+            "ok": True,
+            "channel_count": 2,
+            "duration_s": 1.5,
+        },
+    )
+    assert line.startswith("- Schedule (Tulsa) #1 (kotter): success")
+    assert "2 channel(s)" in line
+
+    line = format_schedule_log_line(
+        "Tulsa",
+        {
+            "schedule_id": 2,
+            "report_type": "kotter",
+            "ok": True,
+            "skipped": "no destinations configured",
+        },
+    )
+    assert "skipped - no destinations configured" in line
+
+    line = format_schedule_log_line(
+        "Tulsa",
+        {"schedule_id": 3, "report_type": "kotter", "ok": False, "error": "boom"},
+    )
+    assert "FAILED - boom" in line
+
+
 def test_resolve_destinations_empty_specific_channels():
     from schedule_runner import resolve_destinations
 
@@ -268,6 +305,57 @@ def test_dispatch_skips_empty_specific_channels_without_expanding():
                 result = _dispatch_report(None, "paxminer_test", region, schedule, definition)
     assert result.get("skipped") == "no destinations configured"
     mock_pax.assert_not_called()
+
+
+def test_run_one_schedule_item_logs_automatic_not_manual():
+    from unittest.mock import MagicMock, patch
+
+    from schedule_runner import run_one_schedule_item
+
+    schedule = {
+        "id": 11,
+        "schema_name": "f3test",
+        "report_definition_id": 5,
+        "enabled": 1,
+    }
+    region = {
+        "schema_name": "f3test",
+        "region": "Tulsa",
+        "slack_token": "enc",
+        "timezone": "America/Chicago",
+    }
+    definition = {"id": 5, "report_type": "kotter"}
+    dispatch_result = {"channel_count": 1, "user_count": 0}
+
+    mock_conn = MagicMock()
+
+    def _run(*, manual: bool):
+        with patch("schedule_runner._load_region", return_value=region):
+            with patch("schedule_runner._load_definition", return_value=definition):
+                with patch("schedule_runner.is_due_now", return_value=True):
+                    with patch("schedule_runner.mark_schedule_status"):
+                        with patch(
+                            "schedule_runner._dispatch_report", return_value=dispatch_result
+                        ):
+                            with patch("schedule_runner._post_schedule_outcome_log") as mock_log:
+                                out = run_one_schedule_item(
+                                    mock_conn,
+                                    "paxminer",
+                                    schedule,
+                                    force=True,
+                                    manual=manual,
+                                )
+                                return out, mock_log
+
+    out, mock_log = _run(manual=False)
+    assert out["ok"] is True
+    mock_log.assert_called_once()
+    assert mock_log.call_args.args[0]["region"] == "Tulsa"
+    assert mock_log.call_args.args[1]["schedule_id"] == 11
+
+    out, mock_log = _run(manual=True)
+    assert out["ok"] is True
+    mock_log.assert_not_called()
 
 
 def test_queue_run_now_payload_includes_notify_user():
@@ -327,6 +415,7 @@ def test_schedule_handler_notifies_user_on_completion():
     body = json.loads(resp["body"])
     assert body["ok"] is True
     mock_run.assert_called_once()
+    assert mock_run.call_args.kwargs.get("manual") is True
     mock_notify.assert_called_once()
     assert mock_notify.call_args.args[1] == "U9"
     assert mock_notify.call_args.args[2] == result
