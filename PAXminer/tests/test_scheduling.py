@@ -419,3 +419,61 @@ def test_schedule_handler_notifies_user_on_completion():
     mock_notify.assert_called_once()
     assert mock_notify.call_args.args[1] == "U9"
     assert mock_notify.call_args.args[2] == result
+
+
+def test_report_defaults_json_consistency():
+    from scheduling import BUILTIN_DEFINITIONS, DEFAULT_SCHEDULES, VALID_DESTINATIONS
+
+    codes = {d["code"] for d in BUILTIN_DEFINITIONS}
+    assert len(BUILTIN_DEFINITIONS) == 6
+    assert len(DEFAULT_SCHEDULES) == 6
+    assert {s["code"] for s in DEFAULT_SCHEDULES} == codes
+    for s in DEFAULT_SCHEDULES:
+        assert s.get("enabled") is True
+        defn = next(d for d in BUILTIN_DEFINITIONS if d["code"] == s["code"])
+        assert s["destination_type"] in VALID_DESTINATIONS[defn["report_type"]]
+
+
+def test_seed_default_schedules_uses_defaults_json():
+    from unittest.mock import MagicMock
+
+    from schedule_schema import seed_default_schedules
+    from scheduling import DEFAULT_SCHEDULES
+
+    cur = MagicMock()
+    # upsert_builtin_definitions path: SELECT then fetchone for each definition
+    code_ids = {s["code"]: i + 1 for i, s in enumerate(DEFAULT_SCHEDULES)}
+
+    def fetchone_side_effect():
+        # First COUNT for skip check, then each definition SELECT after INSERT/UPDATE
+        return {"c": 0}
+
+    cur.fetchone.side_effect = [
+        {"c": 0},  # skip_if_any_schedules count
+        *[{"id": code_ids[d["code"]]} for d in __import__("scheduling").BUILTIN_DEFINITIONS],
+    ]
+
+    # Patch upsert to return stable ids so we only assert INSERT args
+    from unittest.mock import patch
+
+    with patch(
+        "schedule_schema.upsert_builtin_definitions",
+        return_value=code_ids,
+    ):
+        inserted = seed_default_schedules(
+            cur,
+            "paxminer_test",
+            {"schema_name": "f3ttown", "send_pax_charts": 0},
+            skip_if_any_schedules=True,
+        )
+
+    assert inserted == len(DEFAULT_SCHEDULES)
+    insert_calls = [
+        c for c in cur.execute.call_args_list if "INSERT INTO" in str(c.args[0])
+    ]
+    assert len(insert_calls) == len(DEFAULT_SCHEDULES)
+    for call, item in zip(insert_calls, DEFAULT_SCHEDULES):
+        args = call.args[1]
+        assert args[2] == item["destination_type"]
+        assert args[3] is None  # empty specific_channels
+        assert args[7] == 1  # enabled

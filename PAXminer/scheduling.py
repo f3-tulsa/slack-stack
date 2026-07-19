@@ -5,8 +5,10 @@ Used by ScheduleFunction and unit-tested in the light CI env.
 
 from __future__ import annotations
 
+import json
 from calendar import monthrange
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -47,90 +49,16 @@ VALID_DESTINATIONS: dict[str, tuple[str, ...]] = {
     "custom_report": DESTINATION_TYPES,
 }
 
-BUILTIN_DEFINITIONS: tuple[dict[str, Any], ...] = (
-    {
-        "code": "pax_charts",
-        "name": "PAX charts (DM)",
-        "report_type": "pax_charts",
-        "is_builtin": 1,
-        "time_window_type": "last_month",
-    },
-    {
-        "code": "q_charts",
-        "name": "Q charts",
-        "report_type": "q_charts",
-        "is_builtin": 1,
-        "time_window_type": "last_month",
-    },
-    {
-        "code": "region_leaderboard",
-        "name": "Region leaderboard",
-        "report_type": "region_leaderboard",
-        "is_builtin": 1,
-        "time_window_type": "last_month",
-    },
-    {
-        "code": "ao_leaderboard",
-        "name": "AO leaderboard",
-        "report_type": "ao_leaderboard",
-        "is_builtin": 1,
-        "time_window_type": "last_month",
-    },
-    {
-        "code": "achievement_leaderboard",
-        "name": "Achievement leaderboard",
-        "report_type": "achievement_leaderboard",
-        "is_builtin": 1,
-        "time_window_type": "ytd",
-    },
-    {
-        "code": "kotter",
-        "name": "Kotter report",
-        "report_type": "kotter",
-        "is_builtin": 1,
-        "time_window_type": None,
-    },
-)
 
-# Legacy send_* flag -> builtin definition code + preferred destination channel column.
-LEGACY_FLAG_MAP: tuple[dict[str, Any], ...] = (
-    {
-        "code": "pax_charts",
-        "flag": "send_pax_charts",
-        "channel_col": "firstf_channel",
-        "destination_type": "dm_all_pax",
-    },
-    {
-        "code": "q_charts",
-        "flag": "send_q_charts",
-        "channel_col": "firstf_channel",
-        "destination_type": "all_ao_channels",
-    },
-    {
-        "code": "region_leaderboard",
-        "flag": "send_region_leaderboard",
-        "channel_col": "firstf_channel",
-        "destination_type": "specific_channels",
-    },
-    {
-        "code": "ao_leaderboard",
-        "flag": "send_ao_leaderboard",
-        "channel_col": "firstf_channel",
-        "destination_type": "all_ao_channels",
-    },
-    {
-        "code": "achievement_leaderboard",
-        "flag": "send_achievement_leaderboard",
-        "channel_col": "achievement_channel",
-        "destination_type": "specific_channels",
-    },
-    {
-        "code": "kotter",
-        "flag": "send_aoq_reports",
-        "channel_col": "kotter_channel",
-        "destination_type": "specific_channels",
-    },
-)
+def _load_report_defaults() -> dict[str, Any]:
+    path = Path(__file__).resolve().parent / "report_defaults.json"
+    with path.open(encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+_REPORT_DEFAULTS = _load_report_defaults()
+BUILTIN_DEFINITIONS: tuple[dict[str, Any], ...] = tuple(_REPORT_DEFAULTS["definitions"])
+DEFAULT_SCHEDULES: tuple[dict[str, Any], ...] = tuple(_REPORT_DEFAULTS["default_schedules"])
 
 
 def resolve_timezone(name: str | None) -> ZoneInfo:

@@ -10,6 +10,7 @@ COPY PAXminer/slack_schedule.py ./
 COPY PAXminer/config_paxminer.py ./
 COPY PAXminer/config_schedule.py ./
 COPY PAXminer/scheduling.py ./
+COPY PAXminer/report_defaults.json ./
 COPY PAXminer/schedule_schema.py ./
 COPY PAXminer/slack_util.py ./
 COPY PAXminer/slack_http.py ./

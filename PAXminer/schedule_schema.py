@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 from scheduling import (
     BUILTIN_DEFINITIONS,
+    DEFAULT_SCHEDULES,
     DEFAULT_TIMEZONE,
-    LEGACY_FLAG_MAP,
 )
 
 LOG = logging.getLogger(__name__)
@@ -175,13 +174,6 @@ def upsert_builtin_definitions(cur, pm_schema: str, regional_schema: str) -> dic
     return code_to_id
 
 
-def _channel_list(channel: str | None) -> str | None:
-    ch = (channel or "").strip()
-    if not ch:
-        return None
-    return json.dumps([ch])
-
-
 def seed_default_schedules(
     cur,
     pm_schema: str,
@@ -191,7 +183,11 @@ def seed_default_schedules(
     skip_if_any_schedules: bool = False,
 ) -> int:
     """
-    Seed default schedules for one region from legacy flags/channels.
+    Seed default schedules for one region from report_defaults.json.
+
+    Defaults are enabled; specific_channels items seed with empty destinations
+    and skip until an admin picks a channel. dm_all_pax / all_ao_channels will
+    fire on the next due tick unless disabled.
 
     When merge_only=True (Restore Defaults), always INSERT new schedule rows
     for each builtin (duplicates allowed). Definitions are upserted by code.
@@ -217,24 +213,23 @@ def seed_default_schedules(
             )
             return 0
     inserted = 0
-    for item in LEGACY_FLAG_MAP:
+    for item in DEFAULT_SCHEDULES:
         def_id = code_to_id[item["code"]]
-        enabled = 1 if region.get(item["flag"]) else 0
-        channel_col = item["channel_col"]
-        channel = region.get(channel_col)
+        enabled = 1 if item.get("enabled", True) else 0
         dest_type = item["destination_type"]
+        # specific_channels start empty; admin must set a channel before posts fire.
         dest_channels = None
-        if dest_type == "specific_channels":
-            dest_channels = _channel_list(channel)
-        # Monthly first-of-month @ 07:00 local (matches legacy cron(0 12 1 * ? *) ≈ early Central)
+        freq = item.get("frequency_type") or "monthly"
+        month_mode = item.get("month_day_mode") or "first"
+        tod = item.get("time_of_day") or "07:00:00"
         cur.execute(
             f"""
             INSERT INTO `{pm_schema}`.`region_schedules`
               (schema_name, report_definition_id, destination_type, destination_channels,
                frequency_type, month_day_mode, time_of_day, enabled)
-            VALUES (%s, %s, %s, %s, 'monthly', 'first', '07:00:00', %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (regional, def_id, dest_type, dest_channels, enabled),
+            (regional, def_id, dest_type, dest_channels, freq, month_mode, tod, enabled),
         )
         inserted += 1
         LOG.info(
@@ -251,8 +246,8 @@ def seed_all_regions(cur, pm_schema: str) -> dict[str, int]:
     """Seed builtins + default schedules for every active region. Returns counts.
 
     Assumes the caller has already run ensure_timezone_column and
-    ensure_scheduler_tables (add_report_scheduler.py does this and reports the
-    results in its receipt), so those DDL steps are not repeated here.
+    ensure_scheduler_tables (the scheduler migration phase does this and reports
+    the results in its receipt), so those DDL steps are not repeated here.
     """
     cur.execute(f"SELECT * FROM `{pm_schema}`.`regions` WHERE active = 1")
     regions = list(cur.fetchall() or [])

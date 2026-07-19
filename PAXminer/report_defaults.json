@@ -1,0 +1,96 @@
+{
+  "definitions": [
+    {
+      "code": "pax_charts",
+      "name": "PAX charts (DM)",
+      "report_type": "pax_charts",
+      "is_builtin": 1,
+      "time_window_type": "last_month"
+    },
+    {
+      "code": "q_charts",
+      "name": "Q charts",
+      "report_type": "q_charts",
+      "is_builtin": 1,
+      "time_window_type": "last_month"
+    },
+    {
+      "code": "region_leaderboard",
+      "name": "Region leaderboard",
+      "report_type": "region_leaderboard",
+      "is_builtin": 1,
+      "time_window_type": "last_month"
+    },
+    {
+      "code": "ao_leaderboard",
+      "name": "AO leaderboard",
+      "report_type": "ao_leaderboard",
+      "is_builtin": 1,
+      "time_window_type": "last_month"
+    },
+    {
+      "code": "achievement_leaderboard",
+      "name": "Achievement leaderboard",
+      "report_type": "achievement_leaderboard",
+      "is_builtin": 1,
+      "time_window_type": "ytd"
+    },
+    {
+      "code": "kotter",
+      "name": "Kotter report",
+      "report_type": "kotter",
+      "is_builtin": 1,
+      "time_window_type": null
+    }
+  ],
+  "default_schedules": [
+    {
+      "code": "pax_charts",
+      "destination_type": "dm_all_pax",
+      "frequency_type": "monthly",
+      "month_day_mode": "first",
+      "time_of_day": "07:00:00",
+      "enabled": true
+    },
+    {
+      "code": "q_charts",
+      "destination_type": "all_ao_channels",
+      "frequency_type": "monthly",
+      "month_day_mode": "first",
+      "time_of_day": "07:00:00",
+      "enabled": true
+    },
+    {
+      "code": "region_leaderboard",
+      "destination_type": "specific_channels",
+      "frequency_type": "monthly",
+      "month_day_mode": "first",
+      "time_of_day": "07:00:00",
+      "enabled": true
+    },
+    {
+      "code": "ao_leaderboard",
+      "destination_type": "all_ao_channels",
+      "frequency_type": "monthly",
+      "month_day_mode": "first",
+      "time_of_day": "07:00:00",
+      "enabled": true
+    },
+    {
+      "code": "achievement_leaderboard",
+      "destination_type": "specific_channels",
+      "frequency_type": "monthly",
+      "month_day_mode": "first",
+      "time_of_day": "07:00:00",
+      "enabled": true
+    },
+    {
+      "code": "kotter",
+      "destination_type": "specific_channels",
+      "frequency_type": "monthly",
+      "month_day_mode": "first",
+      "time_of_day": "07:00:00",
+      "enabled": true
+    }
+  ]
+}

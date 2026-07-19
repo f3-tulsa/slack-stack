@@ -192,7 +192,13 @@ def _schedules_list_modal(
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*Schedule* ({regional_schema})\nTimes are *{timezone_name}* (region TZ).",
+                "text": (
+                    f"*Schedule* ({regional_schema})\n"
+                    f"Times are *{timezone_name}* (region TZ).\n"
+                    "_Default items are enabled. Set a channel/destination for "
+                    "specific-channel reports, and disable any you do not want "
+                    "(especially PAX chart DMs and all-AO fan-out)._"
+                ),
             },
         }
     )
@@ -328,7 +334,11 @@ def _schedules_list_modal(
                         "title": {"type": "plain_text", "text": "Restore defaults?"},
                         "text": {
                             "type": "mrkdwn",
-                            "text": "Adds builtin schedule rows (merge). Existing items are not deleted; duplicates are OK.",
+                            "text": (
+                                "Adds builtin schedule rows (enabled). Existing items "
+                                "are not deleted; duplicates are OK. Then set channels "
+                                "for specific-channel reports and disable any you do not want."
+                            ),
                         },
                         "confirm": {"type": "plain_text", "text": "Restore"},
                         "deny": {"type": "plain_text", "text": "Cancel"},
