@@ -83,6 +83,20 @@ def open_dm_channel(client: WebClient, user_id: str) -> str:
     return resp["channel"]["id"]
 
 
+def post_log(
+    client: WebClient,
+    text: str,
+    *,
+    blocks: list | None = None,
+    channel: str = "paxminer_logs",
+) -> None:
+    """Best-effort operational log to the region's paxminer_logs channel. Never raises."""
+    try:
+        post_message(client, channel, text, blocks=blocks)
+    except Exception:
+        logging.debug("paxminer_logs post failed: %s", text, exc_info=True)
+
+
 def upload_file(
     client: WebClient,
     channel: str,

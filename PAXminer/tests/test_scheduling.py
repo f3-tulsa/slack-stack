@@ -208,6 +208,16 @@ def test_schedules_list_preserves_selected_option():
     assert "last run: skipped" in view["blocks"][1]["text"]["text"]
 
 
+def test_post_log_swallows_client_errors():
+    from unittest.mock import MagicMock, patch
+
+    from slack_util import post_log
+
+    client = MagicMock()
+    with patch("slack_util.post_message", side_effect=RuntimeError("boom")):
+        post_log(client, "- Schedule (test): FAILED - boom")  # must not raise
+
+
 def test_format_run_result_variants():
     from schedule_runner import format_run_result
 
