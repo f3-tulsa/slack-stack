@@ -79,21 +79,38 @@ def region_local_now(timezone_name: str | None, *, utc_now: datetime | None = No
 
 
 def parse_time_of_day(value: Any) -> time:
-    """Parse TIME / 'HH:MM' / 'HH:MM:SS' / datetime.time into time."""
-    if isinstance(value, time):
-        return value.replace(tzinfo=None)
-    if isinstance(value, datetime):
-        return value.time().replace(tzinfo=None)
-    if value is None:
+    """Parse TIME / 'HH:MM' / 'HH:MM:SS' / datetime.time / timedelta into time.
+
+    Never raises — falls back to 07:00 on unparseable values (PyMySQL TIME may
+    arrive as timedelta, bytes, or fractional seconds).
+    """
+    try:
+        if isinstance(value, time):
+            return value.replace(tzinfo=None)
+        if isinstance(value, datetime):
+            return value.time().replace(tzinfo=None)
+        if isinstance(value, timedelta):
+            total = int(value.total_seconds()) % (24 * 3600)
+            hour, rem = divmod(total, 3600)
+            minute, second = divmod(rem, 60)
+            return time(hour, minute, second)
+        if value is None:
+            return time(7, 0)
+        if isinstance(value, (bytes, bytearray)):
+            value = value.decode("utf-8", errors="ignore")
+        s = str(value).strip()
+        if not s:
+            return time(7, 0)
+        # Strip fractional seconds: "7:00:00.500000" → "7:00:00"
+        if "." in s:
+            s = s.split(".", 1)[0]
+        parts = s.split(":")
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+        second = int(float(parts[2])) if len(parts) > 2 else 0
+        return time(hour % 24, minute % 60, second % 60)
+    except Exception:
         return time(7, 0)
-    s = str(value).strip()
-    if not s:
-        return time(7, 0)
-    parts = s.split(":")
-    hour = int(parts[0])
-    minute = int(parts[1]) if len(parts) > 1 else 0
-    second = int(parts[2]) if len(parts) > 2 else 0
-    return time(hour, minute, second)
 
 
 def snap_time_to_tick(t: time, tick_minutes: int = TICK_MINUTES) -> time:

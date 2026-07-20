@@ -66,6 +66,16 @@ def _select_options(values: tuple[str, ...]) -> list[dict]:
     return [{"text": {"type": "plain_text", "text": v}, "value": v} for v in values]
 
 
+def _with_initial(options: list[dict], value: str | None) -> dict:
+    """Omit initial_option when value is not in options (Slack rejects null)."""
+    if not value:
+        return {}
+    for o in options:
+        if o.get("value") == value:
+            return {"initial_option": o}
+    return {}
+
+
 def _achievement_summary(row: dict) -> str:
     return (
         f"*{row['name']}* (`{row['code']}`) — "
@@ -231,8 +241,15 @@ def _achievements_list_modal(
         }
     )
     if achievements:
-        lines = [_achievement_summary(a) for a in achievements[:40]]
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}})
+        # Slack caps: static_select ≤100 options; section mrkdwn ≈3000 chars.
+        page = achievements[:100]
+        lines = [_achievement_summary(a) for a in page[:40]]
+        summary = "\n".join(lines)
+        if len(summary) > 2900:
+            summary = summary[:2890] + "\n…"
+        if len(achievements) > len(page):
+            summary += f"\n_Showing {len(page)} of {len(achievements)} — open Edit to manage more._"
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": summary}})
         blocks.append(
             {
                 "type": "input",
@@ -248,7 +265,7 @@ def _achievements_list_modal(
                             "text": {"type": "plain_text", "text": f"{a['name']} ({a['code']})"[:75]},
                             "value": str(a["id"]),
                         }
-                        for a in achievements
+                        for a in page
                     ],
                 },
             }
@@ -365,11 +382,10 @@ def _achievement_edit_modal(
                 "element": {
                     "type": "static_select",
                     "action_id": "val",
-                    "initial_option": {
-                        "text": {"type": "plain_text", "text": (row or {}).get("metric") or "posts"},
-                        "value": (row or {}).get("metric") or "posts",
-                    },
                     "options": _select_options(METRICS),
+                    **_with_initial(
+                        _select_options(METRICS), (row or {}).get("metric") or "posts"
+                    ),
                 },
             },
             {
@@ -379,11 +395,10 @@ def _achievement_edit_modal(
                 "element": {
                     "type": "static_select",
                     "action_id": "val",
-                    "initial_option": {
-                        "text": {"type": "plain_text", "text": (row or {}).get("activity") or "beatdown"},
-                        "value": (row or {}).get("activity") or "beatdown",
-                    },
                     "options": _select_options(ACTIVITIES),
+                    **_with_initial(
+                        _select_options(ACTIVITIES), (row or {}).get("activity") or "beatdown"
+                    ),
                 },
             },
             {
@@ -393,11 +408,10 @@ def _achievement_edit_modal(
                 "element": {
                     "type": "static_select",
                     "action_id": "val",
-                    "initial_option": {
-                        "text": {"type": "plain_text", "text": (row or {}).get("period") or "year"},
-                        "value": (row or {}).get("period") or "year",
-                    },
                     "options": _select_options(PERIODS),
+                    **_with_initial(
+                        _select_options(PERIODS), (row or {}).get("period") or "year"
+                    ),
                 },
             },
             {

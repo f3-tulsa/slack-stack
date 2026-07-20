@@ -101,6 +101,12 @@ def _find_option(options: list[dict], value: str | None) -> dict | None:
     return None
 
 
+def _with_initial(options: list[dict], value: str | None) -> dict:
+    """Return ``{"initial_option": ...}`` only when the value is in options (Slack rejects null)."""
+    found = _find_option(options, value)
+    return {"initial_option": found} if found else {}
+
+
 def _state_selected(state: dict, block_id: str, action_id: str = "val") -> str:
     block = state.get(block_id, {}).get(action_id, {})
     sel = block.get("selected_option") or {}
@@ -426,11 +432,7 @@ def _schedule_edit_modal(
                 "type": "static_select",
                 "action_id": SCHEDULE_REPORT_ACTION_ID,
                 "options": def_opts,
-                **(
-                    {"initial_option": _find_option(def_opts, str(selected_def))}
-                    if _find_option(def_opts, str(selected_def))
-                    else {}
-                ),
+                **_with_initial(def_opts, str(selected_def) if selected_def else None),
             },
         },
         {
@@ -442,11 +444,7 @@ def _schedule_edit_modal(
                 "type": "static_select",
                 "action_id": SCHEDULE_DEST_TYPE_ACTION_ID,
                 "options": dest_opts,
-                **(
-                    {"initial_option": _find_option(dest_opts, dest_type)}
-                    if _find_option(dest_opts, dest_type)
-                    else {}
-                ),
+                **_with_initial(dest_opts, dest_type),
             },
         },
     ]
@@ -512,11 +510,7 @@ def _schedule_edit_modal(
                 "type": "static_select",
                 "action_id": SCHEDULE_FREQ_ACTION_ID,
                 "options": freq_opts,
-                **(
-                    {"initial_option": _find_option(freq_opts, freq)}
-                    if _find_option(freq_opts, freq)
-                    else {}
-                ),
+                **_with_initial(freq_opts, freq),
             },
         }
     )
@@ -541,11 +535,7 @@ def _schedule_edit_modal(
                     "type": "static_select",
                     "action_id": "val",
                     "options": dow_opts,
-                    **(
-                        {"initial_option": _find_option(dow_opts, dow)}
-                        if _find_option(dow_opts, dow)
-                        else {}
-                    ),
+                    **_with_initial(dow_opts, dow),
                 },
             }
         )
@@ -561,11 +551,7 @@ def _schedule_edit_modal(
                     "type": "static_select",
                     "action_id": "val",
                     "options": mode_opts,
-                    **(
-                        {"initial_option": _find_option(mode_opts, mode)}
-                        if _find_option(mode_opts, mode)
-                        else {}
-                    ),
+                    **_with_initial(mode_opts, mode),
                 },
             }
         )
@@ -605,16 +591,12 @@ def _schedule_edit_modal(
                 "type": "static_select",
                 "action_id": "val",
                 "options": tod_opts,
-                **(
-                    {"initial_option": _find_option(tod_opts, tod)}
-                    if _find_option(tod_opts, tod)
-                    else {}
-                ),
+                **_with_initial(tod_opts, tod),
             },
         }
     )
     enabled_opts = [_opt("1", "Enabled"), _opt("0", "Disabled")]
-    en = "1" if draft.get("enabled") else "0"
+    en = "1" if draft.get("enabled") not in (False, 0, "0", "false", "False") else "0"
     blocks.append(
         {
             "type": "input",
@@ -624,7 +606,7 @@ def _schedule_edit_modal(
                 "type": "static_select",
                 "action_id": "val",
                 "options": enabled_opts,
-                "initial_option": _find_option(enabled_opts, en),
+                **_with_initial(enabled_opts, en),
             },
         }
     )
@@ -679,6 +661,21 @@ def draft_from_schedule_state(state: dict, meta_draft: dict | None = None) -> di
     en = _state_selected(state, "enabled")
     if en != "":
         draft["enabled"] = en == "1"
+
+    # Drop stale keys for fields hidden by the current frequency / destination.
+    dest_type = draft.get("destination_type") or "specific_channels"
+    freq_type = draft.get("frequency_type") or "monthly"
+    if dest_type != "specific_channels":
+        draft.pop("destination_channels", None)
+    if dest_type != "dm_specific_pax":
+        draft.pop("destination_users", None)
+    if freq_type != "weekly":
+        draft.pop("day_of_week", None)
+    if freq_type != "monthly":
+        draft.pop("month_day_mode", None)
+        draft.pop("day_of_month", None)
+    if freq_type != "custom":
+        draft.pop("interval_days", None)
     return draft
 
 
@@ -724,8 +721,27 @@ def validate_schedule_form(values: dict, report_type: str | None) -> dict[str, s
         errors["destination_channels"] = "Pick at least one channel"
     if dest == "dm_specific_pax" and not values.get("destination_users"):
         errors["destination_users"] = "Pick at least one PAX"
-    if values.get("frequency_type") not in FREQUENCY_TYPES:
+    freq = values.get("frequency_type")
+    if freq not in FREQUENCY_TYPES:
         errors["frequency_type"] = "Invalid frequency"
+    elif freq == "weekly":
+        dow = values.get("day_of_week")
+        if dow is None or not (0 <= int(dow) <= 6):
+            errors["day_of_week"] = "Pick a day of week"
+    elif freq == "monthly":
+        mode = values.get("month_day_mode") or "first"
+        if mode == "specific":
+            dom = values.get("day_of_month")
+            if dom is None or not (1 <= int(dom) <= 31):
+                errors["day_of_month"] = "Enter a day of month (1–31)"
+    elif freq == "custom":
+        interval = (values.get("custom_spec") or {}).get("interval_days")
+        try:
+            n = int(interval)
+            if n < 1:
+                raise ValueError
+        except (TypeError, ValueError):
+            errors["interval_days"] = "Enter a positive number of days"
     return errors
 
 
@@ -889,7 +905,7 @@ def _report_edit_modal(
                 "type": "static_select",
                 "action_id": "val",
                 "options": kind_opts,
-                "initial_option": _find_option(kind_opts, draft.get("kind") or "table"),
+                **_with_initial(kind_opts, draft.get("kind") or "table"),
             },
         },
         {
@@ -900,7 +916,7 @@ def _report_edit_modal(
                 "type": "static_select",
                 "action_id": "val",
                 "options": source_opts,
-                "initial_option": _find_option(source_opts, draft.get("source") or "bd_attendance"),
+                **_with_initial(source_opts, draft.get("source") or "bd_attendance"),
             },
         },
         {
@@ -923,7 +939,7 @@ def _report_edit_modal(
                 "type": "static_select",
                 "action_id": "val",
                 "options": metric_opts,
-                "initial_option": _find_option(metric_opts, draft.get("metric") or "posts"),
+                **_with_initial(metric_opts, draft.get("metric") or "posts"),
             },
         },
         {
@@ -934,7 +950,7 @@ def _report_edit_modal(
                 "type": "static_select",
                 "action_id": "val",
                 "options": group_opts,
-                "initial_option": _find_option(group_opts, draft.get("group_by") or "PAX"),
+                **_with_initial(group_opts, draft.get("group_by") or "PAX"),
             },
         },
         {
@@ -956,7 +972,7 @@ def _report_edit_modal(
                 "type": "static_select",
                 "action_id": REPORT_WINDOW_ACTION_ID,
                 "options": window_opts,
-                "initial_option": _find_option(window_opts, wtype),
+                **_with_initial(window_opts, wtype),
             },
         },
     ]

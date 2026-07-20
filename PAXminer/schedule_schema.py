@@ -189,8 +189,8 @@ def seed_default_schedules(
     and skip until an admin picks a channel. dm_all_pax / all_ao_channels will
     fire on the next due tick unless disabled.
 
-    When merge_only=True (Restore Defaults), always INSERT new schedule rows
-    for each builtin (duplicates allowed). Definitions are upserted by code.
+    When merge_only=True (Restore Defaults), skip inserting a default whose
+    definition already has at least one schedule row (idempotent restore).
 
     When skip_if_any_schedules=True (initial migration), skip inserting schedules
     if the region already has any rows (definitions are still upserted).
@@ -215,6 +215,21 @@ def seed_default_schedules(
     inserted = 0
     for item in DEFAULT_SCHEDULES:
         def_id = code_to_id[item["code"]]
+        if merge_only:
+            cur.execute(
+                f"""
+                SELECT COUNT(*) AS c FROM `{pm_schema}`.`region_schedules`
+                WHERE schema_name=%s AND report_definition_id=%s
+                """,
+                (regional, def_id),
+            )
+            if int(cur.fetchone()["c"]) > 0:
+                LOG.info(
+                    "Skip schedule seed schema=%s code=%s — definition already scheduled",
+                    regional,
+                    item["code"],
+                )
+                continue
         enabled = 1 if item.get("enabled", True) else 0
         dest_type = item["destination_type"]
         # specific_channels start empty; admin must set a channel before posts fire.

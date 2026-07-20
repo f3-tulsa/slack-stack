@@ -51,14 +51,37 @@ def is_slack_admin(user_id: str, client=None) -> bool:
     """Return True if the user is a workspace admin/owner.
 
     Prefer a Bolt-injected ``client`` when available so we reuse one WebClient.
+    On Slack/API errors, fail closed (deny) and log — never raise into listeners.
     """
-    if client is not None:
-        user = client.users_info(user=user_id).get("user", {})
-        return bool(user.get("is_admin") or user.get("is_owner") or user.get("is_primary_owner"))
-    token = os.environ.get("PM_SLACK_TOKEN", "").strip()
-    if not token:
-        return False
-    from slack_sdk import WebClient
+    try:
+        if client is not None:
+            user = client.users_info(user=user_id).get("user", {})
+            return bool(user.get("is_admin") or user.get("is_owner") or user.get("is_primary_owner"))
+        token = os.environ.get("PM_SLACK_TOKEN", "").strip()
+        if not token:
+            return False
+        from slack_sdk import WebClient
 
-    user = WebClient(token=token).users_info(user=user_id).get("user", {})
-    return bool(user.get("is_admin") or user.get("is_owner") or user.get("is_primary_owner"))
+        user = WebClient(token=token).users_info(user=user_id).get("user", {})
+        return bool(user.get("is_admin") or user.get("is_owner") or user.get("is_primary_owner"))
+    except Exception:
+        LOG.exception("is_slack_admin failed user_id=%s", user_id)
+        return False
+
+
+def notify_admin_required(client, body, *, text: str = "Workspace admin required.") -> None:
+    """Best-effort ephemeral or DM when a non-admin hits an admin-only control."""
+    user_id = (body.get("user") or {}).get("id") or body.get("user_id")
+    channel_id = (body.get("channel") or {}).get("id") or body.get("channel_id")
+    if not user_id or client is None:
+        return
+    try:
+        if channel_id:
+            client.chat_postEphemeral(channel=channel_id, user=user_id, text=text)
+            return
+        opened = client.conversations_open(users=user_id)
+        dm = (opened.get("channel") or {}).get("id")
+        if dm:
+            client.chat_postMessage(channel=dm, text=text)
+    except Exception:
+        LOG.debug("notify_admin_required failed", exc_info=True)

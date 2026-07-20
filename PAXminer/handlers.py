@@ -116,15 +116,19 @@ def achievements_handler(event, context):
                 region_row = cur.fetchone()
             if not region_row:
                 return http_response(404, {"ok": False, "error": "Region not found"})
-            result = run_achievements_for_region(
-                conn,
-                pm_schema=pm,
-                regional_schema=schema,
-                region_row=region_row,
-                pax_user_ids=pax_ids or None,
-                post_to_ao=post_to_ao,
-                ao_channel_id=ao_channel_id,
-            )
+            try:
+                result = run_achievements_for_region(
+                    conn,
+                    pm_schema=pm,
+                    regional_schema=schema,
+                    region_row=region_row,
+                    pax_user_ids=pax_ids or None,
+                    post_to_ao=post_to_ao,
+                    ao_channel_id=ao_channel_id,
+                )
+            except Exception as exc:
+                logging.exception("achievements webhook run failed schema=%s", schema)
+                return http_response(500, {"ok": False, "error": str(exc)[:500]})
             return http_response(200, {"ok": True, "result": result})
         finally:
             conn.close()

@@ -60,7 +60,7 @@ from schedule_schema import (
     delete_all_schedules,
     restore_defaults,
 )
-from slack_http import is_slack_admin
+from slack_http import is_slack_admin, notify_admin_required
 
 LOG = logging.getLogger(__name__)
 
@@ -95,11 +95,12 @@ def register_schedule_listeners(app) -> None:
         return _region_context_from_body(body)
 
     def _admin_ack(ack, body, client):
+        """Ack first, then check admin (keeps Slack's 3s window for the ack)."""
+        ack()
         user_id = (body.get("user") or {}).get("id", "")
         if not is_slack_admin(user_id, client=client):
-            ack()
+            notify_admin_required(client, body)
             return False
-        ack()
         return True
 
     def _refresh_schedule_list(
@@ -288,20 +289,29 @@ def register_schedule_listeners(app) -> None:
             with conn.cursor() as cur:
                 sched = load_schedule(cur, pm, sid)
                 defs = load_definitions(cur, pm, regional_schema)
-            if not sched:
-                _refresh_schedule_list(
-                    client, body, team_id, regional_schema, region, notice="Schedule not found."
-                )
-                return
-            client.views_push(
-                trigger_id=body["trigger_id"],
-                view=_schedule_edit_modal(
+                if not sched:
+                    _refresh_schedule_list(
+                        client, body, team_id, regional_schema, region, notice="Schedule not found."
+                    )
+                    return
+                view = _schedule_edit_modal(
                     team_id,
                     regional_schema,
                     defs,
                     schedule=sched,
                     timezone_name=region.get("timezone") or "America/Chicago",
-                ),
+                )
+            client.views_push(trigger_id=body["trigger_id"], view=view)
+        except Exception:
+            logger.exception("edit_schedule failed sid=%s", sid)
+            _refresh_schedule_list(
+                client,
+                body,
+                team_id,
+                regional_schema,
+                region,
+                notice="Could not open edit form — try again.",
+                selected_id=sid,
             )
         finally:
             conn.close()
@@ -313,6 +323,11 @@ def register_schedule_listeners(app) -> None:
         meta = _parse_metadata((body.get("view") or {}).get("private_metadata"))
         state = body.get("view", {}).get("state", {}).get("values", {})
         draft = draft_from_schedule_state(state, meta.get("draft"))
+        # Cap metadata size: large channel lists can exceed Slack's 3000-char private_metadata.
+        channels = draft.get("destination_channels") or []
+        if isinstance(channels, list) and len(channels) > 40:
+            draft = dict(draft)
+            draft["destination_channels"] = channels[:40]
         pm = paxminer_schema_from_env()
         conn = connect_from_env(
             os.environ.get("PAXMINER_REGISTRY_DATABASE")
@@ -323,8 +338,9 @@ def register_schedule_listeners(app) -> None:
             with conn.cursor() as cur:
                 defs = load_definitions(cur, pm, regional_schema)
                 sched = None
-                if meta.get("schedule_id"):
-                    sched = load_schedule(cur, pm, int(meta["schedule_id"]))
+                sid_raw = meta.get("schedule_id")
+                if sid_raw is not None and str(sid_raw).isdigit():
+                    sched = load_schedule(cur, pm, int(sid_raw))
             client.views_update(
                 view_id=body["view"]["id"],
                 view=_schedule_edit_modal(
@@ -415,6 +431,8 @@ def register_schedule_listeners(app) -> None:
             with conn.cursor() as cur:
                 n = delete_all_schedules(cur, pm, regional_schema)
                 conn.commit()
+                schedules = load_schedules(cur, pm, regional_schema)
+            selected = schedules[0]["id"] if schedules else None
             _refresh_schedule_list(
                 client,
                 body,
@@ -422,6 +440,7 @@ def register_schedule_listeners(app) -> None:
                 regional_schema,
                 region,
                 notice=f"Deleted {n} schedule item(s).",
+                selected_id=selected,
             )
         finally:
             conn.close()
@@ -441,6 +460,8 @@ def register_schedule_listeners(app) -> None:
             with conn.cursor() as cur:
                 n = restore_defaults(cur, pm, region)
                 conn.commit()
+                schedules = load_schedules(cur, pm, regional_schema)
+            selected = schedules[0]["id"] if schedules else None
             _refresh_schedule_list(
                 client,
                 body,
@@ -448,6 +469,7 @@ def register_schedule_listeners(app) -> None:
                 regional_schema,
                 region,
                 notice=f"Restored defaults ({n} schedule row(s) added).",
+                selected_id=selected,
             )
         finally:
             conn.close()
@@ -518,11 +540,19 @@ def register_schedule_listeners(app) -> None:
         team_id, regional_schema, region = _ctx(body)
         values = parse_schedule_form(body)
         pm = paxminer_schema_from_env()
-        conn = connect_from_env(
-            os.environ.get("PAXMINER_REGISTRY_DATABASE")
-            or os.environ.get("PAXMINER_SCHEMA")
-            or "paxminer"
-        )
+        try:
+            conn = connect_from_env(
+                os.environ.get("PAXMINER_REGISTRY_DATABASE")
+                or os.environ.get("PAXMINER_SCHEMA")
+                or "paxminer"
+            )
+        except Exception as exc:
+            logger.exception("schedule edit connect failed")
+            ack(
+                response_action="errors",
+                errors={"report_definition_id": f"Save failed: {str(exc)[:120]}"},
+            )
+            return
         try:
             with conn.cursor() as cur:
                 definition = (
@@ -606,6 +636,12 @@ def register_schedule_listeners(app) -> None:
                     timezone_name=(region or {}).get("timezone") or "America/Chicago",
                     notice="Schedule saved.",
                 ),
+            )
+        except Exception as exc:
+            logger.exception("schedule edit submit failed")
+            ack(
+                response_action="errors",
+                errors={"report_definition_id": f"Save failed: {str(exc)[:120]}"},
             )
         finally:
             conn.close()
@@ -844,19 +880,31 @@ def register_schedule_listeners(app) -> None:
         if not region:
             ack(response_action="clear")
             return
+        region_key = region.get("region")
+        if not region_key:
+            ack(response_action="errors", errors={"NO_POST_THRESHOLD": "Region key missing"})
+            return
         values = parse_kotter_form(body)
         pm = paxminer_schema_from_env()
-        conn = connect_from_env(
-            os.environ.get("PAXMINER_REGISTRY_DATABASE")
-            or os.environ.get("PAXMINER_SCHEMA")
-            or "paxminer"
-        )
+        try:
+            conn = connect_from_env(
+                os.environ.get("PAXMINER_REGISTRY_DATABASE")
+                or os.environ.get("PAXMINER_SCHEMA")
+                or "paxminer"
+            )
+        except Exception as exc:
+            logger.exception("kotter config connect failed")
+            ack(
+                response_action="errors",
+                errors={"NO_POST_THRESHOLD": f"Save failed: {str(exc)[:120]}"},
+            )
+            return
         try:
             with conn.cursor() as cur:
                 sets = ", ".join(f"`{k}`=%s" for k in values)
                 cur.execute(
                     f"UPDATE `{pm}`.`regions` SET {sets} WHERE region=%s",
-                    (*values.values(), region["region"]),
+                    (*values.values(), region_key),
                 )
                 conn.commit()
             region = dict(region)
@@ -865,5 +913,11 @@ def register_schedule_listeners(app) -> None:
             if regional_schema:
                 region["schema_name"] = regional_schema
             ack(response_action="update", view=_config_modal(region))
+        except Exception as exc:
+            logger.exception("kotter config submit failed")
+            ack(
+                response_action="errors",
+                errors={"NO_POST_THRESHOLD": f"Save failed: {str(exc)[:120]}"},
+            )
         finally:
             conn.close()
