@@ -223,6 +223,9 @@ def test_run_achievements_skips_duplicate_grants():
             "period_bucket": [2026],
         }
     )
+    nation = pd.DataFrame(
+        {"email": ["a@b.c"], "user_id": ["U1"], "date": [date(2026, 7, 1)], "region": ["f3test"]}
+    )
 
     mock_conn = MagicMock()
     mock_cur = MagicMock()
@@ -235,7 +238,7 @@ def test_run_achievements_skips_duplicate_grants():
 
     with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
         with patch("achievements.runner.slack_client"):
-            with patch("achievements.runner.load_nation_attendance", return_value=pd.DataFrame()):
+            with patch("achievements.runner.load_nation_attendance", return_value=nation):
                 with patch("achievements.runner.attach_home_regions", side_effect=lambda _c, n, _s: n):
                     with patch("achievements.runner.evaluate_rule", return_value=qual):
                         result = run_achievements_for_region(
@@ -250,7 +253,8 @@ def test_run_achievements_skips_duplicate_grants():
     assert result["revokes"] == 0
 
 
-def test_run_achievements_revokes_on_daily_when_unqualified():
+def test_run_achievements_skips_when_no_attendance_data():
+    """Empty attendance must not mass-revoke awards."""
     from achievements.runner import run_achievements_for_region
 
     rule = {
@@ -280,6 +284,60 @@ def test_run_achievements_revokes_on_daily_when_unqualified():
     mock_cur = MagicMock()
     mock_conn.cursor.return_value.__enter__.return_value = mock_cur
     mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[rule], [awarded_row]]
+
+    with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.load_nation_attendance", return_value=pd.DataFrame()):
+                with patch("achievements.runner.evaluate_rule") as mock_eval:
+                    result = run_achievements_for_region(
+                        mock_conn,
+                        pm_schema="paxminer_test",
+                        regional_schema="f3test",
+                        region_row=region_row,
+                        dry_run=True,
+                    )
+
+    assert result == {"skipped": "no attendance data"}
+    mock_eval.assert_not_called()
+    # Must not DELETE awards when attendance is empty
+    delete_calls = [c for c in mock_cur.execute.call_args_list if "DELETE FROM" in str(c)]
+    assert delete_calls == []
+
+
+def test_run_achievements_revokes_on_daily_when_unqualified():
+    from achievements.runner import run_achievements_for_region
+
+    rule = {
+        "id": 1,
+        "name": "Test",
+        "verb": "testing",
+        "metric": "posts",
+        "activity": "beatdown",
+        "period": "year",
+        "threshold": 50,
+    }
+    region_row = {
+        "send_achievements": 1,
+        "achievement_channel": "C1",
+        "slack_token": "enc",
+        "region": "test",
+    }
+    awarded_row = {
+        "id": 99,
+        "achievement_id": 1,
+        "pax_id": "U1",
+        "date_awarded": date(2026, 7, 1),
+        "period": "year",
+    }
+    nation = pd.DataFrame(
+        {"email": ["a@b.c"], "user_id": ["U1"], "date": [date(2026, 7, 1)], "region": ["f3test"]}
+    )
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
     mock_cur.fetchall.side_effect = [
         [rule],
         [awarded_row],
@@ -287,7 +345,7 @@ def test_run_achievements_revokes_on_daily_when_unqualified():
 
     with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
         with patch("achievements.runner.slack_client"):
-            with patch("achievements.runner.load_nation_attendance", return_value=pd.DataFrame()):
+            with patch("achievements.runner.load_nation_attendance", return_value=nation):
                 with patch("achievements.runner.attach_home_regions", side_effect=lambda _c, n, _s: n):
                     with patch("achievements.runner.evaluate_rule", return_value=pd.DataFrame()):
                         result = run_achievements_for_region(
@@ -337,6 +395,9 @@ def test_run_achievements_scoped_revoke_only_for_webhook_pax():
             "period": "year",
         },
     ]
+    nation = pd.DataFrame(
+        {"email": ["a@b.c"], "user_id": ["U1"], "date": [date(2026, 7, 1)], "region": ["f3test"]}
+    )
 
     mock_conn = MagicMock()
     mock_cur = MagicMock()
@@ -349,7 +410,7 @@ def test_run_achievements_scoped_revoke_only_for_webhook_pax():
 
     with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
         with patch("achievements.runner.slack_client"):
-            with patch("achievements.runner.load_nation_attendance", return_value=pd.DataFrame()):
+            with patch("achievements.runner.load_nation_attendance", return_value=nation):
                 with patch("achievements.runner.attach_home_regions", side_effect=lambda _c, n, _s: n):
                     with patch("achievements.runner.evaluate_rule", return_value=pd.DataFrame()):
                         result = run_achievements_for_region(
@@ -399,10 +460,13 @@ def test_run_achievements_grants_and_posts():
         [rule],
         [],
     ]
+    nation = pd.DataFrame(
+        {"email": ["a@b.c"], "user_id": ["U1"], "date": [date(2026, 7, 1)], "region": ["f3test"]}
+    )
 
     with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
         with patch("achievements.runner.slack_client"):
-            with patch("achievements.runner.load_nation_attendance", return_value=pd.DataFrame()):
+            with patch("achievements.runner.load_nation_attendance", return_value=nation):
                 with patch("achievements.runner.attach_home_regions", side_effect=lambda _c, n, _s: n):
                     with patch("achievements.runner.evaluate_rule", return_value=qual):
                         with patch("achievements.runner.post_message") as mock_post:
@@ -644,7 +708,16 @@ def test_achievements_loads_only_regional_schema():
     with patch.object(runner_mod, "decrypt_field", return_value="xoxb-test"):
         with patch.object(runner_mod, "slack_client", return_value=MagicMock()):
             with patch.object(
-                runner_mod, "load_nation_attendance", return_value=pd.DataFrame()
+                runner_mod,
+                "load_nation_attendance",
+                return_value=pd.DataFrame(
+                    {
+                        "email": ["a@b.c"],
+                        "user_id": ["U1"],
+                        "date": [date(2026, 7, 1)],
+                        "region": ["f3ttown_test"],
+                    }
+                ),
             ) as mock_nation:
                 with patch.object(
                     runner_mod, "attach_home_regions", side_effect=lambda _c, n, _s: n
@@ -828,10 +901,21 @@ def test_achievements_emit_per_event_paxminer_logs():
                 with patch.object(runner_mod, "open_dm_channel", return_value="D1"):
                     with patch.object(runner_mod, "post_log", side_effect=capture_log):
                         with patch.object(
-                            runner_mod, "load_nation_attendance", return_value=pd.DataFrame()
+                            runner_mod,
+                            "load_nation_attendance",
+                            return_value=pd.DataFrame(
+                                {
+                                    "email": ["a@b.c"],
+                                    "user_id": ["U1"],
+                                    "date": [date(2026, 7, 1)],
+                                    "region": ["f3test"],
+                                }
+                            ),
                         ):
                             with patch.object(
-                                runner_mod, "attach_home_regions", return_value=pd.DataFrame()
+                                runner_mod,
+                                "attach_home_regions",
+                                side_effect=lambda _c, n, _s: n,
                             ):
                                 with patch.object(
                                     runner_mod, "evaluate_rule", return_value=qualified
@@ -880,3 +964,88 @@ def test_run_daily_posts_failure_log():
     mock_fail.assert_called_once()
     assert mock_fail.call_args.args[0]["region"] == "Tulsa"
 
+
+
+def test_kotter_empty_attendance_vs_query_error():
+    from unittest.mock import MagicMock, patch
+
+    import pandas as pd
+
+    from kotter import kotter_report as kr
+
+    region_row = {
+        "schema_name": "f3ttown_test",
+        "kotter_channel": "C1",
+        "slack_token": "enc",
+        "region": "Tulsa",
+    }
+    conn = MagicMock()
+
+    with patch.object(kr.pd, "read_sql", return_value=pd.DataFrame()):
+        result = kr.run_kotter_for_region(conn, "paxminer", region_row, dry_run=True)
+    assert result.get("skipped") == "no attendance rows for f3ttown_test"
+
+    with patch.object(kr.pd, "read_sql", side_effect=RuntimeError("table missing")):
+        result = kr.run_kotter_for_region(conn, "paxminer", region_row, dry_run=True)
+    assert result.get("error", "").startswith("attendance query failed:")
+
+
+def test_q_charter_joins_and_tracks_failed_channels():
+    from pathlib import Path
+    from unittest.mock import MagicMock, patch
+
+    from monthly_charts import Qcharter as qc
+
+    mydb = MagicMock()
+    cur = MagicMock()
+    mydb.cursor.return_value.__enter__.return_value = cur
+    mydb.cursor.return_value.__exit__.return_value = False
+    cur.fetchall.side_effect = [
+        [{"ao": "The Fort", "channel_id": "C_AO1"}],
+        [
+            {
+                "Date": "2026-07-01",
+                "AO": "The Fort",
+                "Q": "Beaker",
+                "Q_Is_App": 0,
+                "CoQ": None,
+                "pax_count": 5,
+                "fngs": "",
+                "fng_count": 0,
+            }
+        ],
+        [],
+    ]
+
+    slack = MagicMock()
+    slack.conversations_join.return_value = {"ok": True}
+    slack.files_upload_v2.side_effect = RuntimeError("not_in_channel")
+
+    with patch.object(qc, "WebClient", return_value=slack):
+        with patch.object(qc, "_q_charter_period", return_value=("07", "Jul", "July", "2026")):
+            with patch.object(qc.plt, "savefig"):
+                with patch.object(qc.plt, "title"):
+                    with patch.object(qc.plt, "legend"):
+                        with patch.object(qc.plt, "close"):
+                            with patch.object(qc.plt, "ioff"):
+                                result = qc.run_q_charter(
+                                    mydb,
+                                    "xoxb-test",
+                                    "f3ttown_test",
+                                    "Tulsa",
+                                    "C_SUM",
+                                    plot_dir="/tmp/paxminer_plots_test",
+                                    destinations=["C_SUM"],
+                                    post_per_ao=True,
+                                )
+
+    assert any(
+        call.kwargs.get("channel") == "C_AO1" or (call.args and call.args[0] == "C_AO1")
+        for call in slack.conversations_join.call_args_list
+    ) or slack.conversations_join.called
+    assert result["channel_count"] == 0
+    assert result["failed_channels"]
+    assert result["failed_channels"][0]["channel_id"] == "C_AO1"
+    assert "not_in_channel" in result["failed_channels"][0]["reason"]
+    # cleanup plot dir noise
+    Path("/tmp/paxminer_plots_test/f3ttown_test").mkdir(parents=True, exist_ok=True)

@@ -480,7 +480,7 @@ def test_seed_default_schedules_uses_defaults_json():
 
     cur.fetchone.side_effect = [
         {"c": 0},  # skip_if_any_schedules count
-        *[{"id": code_ids[d["code"]]} for d in __import__("scheduling").BUILTIN_DEFINITIONS],
+        *[{"c": 0} for _ in DEFAULT_SCHEDULES],  # merge_only per-definition counts
     ]
 
     # Patch upsert to return stable ids so we only assert INSERT args
@@ -507,3 +507,182 @@ def test_seed_default_schedules_uses_defaults_json():
         assert args[2] == item["destination_type"]
         assert args[3] is None  # empty specific_channels
         assert args[7] == 1  # enabled
+
+
+def test_parse_time_of_day_timedelta_bytes_fractional():
+    from datetime import timedelta
+
+    assert parse_time_of_day(timedelta(hours=7, minutes=0)) == time(7, 0)
+    assert parse_time_of_day(timedelta(hours=7, minutes=0, microseconds=500000)) == time(7, 0)
+    assert parse_time_of_day(b"07:15:00") == time(7, 15)
+    assert parse_time_of_day("7:00:00.500000") == time(7, 0)
+    assert parse_time_of_day("not-a-time") == time(7, 0)
+    assert parse_time_of_day(None) == time(7, 0)
+
+
+def test_format_run_result_includes_posted_failed_channels():
+    from schedule_runner import format_run_result
+
+    text, _ = format_run_result(
+        {
+            "schedule_id": 9,
+            "report_type": "q_charts",
+            "ok": True,
+            "channel_count": 1,
+            "posted_channels": [{"ao": "The Fort", "channel_id": "C111"}],
+            "failed_channels": [
+                {"ao": "Brickyard", "channel_id": "C222", "reason": "not_in_channel"}
+            ],
+        }
+    )
+    assert "posted: The Fort (C111)" in text
+    assert "failed: Brickyard (C222) - not_in_channel" in text
+
+
+def test_format_schedule_log_line_includes_destinations():
+    from schedule_runner import format_schedule_log_line
+
+    line = format_schedule_log_line(
+        "f3ttown_test",
+        {
+            "schedule_id": 4,
+            "report_type": "q_charts",
+            "ok": False,
+            "error": "all channel uploads failed",
+            "posted_channels": [],
+            "failed_channels": [{"ao": "AO1", "channel_id": "C1", "reason": "missing_scope"}],
+        },
+    )
+    assert "FAILED" in line
+    assert "failed: AO1 (C1) - missing_scope" in line
+
+
+def test_apply_delivery_result_marks_error_when_all_failed():
+    from schedule_runner import _apply_delivery_result
+
+    out = _apply_delivery_result(
+        {
+            "posted_channels": [],
+            "failed_channels": [{"ao": "x", "channel_id": "C1", "reason": "boom"}],
+        },
+        attempted_channels=1,
+    )
+    assert out["ok"] is False
+    assert out["channel_count"] == 0
+    assert "all channel uploads failed" in out["error"]
+
+
+def test_validate_schedule_form_frequency_fields():
+    from config_schedule import validate_schedule_form
+
+    base = {
+        "report_definition_id": 1,
+        "destination_type": "all_ao_channels",
+        "destination_channels": [],
+        "destination_users": [],
+    }
+    assert "day_of_week" in validate_schedule_form(
+        {**base, "frequency_type": "weekly", "day_of_week": None}, "q_charts"
+    )
+    assert "day_of_month" in validate_schedule_form(
+        {
+            **base,
+            "frequency_type": "monthly",
+            "month_day_mode": "specific",
+            "day_of_month": None,
+        },
+        "q_charts",
+    )
+    assert "interval_days" in validate_schedule_form(
+        {**base, "frequency_type": "custom", "custom_spec": {"interval_days": 0}},
+        "q_charts",
+    )
+    assert not validate_schedule_form(
+        {**base, "frequency_type": "weekly", "day_of_week": 6}, "q_charts"
+    )
+
+
+def test_draft_from_schedule_state_clears_stale_fields():
+    from config_schedule import draft_from_schedule_state
+
+    draft = draft_from_schedule_state(
+        {
+            "frequency_type": {
+                "paxminer_schedule_freq": {"selected_option": {"value": "weekly"}}
+            },
+            "destination_type": {
+                "paxminer_schedule_dest_type": {
+                    "selected_option": {"value": "all_ao_channels"}
+                }
+            },
+            "day_of_week": {"val": {"selected_option": {"value": "6"}}},
+        },
+        {
+            "month_day_mode": "first",
+            "day_of_month": "15",
+            "destination_channels": ["C1"],
+            "interval_days": "7",
+        },
+    )
+    assert draft["frequency_type"] == "weekly"
+    assert draft["day_of_week"] == "6"
+    assert "month_day_mode" not in draft
+    assert "day_of_month" not in draft
+    assert "destination_channels" not in draft
+    assert "interval_days" not in draft
+
+
+def test_restore_defaults_is_idempotent():
+    from unittest.mock import MagicMock, patch
+
+    from schedule_schema import seed_default_schedules
+    from scheduling import DEFAULT_SCHEDULES
+
+    cur = MagicMock()
+    code_ids = {s["code"]: i + 1 for i, s in enumerate(DEFAULT_SCHEDULES)}
+
+    # First restore: no existing schedules for any definition → insert all
+    cur.fetchone.side_effect = [{"c": 0} for _ in DEFAULT_SCHEDULES]
+    with patch("schedule_schema.upsert_builtin_definitions", return_value=code_ids):
+        first = seed_default_schedules(
+            cur, "paxminer_test", {"schema_name": "f3ttown"}, merge_only=True
+        )
+    assert first == len(DEFAULT_SCHEDULES)
+
+    # Second restore: every definition already has a row → insert 0
+    cur2 = MagicMock()
+    cur2.fetchone.side_effect = [{"c": 1} for _ in DEFAULT_SCHEDULES]
+    with patch("schedule_schema.upsert_builtin_definitions", return_value=code_ids):
+        second = seed_default_schedules(
+            cur2, "paxminer_test", {"schema_name": "f3ttown"}, merge_only=True
+        )
+    assert second == 0
+    insert_calls = [
+        c for c in cur2.execute.call_args_list if "INSERT INTO" in str(c.args[0])
+    ]
+    assert insert_calls == []
+
+
+def test_schedule_edit_modal_omits_null_initial_option():
+    from config_schedule import _schedule_edit_modal
+
+    view = _schedule_edit_modal(
+        "T1",
+        "f3ttown_test",
+        [{"id": 1, "name": "Kotter", "report_type": "kotter"}],
+        schedule={
+            "id": 42,
+            "report_definition_id": 1,
+            "destination_type": "specific_channels",
+            "destination_channels": "[]",
+            "destination_users": None,
+            "frequency_type": "monthly",
+            "month_day_mode": "first",
+            "time_of_day": "07:00:00",
+            "enabled": 1,
+        },
+    )
+    for block in view["blocks"]:
+        el = block.get("element") or {}
+        if "initial_option" in el:
+            assert el["initial_option"] is not None

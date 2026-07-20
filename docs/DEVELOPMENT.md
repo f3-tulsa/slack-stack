@@ -34,3 +34,14 @@ DB_ENCRYPTION_KEY='your-test-key-at-least-16' pytest -q qsignups/testing/
 ```
 
 `PAXminer/tests/test_BD_Comparer.py` requires `config/credentials_test.ini` and a live database; it is **skipped** when `CI=true` (e.g. in GitHub Actions). Run it only locally with a configured test DB.
+
+### Seed synthetic attendance (PAXMiner test schemas)
+
+To inject realistic `users` / `aos` / `beatdowns` / `bd_attendance` into a regional schema (e.g. `f3ttown_test`) for Kotter, achievements, and chart Run Now:
+
+```bash
+python PAXminer/scripts/seed_test_region.py --schema f3ttown_test \
+  --ao "AO Name:Cxxxx" --user "PAX Name:Uxxxx" --weeks 8 --clear
+```
+
+Uses `DATABASE_*` or migration `TARGET_*` env vars (auto-loads `.env.migration.test` / `.env.deploy.test` when present). Dev-only — not part of CI or deploy.

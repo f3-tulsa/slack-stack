@@ -82,7 +82,24 @@ Best-effort lines in the region's `#paxminer_logs` channel (same channel used by
 |-------|----------------|
 | Achievement granted / revoked | `- Achievement (f3ttown_test): granted 'Ironman' to <@U…>` |
 | Achievement region failure | `- Achievement (f3ttown_test): FAILED - …` |
-| Automatic schedule run | `- Schedule (f3ttown_test) #3 (kotter): success - posted to 1 channel(s)` |
+| Automatic schedule run | `- Schedule (f3ttown_test) #3 (kotter): success - posted to 1 channel(s) \| posted: kotter (C…)` |
+
+Schedule Run Now DMs and automatic log lines list **posted** and **failed** destinations (AO name + channel/user ID + reason), capped for Slack length. Chart producers report real upload successes — a resolved AO count is no longer treated as “posted.”
+
+Empty attendance for Achievements/Kotter returns a clear skip/error (and Achievements will **not** mass-revoke awards when attendance data is missing).
+
+### Seed test-region data (dev only)
+
+To exercise Kotter / achievements / charts against a test schema without copying prod Slack users:
+
+```bash
+# Loads migration/.env.migration.test (or .env.deploy.test) when present
+python PAXminer/scripts/seed_test_region.py --schema f3ttown_test \
+  --ao "The Fort:C0123456789" --user "Beaker:U0123456789" \
+  --weeks 8 --clear
+```
+
+Pass real test-workspace channel/user IDs the bot can post to; otherwise placeholder IDs are used and Slack posts/@mentions will not resolve. Not wired into CI or deploy.
 
 Manual **Run Now** does **not** post here; the admin gets a DM instead.
 
