@@ -82,8 +82,10 @@ def run_achievements_for_region(
     ao_channel_id: str | None = None,
     dry_run: bool = False,
 ) -> dict:
+    del pm_schema  # retained for call-site compatibility; attendance is single-region now
     year = date.today().year
-    region_name = region_row.get("region") or regional_schema
+    # Label logs with schema_name (e.g. f3ttown_test), not display region.
+    region_name = regional_schema
     if not region_row.get("send_achievements"):
         return {"skipped": "send_achievements off"}
     channel = region_row.get("achievement_channel")
@@ -102,11 +104,8 @@ def run_achievements_for_region(
         awarded = _load_awarded_ytd(cur, regional_schema, year)
         existing = _existing_keys(awarded, rules_by_id)
 
-        cur.execute(f"SELECT schema_name FROM `{pm_schema}`.`regions` WHERE active=1 AND schema_name LIKE 'f3%%'")
-        schemas = [r["schema_name"] for r in cur.fetchall() if r.get("schema_name")]
-        if regional_schema not in schemas:
-            schemas.append(regional_schema)
-
+    # Single-region only; cross-region / down-range attendance needs the F3 Nation API.
+    schemas = [regional_schema]
     nation = load_nation_attendance(conn, schemas)
     nation = attach_home_regions(conn, nation, schemas)
 
@@ -224,7 +223,7 @@ def run_daily(conn, pm_schema: str, *, dry_run: bool = False) -> list[dict]:
 
 def _post_achievement_failure_log(region_row: dict, exc: Exception) -> None:
     """Best-effort failure line to paxminer_logs. Never raises."""
-    region_name = region_row.get("region") or region_row.get("schema_name") or "?"
+    region_name = region_row.get("schema_name") or "?"
     token_enc = region_row.get("slack_token")
     if not token_enc:
         return

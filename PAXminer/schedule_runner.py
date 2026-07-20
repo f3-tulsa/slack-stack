@@ -173,7 +173,7 @@ def _post_schedule_outcome_log(region: dict | None, result: dict) -> None:
     region_name = "?"
     token_enc = None
     if region:
-        region_name = region.get("region") or region.get("schema_name") or "?"
+        region_name = region.get("schema_name") or "?"
         token_enc = region.get("slack_token")
     if not token_enc:
         token = (os.environ.get("PM_SLACK_TOKEN") or "").strip() or None

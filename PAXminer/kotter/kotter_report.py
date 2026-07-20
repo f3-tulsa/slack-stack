@@ -69,6 +69,7 @@ def run_kotter_for_region(
     *,
     dry_run: bool = False,
 ) -> dict:
+    del pm_schema  # retained for call-site compatibility; attendance is single-region now
     schema = region_row.get("schema_name")
     channel = region_row.get("kotter_channel")
     token_enc = region_row.get("slack_token")
@@ -81,10 +82,8 @@ def run_kotter_for_region(
     no_q_weeks = int(region_row.get("NO_Q_THRESHOLD_WEEKS") or 4)
     no_q_posts = int(region_row.get("NO_Q_THRESHOLD_POSTS") or 4)
 
-    with conn.cursor() as cur:
-        cur.execute(f"SELECT schema_name FROM `{pm_schema}`.`regions` WHERE active=1 AND schema_name LIKE 'f3%%'")
-        schemas = [r["schema_name"] for r in cur.fetchall() if r.get("schema_name")]
-
+    # Single-region only; cross-region / down-range attendance needs the F3 Nation API.
+    schemas = [schema]
     nation_parts = []
     for s in schemas:
         try:

@@ -244,7 +244,7 @@ def test_format_schedule_log_line_variants():
     from schedule_runner import format_schedule_log_line
 
     line = format_schedule_log_line(
-        "Tulsa",
+        "f3ttown_test",
         {
             "schedule_id": 1,
             "report_type": "kotter",
@@ -253,11 +253,11 @@ def test_format_schedule_log_line_variants():
             "duration_s": 1.5,
         },
     )
-    assert line.startswith("- Schedule (Tulsa) #1 (kotter): success")
+    assert line.startswith("- Schedule (f3ttown_test) #1 (kotter): success")
     assert "2 channel(s)" in line
 
     line = format_schedule_log_line(
-        "Tulsa",
+        "f3ttown_test",
         {
             "schedule_id": 2,
             "report_type": "kotter",
@@ -268,10 +268,40 @@ def test_format_schedule_log_line_variants():
     assert "skipped - no destinations configured" in line
 
     line = format_schedule_log_line(
-        "Tulsa",
+        "f3ttown_test",
         {"schedule_id": 3, "report_type": "kotter", "ok": False, "error": "boom"},
     )
     assert "FAILED - boom" in line
+
+
+def test_post_schedule_outcome_log_uses_schema_name():
+    from unittest.mock import MagicMock, patch
+
+    from schedule_runner import _post_schedule_outcome_log
+
+    region = {
+        "region": "Tulsa",
+        "schema_name": "f3ttown_test",
+        "slack_token": "enc",
+    }
+    result = {
+        "schedule_id": 1,
+        "report_type": "kotter",
+        "ok": True,
+        "channel_count": 1,
+    }
+    log_lines: list[str] = []
+    with patch("schedule_runner.decrypt_field", return_value="xoxb-test"):
+        with patch("schedule_runner.slack_client", return_value=MagicMock()):
+            with patch(
+                "schedule_runner.post_log",
+                side_effect=lambda _c, text, **_k: log_lines.append(text),
+            ):
+                _post_schedule_outcome_log(region, result)
+
+    assert len(log_lines) == 1
+    assert log_lines[0].startswith("- Schedule (f3ttown_test) #1 (kotter)")
+    assert "Tulsa" not in log_lines[0]
 
 
 def test_resolve_destinations_empty_specific_channels():

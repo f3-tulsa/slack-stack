@@ -116,6 +116,7 @@ def build_almost_there_message(
 
 
 def run_leaderboard_for_region(conn, pm_schema: str, region_row: dict, *, dry_run: bool = False) -> dict:
+    del pm_schema  # retained for call-site compatibility; attendance is single-region now
     schema = region_row.get("schema_name")
     channel = region_row.get("achievement_channel")
     token_enc = region_row.get("slack_token")
@@ -133,9 +134,9 @@ def run_leaderboard_for_region(conn, pm_schema: str, region_row: dict, *, dry_ru
         awarded_rows = cur.fetchall()
         cur.execute(f"SELECT user_id, user_name FROM `{schema}`.`users`")
         users = pd.DataFrame(cur.fetchall())
-        cur.execute(f"SELECT schema_name FROM `{pm_schema}`.`regions` WHERE active=1 AND schema_name LIKE 'f3%%'")
-        schemas = [r["schema_name"] for r in cur.fetchall() if r.get("schema_name")]
 
+    # Single-region only; cross-region / down-range attendance needs the F3 Nation API.
+    schemas = [schema]
     awarded = pd.DataFrame(awarded_rows) if awarded_rows else pd.DataFrame(columns=["pax_id", "id", "achievement_id"])
     nation = load_nation_attendance(conn, schemas)
     nation = attach_home_regions(conn, nation, schemas)

@@ -231,7 +231,6 @@ def test_run_achievements_skips_duplicate_grants():
     mock_cur.fetchall.side_effect = [
         [rule],
         [awarded_row],
-        [{"schema_name": "f3test"}],
     ]
 
     with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
@@ -284,7 +283,6 @@ def test_run_achievements_revokes_on_daily_when_unqualified():
     mock_cur.fetchall.side_effect = [
         [rule],
         [awarded_row],
-        [{"schema_name": "f3test"}],
     ]
 
     with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
@@ -347,7 +345,6 @@ def test_run_achievements_scoped_revoke_only_for_webhook_pax():
     mock_cur.fetchall.side_effect = [
         [rule],
         awarded_rows,
-        [{"schema_name": "f3test"}],
     ]
 
     with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
@@ -401,7 +398,6 @@ def test_run_achievements_grants_and_posts():
     mock_cur.fetchall.side_effect = [
         [rule],
         [],
-        [{"schema_name": "f3test"}],
     ]
 
     with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
@@ -619,6 +615,159 @@ def test_achievements_handler_webhook_success():
     assert mock_run.call_args.kwargs["ao_channel_id"] == "C_AO"
 
 
+def test_achievements_loads_only_regional_schema():
+    """Achievements must not fan out across other regions' schemas."""
+    from achievements import runner as runner_mod
+
+    rule = {
+        "id": 1,
+        "name": "Test",
+        "verb": "testing",
+        "metric": "posts",
+        "activity": "beatdown",
+        "period": "year",
+        "threshold": 1,
+    }
+    region_row = {
+        "send_achievements": 1,
+        "achievement_channel": "C1",
+        "slack_token": "enc",
+        "region": "Tulsa",
+        "schema_name": "f3ttown_test",
+    }
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[rule], []]
+
+    with patch.object(runner_mod, "decrypt_field", return_value="xoxb-test"):
+        with patch.object(runner_mod, "slack_client", return_value=MagicMock()):
+            with patch.object(
+                runner_mod, "load_nation_attendance", return_value=pd.DataFrame()
+            ) as mock_nation:
+                with patch.object(
+                    runner_mod, "attach_home_regions", side_effect=lambda _c, n, _s: n
+                ) as mock_home:
+                    with patch.object(
+                        runner_mod, "evaluate_rule", return_value=pd.DataFrame()
+                    ):
+                        runner_mod.run_achievements_for_region(
+                            mock_conn,
+                            pm_schema="paxminer_test",
+                            regional_schema="f3ttown_test",
+                            region_row=region_row,
+                            dry_run=True,
+                        )
+
+    mock_nation.assert_called_once()
+    assert mock_nation.call_args.args[1] == ["f3ttown_test"]
+    mock_home.assert_called_once()
+    assert mock_home.call_args.args[2] == ["f3ttown_test"]
+
+
+def test_kotter_loads_only_regional_schema():
+    """Kotter must not fan out across other regions' schemas."""
+    from kotter import kotter_report as kotter_mod
+
+    frame = pd.DataFrame(
+        {
+            "email": ["a@x.com"],
+            "user_id": ["U1"],
+            "ao_id": ["C1"],
+            "ao": ["ao1"],
+            "date": ["2026-07-01"],
+            "q_flag": [0],
+        }
+    )
+    region_row = {
+        "schema_name": "f3ttown_test",
+        "kotter_channel": "C_KOTTER",
+        "slack_token": "enc",
+        "region": "Tulsa",
+        "NO_POST_THRESHOLD": 2,
+        "REMINDER_WEEKS": 2,
+        "HOME_AO_CAPTURE": 8,
+        "NO_Q_THRESHOLD_WEEKS": 4,
+        "NO_Q_THRESHOLD_POSTS": 4,
+    }
+    conn = MagicMock()
+    schemas_seen: list[list[str]] = []
+
+    def _attach(_conn, df, schemas):
+        schemas_seen.append(list(schemas))
+        out = df.copy()
+        out["region"] = "f3ttown_test"
+        return out
+
+    with (
+        patch.object(kotter_mod.pd, "read_sql", return_value=frame) as mock_sql,
+        patch.object(kotter_mod, "attach_home_regions", side_effect=_attach),
+        patch.object(kotter_mod, "build_kotter_message", return_value=("ok", [])),
+    ):
+        result = kotter_mod.run_kotter_for_region(
+            conn, "paxminer_test", region_row, dry_run=True
+        )
+
+    assert result.get("dry_run") is True
+    mock_sql.assert_called_once()
+    assert schemas_seen == [["f3ttown_test"]]
+
+
+def test_leaderboard_loads_only_regional_schema():
+    """Achievement leaderboard almost-there must not fan out across regions."""
+    from achievements import leaderboard as lb_mod
+
+    region_row = {
+        "schema_name": "f3ttown_test",
+        "achievement_channel": "C_ACH",
+        "slack_token": "enc",
+        "region": "Tulsa",
+    }
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [
+        [],  # achievements_list
+        [],  # achievements_awarded
+        [],  # users
+    ]
+
+    with patch.object(lb_mod, "load_nation_attendance", return_value=pd.DataFrame()) as mock_nation:
+        with patch.object(lb_mod, "attach_home_regions", side_effect=lambda _c, n, _s: n):
+            with patch.object(lb_mod, "build_leaderboard_message", return_value=("", [])):
+                with patch.object(lb_mod, "build_almost_there_message", return_value=("", [])):
+                    result = lb_mod.run_leaderboard_for_region(
+                        mock_conn, "paxminer_test", region_row, dry_run=True
+                    )
+
+    assert result.get("dry_run") is True
+    mock_nation.assert_called_once()
+    assert mock_nation.call_args.args[1] == ["f3ttown_test"]
+
+
+def test_achievement_failure_log_uses_schema_name():
+    from achievements.runner import _post_achievement_failure_log
+
+    region_row = {
+        "region": "Tulsa",
+        "schema_name": "f3ttown_test",
+        "slack_token": "enc",
+    }
+    log_lines: list[str] = []
+    with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
+        with patch("achievements.runner.slack_client", return_value=MagicMock()):
+            with patch(
+                "achievements.runner.post_log",
+                side_effect=lambda _c, text, **_k: log_lines.append(text),
+            ):
+                _post_achievement_failure_log(region_row, RuntimeError("boom"))
+
+    assert len(log_lines) == 1
+    assert log_lines[0] == "- Achievement (f3ttown_test): FAILED - boom"
+
+
 def test_achievements_emit_per_event_paxminer_logs():
     """Grant and revoke each emit a paxminer_logs line."""
     from achievements import runner as runner_mod
@@ -656,10 +805,9 @@ def test_achievements_emit_per_event_paxminer_logs():
     mock_cur = MagicMock()
     mock_conn.cursor.return_value.__enter__.return_value = mock_cur
     mock_conn.cursor.return_value.__exit__.return_value = False
-    # _load_rules then schemas list (_load_awarded_ytd is patched)
+    # _load_rules only (_load_awarded_ytd is patched; no multi-schema query)
     mock_cur.fetchall.side_effect = [
         [rule],
-        [{"schema_name": "f3test"}],
     ]
 
     region_row = {
@@ -701,7 +849,8 @@ def test_achievements_emit_per_event_paxminer_logs():
     assert result == {"grants": 1, "revokes": 1}
     assert any("granted 'Ironman' to <@U_GRANT>" in line for line in log_lines)
     assert any("revoked 'Ironman' from <@U_REVOKE>" in line for line in log_lines)
-    assert all("Tulsa" in line for line in log_lines)
+    assert all("Achievement (f3test)" in line for line in log_lines)
+    assert not any("Tulsa" in line for line in log_lines)
 
 
 def test_run_daily_posts_failure_log():
