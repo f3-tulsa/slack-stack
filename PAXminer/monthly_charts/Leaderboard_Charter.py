@@ -52,6 +52,8 @@ def run_region_leaderboard(
     thismonth, thismonthname, thismonthnamelong, yearnum = _leaderboard_period()
     total_graphs = 0
     channels = list(destinations) if destinations else ([firstf] if firstf else [])
+    posted_channels: list[dict] = []
+    failed_channels: list[dict] = []
 
     try:
         with mydb.cursor() as cursor:
@@ -104,10 +106,17 @@ def run_region_leaderboard(
         )
         for ch in channels:
             try:
+                try:
+                    slack.conversations_join(channel=ch)
+                except Exception:
+                    pass
                 slack.files_upload_v2(channel=ch, initial_comment=comment, file=str(out_m))
                 total_graphs += 1
-            except Exception:
+                if not any(p.get("channel_id") == ch for p in posted_channels):
+                    posted_channels.append({"ao": "region", "channel_id": ch})
+            except Exception as exc:
                 logging.exception("Region leaderboard upload failed channel=%s", ch)
+                failed_channels.append({"ao": "region", "channel_id": ch, "reason": str(exc)[:200]})
         plt.close("all")
 
     try:
@@ -150,13 +159,27 @@ def run_region_leaderboard(
         plt.savefig(str(out_y), bbox_inches="tight")
         for ch in channels:
             try:
+                try:
+                    slack.conversations_join(channel=ch)
+                except Exception:
+                    pass
                 slack.files_upload_v2(file=str(out_y), channel=ch)
                 total_graphs += 1
-            except Exception:
+                if not any(p.get("channel_id") == ch for p in posted_channels):
+                    posted_channels.append({"ao": "region", "channel_id": ch})
+            except Exception as exc:
                 logging.exception("Region leaderboard YTD upload failed channel=%s", ch)
+                if not any(f.get("channel_id") == ch for f in failed_channels):
+                    failed_channels.append({"ao": "region", "channel_id": ch, "reason": str(exc)[:200]})
         plt.close("all")
 
-    return {"schema": schema, "graphs": total_graphs}
+    return {
+        "schema": schema,
+        "graphs": total_graphs,
+        "posted_channels": posted_channels,
+        "failed_channels": failed_channels,
+        "channel_count": len(posted_channels),
+    }
 
 
 if __name__ == "__main__":

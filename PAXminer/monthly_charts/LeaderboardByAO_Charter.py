@@ -58,6 +58,9 @@ def run_ao_leaderboard(
     thismonth, thismonthname, thismonthnamelong, yearnum = _lb_ao_period()
     total_graphs = 0
     fallback_channels = list(destinations) if destinations else []
+    posted_channels: list[dict] = []
+    failed_channels: list[dict] = []
+    skipped_no_data: list[dict] = []
 
     try:
         with mydb.cursor() as cursor:
@@ -109,7 +112,9 @@ def run_ao_leaderboard(
         finally:
             pass
 
-        if not posts_df.empty:
+        if posts_df.empty:
+            skipped_no_data.append({"ao": ao, "channel_id": channel_id})
+        else:
             posts_df.plot.bar(x="PAX", color={"Posts": "orange"})
             plt.title("Monthly Leaderboard - " + thismonthnamelong + ", " + yearnum)
             plt.xlabel("")
@@ -130,12 +135,18 @@ def run_ao_leaderboard(
                 max_attempts = 5
                 for attempt in range(max_attempts):
                     try:
+                        try:
+                            slack.conversations_join(channel=ch)
+                        except Exception:
+                            pass
                         slack.files_upload_v2(
                             channel=ch,
                             initial_comment=comment,
                             file=str(out_m),
                         )
                         total_graphs += 1
+                        if not any(p.get("channel_id") == ch and p.get("ao") == ao for p in posted_channels):
+                            posted_channels.append({"ao": ao, "channel_id": ch})
                         break
                     except SlackApiError as e:
                         if e.response.status_code == 429:
@@ -148,7 +159,16 @@ def run_ao_leaderboard(
                             time.sleep(delay)
                         else:
                             _LOG.exception("AO leaderboard upload failed ao=%s channel=%s", ao, ch)
+                            failed_channels.append(
+                                {"ao": ao, "channel_id": ch, "reason": str(e)[:200]}
+                            )
                             break
+                    except Exception as exc:
+                        _LOG.exception("AO leaderboard upload failed ao=%s channel=%s", ao, ch)
+                        failed_channels.append(
+                            {"ao": ao, "channel_id": ch, "reason": str(exc)[:200]}
+                        )
+                        break
             plt.close("all")
 
         try:
@@ -195,8 +215,14 @@ def run_ao_leaderboard(
                 max_attempts = 5
                 for attempt in range(max_attempts):
                     try:
+                        try:
+                            slack.conversations_join(channel=ch)
+                        except Exception:
+                            pass
                         slack.files_upload_v2(file=str(out_y), channel=ch)
                         total_graphs += 1
+                        if not any(p.get("channel_id") == ch and p.get("ao") == ao for p in posted_channels):
+                            posted_channels.append({"ao": ao, "channel_id": ch})
                         break
                     except SlackApiError as e:
                         if e.response.status_code == 429:
@@ -209,10 +235,28 @@ def run_ao_leaderboard(
                             time.sleep(delay)
                         else:
                             _LOG.exception("AO leaderboard YTD upload failed ao=%s channel=%s", ao, ch)
+                            if not any(f.get("channel_id") == ch and f.get("ao") == ao for f in failed_channels):
+                                failed_channels.append(
+                                    {"ao": ao, "channel_id": ch, "reason": str(e)[:200]}
+                                )
                             break
+                    except Exception as exc:
+                        _LOG.exception("AO leaderboard YTD upload failed ao=%s channel=%s", ao, ch)
+                        if not any(f.get("channel_id") == ch and f.get("ao") == ao for f in failed_channels):
+                            failed_channels.append(
+                                {"ao": ao, "channel_id": ch, "reason": str(exc)[:200]}
+                            )
+                        break
             plt.close("all")
 
-    return {"schema": schema, "graphs": total_graphs}
+    return {
+        "schema": schema,
+        "graphs": total_graphs,
+        "posted_channels": posted_channels,
+        "failed_channels": failed_channels,
+        "skipped_no_data": skipped_no_data,
+        "channel_count": len(posted_channels),
+    }
 
 
 if __name__ == "__main__":

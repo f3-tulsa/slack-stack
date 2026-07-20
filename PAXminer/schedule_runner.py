@@ -117,6 +117,85 @@ def _result_status(dispatch_result: dict | None) -> str:
     return "success"
 
 
+def _format_dest_lines(
+    posted: list | None,
+    failed: list | None,
+    *,
+    max_chars: int = 1200,
+    id_key: str = "channel_id",
+    name_key: str = "ao",
+) -> list[str]:
+    """Compact posted/failed destination lines; cap length for Slack section limits."""
+    lines: list[str] = []
+
+    def _fmt_items(items: list, *, with_reason: bool) -> str:
+        parts: list[str] = []
+        shown = 0
+        for item in items:
+            name = item.get(name_key) or item.get("pax") or "?"
+            cid = item.get(id_key) or item.get("user_id") or "?"
+            if with_reason:
+                reason = str(item.get("reason") or "?")[:80]
+                part = f"{name} ({cid}) - {reason}"
+            else:
+                part = f"{name} ({cid})"
+            parts.append(part)
+            shown += 1
+            joined = ", ".join(parts)
+            if len(joined) > max_chars:
+                overflow = len(items) - shown + 1
+                parts = parts[:-1]
+                if overflow > 0:
+                    parts.append(f"+{overflow} more")
+                break
+        return ", ".join(parts)
+
+    if posted:
+        lines.append(f"posted: {_fmt_items(posted, with_reason=False)}")
+    if failed:
+        lines.append(f"failed: {_fmt_items(failed, with_reason=True)}")
+    return lines
+
+
+def _apply_delivery_result(
+    result: dict,
+    *,
+    attempted_channels: int = 0,
+    attempted_users: int = 0,
+) -> dict:
+    """Prefer producer posted counts over attempted destination counts."""
+    out = dict(result)
+    posted = out.get("posted_channels") or []
+    failed = out.get("failed_channels") or []
+    posted_users = out.get("posted_users") or []
+    failed_users = out.get("failed_users") or []
+
+    if "posted_channels" in out or "failed_channels" in out:
+        out["channel_count"] = len(posted)
+        out["attempted_count"] = attempted_channels or (len(posted) + len(failed))
+        if not posted and failed:
+            out["ok"] = False
+            reasons = "; ".join(
+                f"{f.get('ao') or f.get('channel_id')}: {f.get('reason')}" for f in failed[:5]
+            )
+            out.setdefault("error", f"all channel uploads failed: {reasons}"[:500])
+    elif "channel_count" not in out:
+        out["channel_count"] = attempted_channels
+
+    if "posted_users" in out or "failed_users" in out:
+        out["user_count"] = len(posted_users)
+        if not posted_users and failed_users and not posted:
+            out["ok"] = False
+            reasons = "; ".join(
+                f"{f.get('pax') or f.get('user_id')}: {f.get('reason')}" for f in failed_users[:5]
+            )
+            out.setdefault("error", f"all user DMs failed: {reasons}"[:500])
+    elif "user_count" not in out:
+        out["user_count"] = attempted_users
+
+    return out
+
+
 def format_run_result(result: dict) -> tuple[str, list[dict] | None]:
     """Human-readable summary for Run Now result DMs."""
     sid = result.get("schedule_id")
@@ -128,6 +207,21 @@ def format_run_result(result: dict) -> tuple[str, list[dict] | None]:
         return text, None
     if result.get("error") and not result.get("ok", True):
         text = f"Schedule #{sid} ({report_type}): *failed*{dur}\n`{str(result.get('error'))[:500]}`"
+        dest_lines = _format_dest_lines(
+            result.get("posted_channels"),
+            result.get("failed_channels"),
+        )
+        if result.get("posted_users") or result.get("failed_users"):
+            dest_lines.extend(
+                _format_dest_lines(
+                    result.get("posted_users"),
+                    result.get("failed_users"),
+                    id_key="user_id",
+                    name_key="pax",
+                )
+            )
+        if dest_lines:
+            text = text + "\n" + "\n".join(dest_lines)
         return text, None
     skipped = result.get("skipped") or (result.get("result") or {}).get("skipped")
     if skipped:
@@ -142,6 +236,21 @@ def format_run_result(result: dict) -> tuple[str, list[dict] | None]:
         dest_bits.append(f"{users} user DM(s)")
     dest = (", ".join(dest_bits) if dest_bits else "destinations resolved")
     text = f"Schedule #{sid} ({report_type}): *success* — posted to {dest}{dur}."
+    dest_lines = _format_dest_lines(
+        result.get("posted_channels"),
+        result.get("failed_channels"),
+    )
+    if result.get("posted_users") or result.get("failed_users"):
+        dest_lines.extend(
+            _format_dest_lines(
+                result.get("posted_users"),
+                result.get("failed_users"),
+                id_key="user_id",
+                name_key="pax",
+            )
+        )
+    if dest_lines:
+        text = text + "\n" + "\n".join(dest_lines)
     return text, None
 
 
@@ -152,8 +261,24 @@ def format_schedule_log_line(region_name: str, result: dict) -> str:
     duration = result.get("duration_s")
     dur = f" ({duration}s)" if duration is not None else ""
     label = f"- Schedule ({region_name}) #{sid} ({report_type})"
+    dest_lines = _format_dest_lines(
+        result.get("posted_channels"),
+        result.get("failed_channels"),
+        max_chars=800,
+    )
+    if result.get("posted_users") or result.get("failed_users"):
+        dest_lines.extend(
+            _format_dest_lines(
+                result.get("posted_users"),
+                result.get("failed_users"),
+                max_chars=800,
+                id_key="user_id",
+                name_key="pax",
+            )
+        )
+    dest_suffix = (" | " + " | ".join(dest_lines)) if dest_lines else ""
     if result.get("error") and not result.get("ok", True):
-        return f"{label}: FAILED - {str(result.get('error'))[:500]}{dur}"
+        return f"{label}: FAILED - {str(result.get('error'))[:500]}{dur}{dest_suffix}"
     skipped = result.get("skipped") or (result.get("result") or {}).get("skipped")
     if skipped:
         return f"{label}: skipped - {skipped}{dur}"
@@ -165,7 +290,7 @@ def format_schedule_log_line(region_name: str, result: dict) -> str:
     if users is not None:
         dest_bits.append(f"{users} user DM(s)")
     dest = ", ".join(dest_bits) if dest_bits else "destinations resolved"
-    return f"{label}: success - posted to {dest}{dur}"
+    return f"{label}: success - posted to {dest}{dur}{dest_suffix}"
 
 
 def _post_schedule_outcome_log(region: dict | None, result: dict) -> None:
@@ -389,9 +514,7 @@ def _dispatch_report(
                 user_ids=user_ids,
             )
             if isinstance(result, dict):
-                result = dict(result)
-                result.setdefault("user_count", len(user_ids))
-                result.setdefault("channel_count", 0)
+                return _apply_delivery_result(result, attempted_users=len(user_ids))
             return result
         if report_type == "q_charts":
             from monthly_charts.Qcharter import run_q_charter
@@ -407,8 +530,7 @@ def _dispatch_report(
                 post_per_ao=(dest_type == "all_ao_channels"),
             )
             if isinstance(result, dict):
-                result = dict(result)
-                result.setdefault("channel_count", len(channel_ids))
+                return _apply_delivery_result(result, attempted_channels=len(channel_ids))
             return result
         if report_type == "region_leaderboard":
             from monthly_charts.Leaderboard_Charter import run_region_leaderboard
@@ -424,8 +546,7 @@ def _dispatch_report(
                 destinations=channel_ids,
             )
             if isinstance(result, dict):
-                result = dict(result)
-                result.setdefault("channel_count", len(channel_ids))
+                return _apply_delivery_result(result, attempted_channels=len(channel_ids))
             return result
         if report_type == "ao_leaderboard":
             from monthly_charts.LeaderboardByAO_Charter import run_ao_leaderboard
@@ -441,8 +562,7 @@ def _dispatch_report(
                 post_per_ao=(dest_type == "all_ao_channels"),
             )
             if isinstance(result, dict):
-                result = dict(result)
-                result.setdefault("channel_count", len(channel_ids))
+                return _apply_delivery_result(result, attempted_channels=len(channel_ids))
             return result
         if report_type == "achievement_leaderboard":
             from achievements.leaderboard import run_leaderboard_for_region
@@ -452,15 +572,25 @@ def _dispatch_report(
                 region["achievement_channel"] = channel_ids[0]
             result = run_leaderboard_for_region(registry_conn, pm_schema, region)
             client = slack_client(token)
-            if len(channel_ids) > 1 and result.get("text"):
-                for cid in channel_ids[1:]:
+            posted_channels: list[dict] = []
+            failed_channels: list[dict] = []
+            if result.get("text") and channel_ids:
+                for cid in channel_ids:
                     try:
-                        post_message(client, cid, result["text"], blocks=result.get("blocks"))
-                    except Exception:
+                        if cid != channel_ids[0]:
+                            post_message(client, cid, result["text"], blocks=result.get("blocks"))
+                        posted_channels.append({"ao": "achievement-lb", "channel_id": cid})
+                    except Exception as exc:
                         LOG.exception("extra achievement_leaderboard post failed channel=%s", cid)
+                        failed_channels.append(
+                            {"ao": "achievement-lb", "channel_id": cid, "reason": str(exc)[:200]}
+                        )
             if isinstance(result, dict):
                 result = dict(result)
-                result.setdefault("channel_count", len(channel_ids))
+                if posted_channels or failed_channels:
+                    result["posted_channels"] = posted_channels
+                    result["failed_channels"] = failed_channels
+                return _apply_delivery_result(result, attempted_channels=len(channel_ids))
             return result
         if report_type == "kotter":
             from kotter.kotter_report import run_kotter_for_region
@@ -481,15 +611,38 @@ def _dispatch_report(
                 dry_run=False,
             )
             client = slack_client(token)
+            posted_channels = []
+            failed_channels = []
+            primary = channel_ids[0] if channel_ids else region.get("kotter_channel")
+            if result.get("posted") and primary:
+                posted_channels.append({"ao": "kotter", "channel_id": primary})
+            if result.get("error"):
+                failed_channels.append(
+                    {
+                        "ao": "kotter",
+                        "channel_id": primary or "?",
+                        "reason": str(result.get("error"))[:200],
+                    }
+                )
             if len(channel_ids) > 1 and result.get("text"):
                 for cid in channel_ids[1:]:
                     try:
                         post_message(client, cid, result["text"], blocks=result.get("blocks"))
-                    except Exception:
+                        posted_channels.append({"ao": "kotter", "channel_id": cid})
+                    except Exception as exc:
                         LOG.exception("extra kotter post failed channel=%s", cid)
+                        failed_channels.append(
+                            {"ao": "kotter", "channel_id": cid, "reason": str(exc)[:200]}
+                        )
             if isinstance(result, dict):
                 result = dict(result)
-                result.setdefault("channel_count", len(channel_ids) or (1 if region.get("kotter_channel") else 0))
+                if posted_channels or failed_channels:
+                    result["posted_channels"] = posted_channels
+                    result["failed_channels"] = failed_channels
+                return _apply_delivery_result(
+                    result,
+                    attempted_channels=len(channel_ids) or (1 if region.get("kotter_channel") else 0),
+                )
             return result
         if report_type == "custom_report":
             result = run_custom_report(
@@ -503,9 +656,11 @@ def _dispatch_report(
                 plot_dir=plot_dir,
             )
             if isinstance(result, dict):
-                result = dict(result)
-                result.setdefault("channel_count", len(channel_ids))
-                result.setdefault("user_count", len(user_ids))
+                return _apply_delivery_result(
+                    result,
+                    attempted_channels=len(channel_ids),
+                    attempted_users=len(user_ids),
+                )
             return result
         raise RuntimeError(f"unknown report_type={report_type}")
     finally:

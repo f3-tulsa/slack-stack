@@ -126,6 +126,8 @@ def run_pax_charter(
                 f.write(f"{user_id_tmp} {pax}\n")
 
     total_graphs = 0
+    posted_users: list[dict] = []
+    failed_users: list[dict] = []
     current_method = region_method
     for user_id in users_df["user_id"]:
         try:
@@ -180,10 +182,13 @@ def run_pax_charter(
                     )
                     file = str(out_jpg)
                     if total_graphs > 0:
+                        delivered = False
+                        last_err: Exception | None = None
                         if current_method == "v2":
                             try:
                                 send_slack_message_v2(user_id_tmp, message, file)
                                 success_message_sent(user_id_tmp, pax, schema)
+                                delivered = True
                             except SlackApiError as e:
                                 err = e.response.get("error") if e.response else None
                                 if err == "missing_scope":
@@ -193,26 +198,45 @@ def run_pax_charter(
                                     current_method = "v1"
                                 else:
                                     log_message_sent_error(user_id_tmp, schema, pax, e)
-                                    raise e
+                                    last_err = e
                             except Exception as e:
                                 log_message_sent_error(user_id_tmp, schema, pax, e)
-                                raise e
-                        if current_method != "v2":
+                                last_err = e
+                        if current_method != "v2" and not delivered:
                             try:
                                 channel = user_id_tmp
                                 send_slack_message(channel, message, file)
                                 success_message_sent(user_id_tmp, pax, schema)
+                                delivered = True
                             except Exception as e:
                                 log_message_sent_error(user_id_tmp, schema, pax, e)
-                                raise e
+                                last_err = e
+                        if delivered:
+                            posted_users.append({"user_id": user_id_tmp, "pax": pax})
+                        else:
+                            failed_users.append(
+                                {
+                                    "user_id": user_id_tmp,
+                                    "pax": pax,
+                                    "reason": str(last_err)[:200] if last_err else "unknown",
+                                }
+                            )
                     else:
                         logging.debug("PAX charter skipped (no graphs): %s", pax)
-        except Exception:
+        except Exception as exc:
             logging.exception("PAX charter: exception for user_id=%s", user_id)
+            failed_users.append({"user_id": user_id, "pax": "?", "reason": str(exc)[:200]})
         finally:
             plt.close("all")
 
-    return {"schema": schema, "graphs": total_graphs}
+    return {
+        "schema": schema,
+        "graphs": total_graphs,
+        "posted_users": posted_users,
+        "failed_users": failed_users,
+        "user_count": len(posted_users),
+        "channel_count": 0,
+    }
 
 
 if __name__ == "__main__":
