@@ -8,6 +8,8 @@ PAXminer pulls workout (“backblast”) data from regional Slack workspaces, no
 
 Each region has its own **schema** in the same database; registry rows in `paxminer.regions` point Lambdas at the right schema, timezone, achievement toggles, and encrypted Slack token. Deploy passes **`PM_SLACK_TOKEN`**, **`PM_SLACK_SIGNING_SECRET`**, **`PM_ACHIEVEMENTS_WEBHOOK_SECRET`**, **`F3_REGION_NAME`**, and **`STAGE`** via SAM; the Lambda **encrypts** the bot token with **`DB_ENCRYPTION_KEY`** and **upserts** it into `paxminer.regions` on cold start.
 
+**Achievements, Kotter, and the achievement leaderboard are single-region:** they only read attendance from the region's own schema (e.g. `f3ttown_test` / `f3ttown`). Cross-region / “down range” attendance requires the F3 Nation API and is out of scope for now.
+
 ## Scheduling (unified)
 
 Posting cadence and destinations come from PAXMiner-owned schedule tables (always-on; no feature flag):
@@ -74,13 +76,13 @@ Function URL outputs: **`SlackFunctionUrl`**, **`AchievementsFunctionUrl`**.
 
 ### Operational log (`paxminer_logs`)
 
-Best-effort lines in the region's `#paxminer_logs` channel (same channel used by beatdown/user sync):
+Best-effort lines in the region's `#paxminer_logs` channel (same channel used by beatdown/user sync). Labels use **`schema_name`** (e.g. `f3ttown_test`), not the display region name:
 
 | Event | Example line |
 |-------|----------------|
-| Achievement granted / revoked | `- Achievement (Tulsa): granted 'Ironman' to <@U…>` |
-| Achievement region failure | `- Achievement (Tulsa): FAILED - …` |
-| Automatic schedule run | `- Schedule (Tulsa) #3 (kotter): success - posted to 1 channel(s)` |
+| Achievement granted / revoked | `- Achievement (f3ttown_test): granted 'Ironman' to <@U…>` |
+| Achievement region failure | `- Achievement (f3ttown_test): FAILED - …` |
+| Automatic schedule run | `- Schedule (f3ttown_test) #3 (kotter): success - posted to 1 channel(s)` |
 
 Manual **Run Now** does **not** post here; the admin gets a DM instead.
 
