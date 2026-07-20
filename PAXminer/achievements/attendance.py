@@ -110,6 +110,7 @@ def load_nation_attendance(conn, schemas: list[str]) -> pd.DataFrame:
     for schema in schemas:
         try:
             df = pd.read_sql(_nation_sql_for_schema(schema), conn)
+            LOG.info("nation attendance schema=%s rows=%s", schema, len(df))
             df["region"] = schema
             frames.append(df)
         except Exception as e:
@@ -122,6 +123,8 @@ def load_nation_attendance(conn, schemas: list[str]) -> pd.DataFrame:
     if bad:
         LOG.warning("Dropping %s attendance rows with unparseable bd_date", bad)
         out = out[out["date"].notna()].copy()
+    if out.empty:
+        return out
     out["backblast"] = out["backblast"].astype(str)
     out["ao"] = out["ao"].astype(str)
     return out

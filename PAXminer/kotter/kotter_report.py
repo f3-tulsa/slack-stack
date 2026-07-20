@@ -85,23 +85,37 @@ def run_kotter_for_region(
     # Single-region only; cross-region / down-range attendance needs the F3 Nation API.
     schemas = [schema]
     nation_parts = []
+    first_error: Exception | None = None
     for s in schemas:
         try:
             df = pd.read_sql(_kotter_nation_sql(s), conn)
+            LOG.info("kotter attendance schema=%s rows=%s", s, len(df))
+            if df.empty:
+                continue
             df["region"] = s
             nation_parts.append(df)
         except Exception as e:
             LOG.error("kotter nation schema=%s: %s", s, e)
+            if first_error is None:
+                first_error = e
     if not nation_parts:
-        return {"skipped": "no nation data"}
+        if first_error is not None:
+            return {"error": f"attendance query failed: {first_error}"}
+        return {"skipped": f"no attendance rows for {schema}"}
     nation = pd.concat(nation_parts, ignore_index=True)
+    if "date" not in nation.columns or nation.empty:
+        if first_error is not None:
+            return {"error": f"attendance query failed: {first_error}"}
+        return {"skipped": f"no attendance rows for {schema}"}
     nation["date"] = pd.to_datetime(nation["date"], errors="coerce")
     bad = int(nation["date"].isna().sum())
     if bad:
         LOG.warning("Dropping %s kotter rows with unparseable bd_date", bad)
         nation = nation[nation["date"].notna()].copy()
     if nation.empty:
-        return {"skipped": "no nation data"}
+        if first_error is not None:
+            return {"error": f"attendance query failed: {first_error}"}
+        return {"skipped": f"no attendance rows for {schema}"}
 
     home = attach_home_regions(conn, nation.copy(), schemas)
     if "user_id_y" in home.columns:

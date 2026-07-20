@@ -107,6 +107,13 @@ def run_achievements_for_region(
     # Single-region only; cross-region / down-range attendance needs the F3 Nation API.
     schemas = [regional_schema]
     nation = load_nation_attendance(conn, schemas)
+    if nation.empty:
+        # Never mass-revoke awards when attendance data is missing/empty.
+        LOG.warning(
+            "achievements skipped region=%s: no attendance data (would not revoke)",
+            regional_schema,
+        )
+        return {"skipped": "no attendance data"}
     nation = attach_home_regions(conn, nation, schemas)
 
     scope = pax_user_ids
