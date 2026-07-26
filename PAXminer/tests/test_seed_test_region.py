@@ -278,3 +278,10 @@ def test_plan_unknown_goal_raises():
             thresholds=THRESHOLDS,
             today=TODAY,
         )
+
+
+def test_awarded_ddl_no_fk_omits_references():
+    ddl = seeder._ACHIEVEMENTS_AWARDED_DDL_NO_FK.format(schema="f3ttown_test")
+    assert "FOREIGN KEY" not in ddl.upper()
+    assert "REFERENCES" not in ddl.upper()
+    assert "achievements_awarded" in ddl

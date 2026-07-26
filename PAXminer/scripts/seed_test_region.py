@@ -647,16 +647,48 @@ def load_region_row(conn, registry_schema: str, regional_schema: str) -> dict:
     return row
 
 
+def _table_exists(cur, schema: str, table: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = %s AND table_name = %s
+        LIMIT 1
+        """,
+        (schema, table),
+    )
+    return cur.fetchone() is not None
+
+
+# TiDB Cloud app users often lack REFERENCES; seeder DDL omits the FK.
+_ACHIEVEMENTS_AWARDED_DDL_NO_FK = """
+CREATE TABLE IF NOT EXISTS `{schema}`.`achievements_awarded` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `achievement_id` int NOT NULL,
+  `pax_id` varchar(255) NOT NULL,
+  `date_awarded` date NOT NULL,
+  `created` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `achievement_id` (`achievement_id`),
+  KEY `pax_id` (`pax_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+"""
+
+
 def ensure_achievement_tables(cur, schema: str) -> None:
     from achievements.achievement_rules import (
-        ACHIEVEMENTS_AWARDED_DDL,
         ACHIEVEMENTS_LIST_DDL,
         ACHIEVEMENTS_VIEW_DDL,
         ACHIEVEMENT_SEEDS,
     )
 
-    cur.execute(ACHIEVEMENTS_LIST_DDL.format(schema=schema))
-    cur.execute(ACHIEVEMENTS_AWARDED_DDL.format(schema=schema))
+    if not _table_exists(cur, schema, "achievements_list"):
+        cur.execute(ACHIEVEMENTS_LIST_DDL.format(schema=schema))
+        LOG.info("Created %s.achievements_list", schema)
+    if not _table_exists(cur, schema, "achievements_awarded"):
+        # Avoid FOREIGN KEY — slack_test user gets 1142 REFERENCES denied.
+        cur.execute(_ACHIEVEMENTS_AWARDED_DDL_NO_FK.format(schema=schema))
+        LOG.info("Created %s.achievements_awarded (no FK)", schema)
     cur.execute(ACHIEVEMENTS_VIEW_DDL.format(schema=schema))
     cur.execute(ATTENDANCE_VIEW_DDL.format(schema=schema))
     for seed in ACHIEVEMENT_SEEDS:
