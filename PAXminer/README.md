@@ -90,16 +90,16 @@ Empty attendance for Achievements/Kotter returns a clear skip/error (and Achieve
 
 ### Seed test-region data (dev only)
 
-To exercise Kotter / achievements / charts against a test schema without copying prod Slack users:
+Interactive, **test-only** seeder. Always loads [`.env.deploy.test`](../.env.deploy.example) (no `--env` switch) and hard-fails unless the regional/registry schemas end in `_test` and Slack `auth.test` matches `F3_REGION_SLACK_TEAM_ID`.
 
 ```bash
-# Loads migration/.env.migration.test (or .env.deploy.test) when present
-python PAXminer/scripts/seed_test_region.py --schema f3ttown_test \
-  --ao "The Fort:C0123456789" --user "Beaker:U0123456789" \
-  --weeks 8 --clear
+# From repo root, with .env.deploy.test filled in
+python PAXminer/scripts/seed_test_region.py
+# optional: override regional schema (still must end in _test)
+python PAXminer/scripts/seed_test_region.py --schema f3ttown_test
 ```
 
-Pass real test-workspace channel/user IDs the bot can post to; otherwise placeholder IDs are used and Slack posts/@mentions will not resolve. Not wired into CI or deploy.
+The script pulls real users and channels from the test workspace, then for each user asks: Kotter / one Achievement / clear synthesized data / skip. AOs are pre-selected from the goal’s requirement (e.g. 7 for Cadre) with a minimum-AO note; you can override. Seeded beatdowns are tagged `[SEED]` so clear only removes synthetic rows. Not wired into CI or deploy.
 
 Manual **Run Now** does **not** post here; the admin gets a DM instead.
 

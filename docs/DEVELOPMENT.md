@@ -37,11 +37,11 @@ DB_ENCRYPTION_KEY='your-test-key-at-least-16' pytest -q qsignups/testing/
 
 ### Seed synthetic attendance (PAXMiner test schemas)
 
-To inject realistic `users` / `aos` / `beatdowns` / `bd_attendance` into a regional schema (e.g. `f3ttown_test`) for Kotter, achievements, and chart Run Now:
+Interactive, **test-only** seeder — always loads `.env.deploy.test` and refuses prod schemas / workspaces:
 
 ```bash
-python PAXminer/scripts/seed_test_region.py --schema f3ttown_test \
-  --ao "AO Name:Cxxxx" --user "PAX Name:Uxxxx" --weeks 8 --clear
+python PAXminer/scripts/seed_test_region.py
+# optional: python PAXminer/scripts/seed_test_region.py --schema f3ttown_test
 ```
 
-Uses `DATABASE_*` or migration `TARGET_*` env vars (auto-loads `.env.migration.test` / `.env.deploy.test` when present). Dev-only — not part of CI or deploy.
+Pulls real test-workspace users and AO channels via `PM_SLACK_TOKEN`, walks each user (Kotter / one Achievement / clear `[SEED]` data / skip), auto pre-selects the required AO(s), and writes attendance sized to live Kotter thresholds / achievement rules. Requires `F3_REGION_SLACK_TEAM_ID` to match Slack `auth.test`. Dev-only — not part of CI or deploy.
