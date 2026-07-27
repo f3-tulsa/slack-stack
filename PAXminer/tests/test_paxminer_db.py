@@ -98,6 +98,18 @@ def test_no_module_calls_pd_read_sql_directly():
     assert offenders == [], f"pd.read_sql still used at: {offenders}"
 
 
+def test_paxminer_db_no_toplevel_pandas_import():
+    """Slack Lambda imports paxminer_db but has no pandas — keep import lazy."""
+    path = Path(__file__).resolve().parent.parent / "paxminer_db.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert alias.name != "pandas", "top-level import pandas breaks Slack Lambda"
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("pandas"):
+            raise AssertionError("top-level from pandas import breaks Slack Lambda")
+
+
 @pytest.mark.parametrize(
     "pattern",
     [att.QSOURCE_BB_RE, att.QSOURCE_AO_RE, att.BEATDOWN_EXCLUDE_AO_RE],
