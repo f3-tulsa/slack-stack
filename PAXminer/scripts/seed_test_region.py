@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""Interactive, test-only seeder for PAXMiner.
+"""Test-only seeder for PAXMiner realistic attendance + goal overlays.
 
-Pulls real users from the **test** Slack workspace and the AO list from QSignups
-(``qsignups_aos``), walks each user, and lets you assign one goal (Kotter case or
-one achievement) so the next PAXMiner run awards it. Always loads
-``.env.deploy.test`` — there is no ``--env`` switch, and the script hard-fails if
-the target does not look like test.
+Always loads ``.env.deploy.test`` and hard-fails if the target does not look
+like test. Pulls real Slack users and the AO list from QSignups (``qsignups_aos``).
+
+**One-shot (default):** clear prior seed data, write ~180 days of multi-PAX
+weekly beatdowns, optional Kotter overlays, and threshold-minus-one shapes for
+a few users. Run the achievements job (Schedule → Run Now) afterward.
+
+**Interactive (``--interactive``):** walk each user and assign Kotter or one
+achievement; overlays join onto the existing calendar when possible.
 
 Usage (from repo root):
 
   python PAXminer/scripts/seed_test_region.py
-  python PAXminer/scripts/seed_test_region.py --schema f3ttown_test
+  python PAXminer/scripts/seed_test_region.py --yes --days 180 --verify
+  python PAXminer/scripts/seed_test_region.py --interactive --schema f3ttown_test
+  python PAXminer/scripts/seed_test_region.py --verify-only
 
 Not wired into CI or deploy.
 """
@@ -20,6 +26,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import random
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -36,8 +43,10 @@ if str(_REPO_ROOT / "migration") not in sys.path:
 LOG = logging.getLogger("seed_test_region")
 
 SEED_SENTINEL = "[SEED]"
+SEED_JSON = '{"seed": true}'
 FILLER_Q_USER_ID = "USEEDFILLER0XX"
 FILLER_Q_NAME = f"{SEED_SENTINEL} Q"
+SYNTHETIC_USER_PREFIX = "USEEDPAX"
 DEPLOY_ENV_FILE = _REPO_ROOT / ".env.deploy.test"
 
 # Mirrors the national PAXMiner attendance_view that migration copies, including
@@ -226,6 +235,8 @@ class BeatdownSpec:
     q_user_id: str
     attendee_ids: list[str]
     backblast: str
+    coq_user_id: str | None = None
+    fng_count: int = 0
 
 
 @dataclass
@@ -235,6 +246,29 @@ class SeedPlan:
     co_triggered: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     goal_label: str = ""
+
+
+@dataclass
+class CalendarEvent:
+    ao_id: str
+    ao_name: str
+    bd_date: date
+    q_user_id: str
+    coq_user_id: str | None
+    attendee_ids: list[str]
+    pax_count: int
+    is_seed: bool
+
+
+@dataclass
+class OverlayResult:
+    beatdowns_to_upsert: list[BeatdownSpec] = field(default_factory=list)
+    attendance_deletes: list[tuple[str, str, date, str]] = field(default_factory=list)
+    q_reassigns: list[tuple[str, date, str, str]] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    expected_outcome: str = ""
+    goal_label: str = ""
+    co_triggered: list[str] = field(default_factory=list)
 
 
 def min_aos_required(
@@ -331,6 +365,50 @@ def co_triggered_achievements(achievement: dict, catalog: Iterable[dict]) -> lis
     return out
 
 
+def _pick_q_from_pool(
+    pool: list[tuple[str, str]],
+    exclude: set[str],
+    *,
+    index: int = 0,
+    fallback: str = FILLER_Q_USER_ID,
+) -> str:
+    candidates = [uid for _, uid in pool if uid not in exclude]
+    if not candidates:
+        return fallback
+    return candidates[index % len(candidates)]
+
+
+def _sample_pool_attendees(
+    pool: list[tuple[str, str]],
+    target_user_id: str,
+    q_user_id: str,
+    rng: random.Random,
+    *,
+    min_extra: int = 2,
+    max_extra: int = 5,
+) -> list[str]:
+    others = [uid for _, uid in pool if uid not in (target_user_id, q_user_id)]
+    if not others:
+        return []
+    n = min(rng.randint(min_extra, max_extra), len(others))
+    return rng.sample(others, n)
+
+
+def _ensure_q_in_attendees(q_user_id: str, attendee_ids: list[str]) -> list[str]:
+    if q_user_id not in attendee_ids:
+        return [q_user_id, *attendee_ids]
+    return list(dict.fromkeys(attendee_ids))
+
+
+def build_pax_pool(
+    real_users: list[tuple[str, str]], n_synthetic: int
+) -> list[tuple[str, str]]:
+    pool = list(real_users)
+    for i in range(1, n_synthetic + 1):
+        pool.append((f"{SEED_SENTINEL} PAX {i:02d}", f"{SYNTHETIC_USER_PREFIX}{i:02d}XXXX"))
+    return pool
+
+
 def build_seed_plan(
     *,
     goal_type: str,
@@ -342,6 +420,7 @@ def build_seed_plan(
     catalog: list[dict] | None = None,
     today: date | None = None,
     filler_q_id: str = FILLER_Q_USER_ID,
+    pool: list[tuple[str, str]] | None = None,
 ) -> SeedPlan:
     """Pure planner: return beatdown/attendance specs for one user goal."""
     today = today or date.today()
@@ -362,6 +441,7 @@ def build_seed_plan(
             today=today,
             filler_q_id=filler_q_id,
             catalog=catalog,
+            pool=pool or [],
         )
     if goal_type == "kotter":
         if kotter_kind not in ("mia", "low-q", "never-q"):
@@ -373,6 +453,7 @@ def build_seed_plan(
             thresholds=thresholds,
             today=today,
             filler_q_id=filler_q_id,
+            pool=pool or [],
         )
     raise ValueError(f"Unknown goal_type={goal_type!r}")
 
@@ -392,7 +473,9 @@ def _plan_achievement(
     today: date,
     filler_q_id: str,
     catalog: list[dict],
+    pool: list[tuple[str, str]],
 ) -> SeedPlan:
+    rng = random.Random(42)
     metric = achievement.get("metric") or "posts"
     activity = achievement.get("activity") or "beatdown"
     period = achievement.get("period") or "year"
@@ -404,41 +487,54 @@ def _plan_achievement(
         co_triggered=co_triggered_achievements(achievement, catalog),
     )
 
+    def _attendees(q_id: str) -> list[str]:
+        base = [target_user_id]
+        if pool:
+            base.extend(_sample_pool_attendees(pool, target_user_id, q_id, rng))
+            return _ensure_q_in_attendees(q_id, base)
+        return base
+
+    def _q_for_posts() -> str:
+        if pool:
+            return _pick_q_from_pool(pool, {target_user_id})
+        return filler_q_id
+
     if metric == "distinct_aos":
-        dates = _dates_in_period(today, period, 1)
-        bd_date = dates[0]
-        for ao_name, ao_id in aos[:threshold]:
+        dates = _dates_in_period(today, period, threshold)
+        for (ao_name, ao_id), bd_date in zip(aos[:threshold], dates):
             plan.beatdowns.append(
                 BeatdownSpec(
                     ao_id=ao_id,
                     ao_name=ao_name,
                     bd_date=bd_date,
                     q_user_id=target_user_id,
-                    attendee_ids=[target_user_id],
+                    attendee_ids=_attendees(target_user_id),
                     backblast=_bb(activity, ao_name, bd_date),
                 )
             )
-        plan.notes.append(f"Q'd at {threshold} distinct AOs in period={period}")
+        plan.notes.append(
+            f"Q'd at {threshold} distinct AOs on distinct dates in period={period}"
+        )
         return plan
 
     dates = _dates_in_period(today, period, threshold)
     ao_name, ao_id = aos[0]
 
     if metric in ("posts", "posts_at_single_ao"):
+        q_id = _q_for_posts()
         for bd_date in dates:
             plan.beatdowns.append(
                 BeatdownSpec(
                     ao_id=ao_id,
                     ao_name=ao_name,
                     bd_date=bd_date,
-                    q_user_id=filler_q_id,
-                    attendee_ids=[target_user_id],
+                    q_user_id=q_id,
+                    attendee_ids=_attendees(q_id),
                     backblast=_bb(activity, ao_name, bd_date),
                 )
             )
-        plan.notes.append(
-            f"{threshold} posts as attendee (filler Q={filler_q_id}) at {ao_name}"
-        )
+        note_q = q_id if pool else f"filler Q={filler_q_id}"
+        plan.notes.append(f"{threshold} posts as attendee (Q={note_q}) at {ao_name}")
         return plan
 
     if metric == "qs":
@@ -449,7 +545,7 @@ def _plan_achievement(
                     ao_name=ao_name,
                     bd_date=bd_date,
                     q_user_id=target_user_id,
-                    attendee_ids=[target_user_id],
+                    attendee_ids=_attendees(target_user_id),
                     backblast=_bb(activity, ao_name, bd_date),
                 )
             )
@@ -467,7 +563,9 @@ def _plan_kotter(
     thresholds: dict,
     today: date,
     filler_q_id: str,
+    pool: list[tuple[str, str]],
 ) -> SeedPlan:
+    rng = random.Random(42)
     no_post = int(thresholds.get("NO_POST_THRESHOLD") or 2)
     reminder = int(thresholds.get("REMINDER_WEEKS") or 2)
     home_ao_capture = int(thresholds.get("HOME_AO_CAPTURE") or 8)
@@ -476,6 +574,18 @@ def _plan_kotter(
 
     ao_name, ao_id = aos[0]
     plan = SeedPlan(goal_label=f"kotter:{kind}")
+
+    def _q_id() -> str:
+        if pool:
+            return _pick_q_from_pool(pool, {target_user_id})
+        return filler_q_id
+
+    def _attendees(q_id: str) -> list[str]:
+        base = [target_user_id]
+        if pool:
+            base.extend(_sample_pool_attendees(pool, target_user_id, q_id, rng))
+            return _ensure_q_in_attendees(q_id, base)
+        return base
 
     def _window(weeks_older: int, weeks_newer: int) -> tuple[date, date]:
         # Match kotter_report: date.between(today - reminder, today - no_post)
@@ -498,13 +608,14 @@ def _plan_kotter(
             )
             lo, hi = _window(reminder, no_post)
         bd_date = _midpoint_date(lo, hi) if hi >= lo else today - timedelta(weeks=no_post)
+        q_id = _q_id()
         plan.beatdowns.append(
             BeatdownSpec(
                 ao_id=ao_id,
                 ao_name=ao_name,
                 bd_date=bd_date,
-                q_user_id=filler_q_id,
-                attendee_ids=[target_user_id],
+                q_user_id=q_id,
+                attendee_ids=_attendees(q_id),
                 backblast=_bb("beatdown", ao_name, bd_date, "mia"),
             )
         )
@@ -538,18 +649,19 @@ def _plan_kotter(
                 ao_name=ao_name,
                 bd_date=q_date,
                 q_user_id=target_user_id,
-                attendee_ids=[target_user_id],
+                attendee_ids=_attendees(target_user_id),
                 backblast=_bb("beatdown", ao_name, q_date, "low-q-as-q"),
             )
         )
         if recent != q_date:
+            q_id = _q_id()
             plan.beatdowns.append(
                 BeatdownSpec(
                     ao_id=ao_id,
                     ao_name=ao_name,
                     bd_date=recent,
-                    q_user_id=filler_q_id,
-                    attendee_ids=[target_user_id],
+                    q_user_id=q_id,
+                    attendee_ids=_attendees(q_id),
                     backblast=_bb("beatdown", ao_name, recent, "low-q-recent-post"),
                 )
             )
@@ -579,13 +691,14 @@ def _plan_kotter(
     for bd_date, tag in ((old_post, "never-q-old"), (recent, "never-q-recent")):
         if any(b.bd_date == bd_date for b in plan.beatdowns):
             continue
+        q_id = _q_id()
         plan.beatdowns.append(
             BeatdownSpec(
                 ao_id=ao_id,
                 ao_name=ao_name,
                 bd_date=bd_date,
-                q_user_id=filler_q_id,
-                attendee_ids=[target_user_id],
+                q_user_id=q_id,
+                attendee_ids=_attendees(q_id),
                 backblast=_bb("beatdown", ao_name, bd_date, tag),
             )
         )
@@ -595,6 +708,195 @@ def _plan_kotter(
     )
     plan.notes.append(f"never-q post window {lo} .. {hi}")
     return plan
+
+
+def build_baseline_plan(
+    *,
+    aos: list[tuple[str, str]],
+    pool: list[tuple[str, str]],
+    days: int = 180,
+    today: date | None = None,
+    rng: random.Random | None = None,
+) -> SeedPlan:
+    """Pure planner: weekly multi-PAX beatdowns per AO."""
+    today = today or date.today()
+    rng = rng or random.Random(42)
+    if not pool:
+        raise ValueError("pool is required for baseline")
+    plan = SeedPlan(
+        goal_label="baseline",
+        expected_outcome=f"~{days}d of weekly multi-PAX beatdowns across {len(aos)} AO(s)",
+    )
+    q_index = 0
+    for ao_name, ao_id in aos:
+        weekday = hash(ao_id) % 5
+        d = today
+        while d.weekday() != weekday:
+            d -= timedelta(days=1)
+        while (today - d).days <= days:
+            q_uid = pool[q_index % len(pool)][1]
+            q_index += 1
+            others = [uid for _, uid in pool if uid != q_uid]
+            n_attendees = rng.randint(3, min(12, len(pool)))
+            n_extra = min(n_attendees - 1, len(others))
+            extras = rng.sample(others, n_extra) if n_extra > 0 else []
+            attendees = _ensure_q_in_attendees(q_uid, [q_uid, *extras])
+
+            activity = "qsource" if rng.random() < 0.10 else "beatdown"
+            extra_bb = ""
+            if "ruck" in ao_name.lower() or rng.random() < 0.05:
+                extra_bb = "ruck"
+
+            coq: str | None = None
+            non_q = [u for u in attendees if u != q_uid]
+            if non_q and rng.random() < 0.30:
+                coq = rng.choice(non_q)
+
+            fng_count = rng.randint(1, 2) if rng.random() < 0.15 else 0
+
+            plan.beatdowns.append(
+                BeatdownSpec(
+                    ao_id=ao_id,
+                    ao_name=ao_name,
+                    bd_date=d,
+                    q_user_id=q_uid,
+                    attendee_ids=attendees,
+                    backblast=_bb(activity, ao_name, d, extra_bb),
+                    coq_user_id=coq,
+                    fng_count=fng_count,
+                )
+            )
+            d -= timedelta(days=7)
+    plan.notes.append(f"{len(plan.beatdowns)} weekly beatdown(s) seeded")
+    return plan
+
+
+def _calendar_index(
+    calendar: list[CalendarEvent],
+) -> dict[tuple[str, date], CalendarEvent]:
+    out: dict[tuple[str, date], CalendarEvent] = {}
+    for ev in calendar:
+        out[(ev.ao_id, ev.bd_date)] = ev
+    return out
+
+
+def _kotter_subtractive_deletes(
+    *,
+    kind: str,
+    target_user_id: str,
+    calendar: list[CalendarEvent],
+    thresholds: dict,
+    today: date,
+) -> list[tuple[str, str, date, str]]:
+    no_post = int(thresholds.get("NO_POST_THRESHOLD") or 2)
+    mia_cutoff = today - timedelta(weeks=no_post)
+    deletes: list[tuple[str, str, date, str]] = []
+    for ev in calendar:
+        if target_user_id not in ev.attendee_ids:
+            continue
+        if kind == "mia" and ev.bd_date > mia_cutoff:
+            deletes.append((target_user_id, ev.ao_id, ev.bd_date, ev.q_user_id))
+        elif kind in ("low-q", "never-q") and ev.q_user_id == target_user_id:
+            deletes.append((target_user_id, ev.ao_id, ev.bd_date, ev.q_user_id))
+    return deletes
+
+
+def plan_realistic_overlay(
+    *,
+    calendar: list[CalendarEvent],
+    goal_type: str,
+    target_user_id: str,
+    aos: list[tuple[str, str]],
+    pool: list[tuple[str, str]],
+    thresholds: dict,
+    achievement: dict | None = None,
+    kotter_kind: str | None = None,
+    catalog: list[dict] | None = None,
+    today: date | None = None,
+    rng: random.Random | None = None,
+) -> OverlayResult:
+    """Plan joins/creates/removes against an existing calendar."""
+    today = today or date.today()
+    ideal = build_seed_plan(
+        goal_type=goal_type,
+        target_user_id=target_user_id,
+        aos=aos,
+        thresholds=thresholds,
+        achievement=achievement,
+        kotter_kind=kotter_kind,
+        catalog=catalog,
+        today=today,
+        pool=pool,
+    )
+    result = OverlayResult(
+        expected_outcome=ideal.expected_outcome,
+        goal_label=ideal.goal_label,
+        co_triggered=ideal.co_triggered,
+        notes=list(ideal.notes),
+    )
+    cal = _calendar_index(calendar)
+
+    if goal_type == "kotter" and kotter_kind:
+        result.attendance_deletes.extend(
+            _kotter_subtractive_deletes(
+                kind=kotter_kind,
+                target_user_id=target_user_id,
+                calendar=calendar,
+                thresholds=thresholds,
+                today=today,
+            )
+        )
+
+    for spec in ideal.beatdowns:
+        existing = cal.get((spec.ao_id, spec.bd_date))
+        if existing:
+            merged = list(
+                dict.fromkeys(existing.attendee_ids + spec.attendee_ids + [target_user_id])
+            )
+            q_id = existing.q_user_id
+            if spec.q_user_id == target_user_id and existing.q_user_id != target_user_id:
+                result.q_reassigns.append(
+                    (spec.ao_id, spec.bd_date, existing.q_user_id, target_user_id)
+                )
+                q_id = target_user_id
+            merged = _ensure_q_in_attendees(q_id, merged)
+            coq = existing.coq_user_id or spec.coq_user_id
+            result.beatdowns_to_upsert.append(
+                BeatdownSpec(
+                    ao_id=spec.ao_id,
+                    ao_name=spec.ao_name or existing.ao_name,
+                    bd_date=spec.bd_date,
+                    q_user_id=q_id,
+                    attendee_ids=merged,
+                    backblast=spec.backblast,
+                    coq_user_id=coq,
+                    fng_count=spec.fng_count,
+                )
+            )
+            result.notes.append(
+                f"Joined {target_user_id} onto existing {spec.ao_id} {spec.bd_date}"
+            )
+        else:
+            attendees = _ensure_q_in_attendees(spec.q_user_id, spec.attendee_ids)
+            result.beatdowns_to_upsert.append(
+                BeatdownSpec(
+                    ao_id=spec.ao_id,
+                    ao_name=spec.ao_name,
+                    bd_date=spec.bd_date,
+                    q_user_id=spec.q_user_id,
+                    attendee_ids=attendees,
+                    backblast=spec.backblast,
+                    coq_user_id=spec.coq_user_id,
+                    fng_count=spec.fng_count,
+                )
+            )
+    return result
+
+
+def pick_new_q(attendee_ids: list[str], old_q: str, removed_user: str) -> str | None:
+    """Pure helper: next Q when ``removed_user`` leaves a beatdown."""
+    remaining = [u for u in attendee_ids if u != removed_user]
+    return remaining[0] if remaining else None
 
 
 # ---------------------------------------------------------------------------
@@ -868,8 +1170,15 @@ def load_achievement_catalog(cur, schema: str) -> list[dict]:
     return list(cur.fetchall() or [])
 
 
-def upsert_user(cur, schema: str, user_id: str, name: str) -> None:
-    email = f"{user_id.lower()}@seed.example"
+def upsert_user(
+    cur, schema: str, user_id: str, name: str, *, synthetic: bool = False
+) -> None:
+    if synthetic:
+        email = f"{user_id.lower()}@seed.example"
+        json_val = SEED_JSON
+    else:
+        email = f"{user_id.lower()}@seed.example"
+        json_val = "{}"
     cur.execute(
         f"""
         INSERT INTO `{schema}`.`users`
@@ -878,8 +1187,13 @@ def upsert_user(cur, schema: str, user_id: str, name: str) -> None:
         ON DUPLICATE KEY UPDATE
           user_name=VALUES(user_name),
           real_name=VALUES(real_name),
-          email=VALUES(email),
-          app=0
+          app=0,
+          email=IF(
+            email IS NULL OR email='' OR LOWER(email) IN ('none', 'null'),
+            VALUES(email),
+            email
+          ),
+          json=IF(%s, VALUES(json), json)
         """,
         (
             user_id,
@@ -888,7 +1202,8 @@ def upsert_user(cur, schema: str, user_id: str, name: str) -> None:
             "",
             email,
             (date.today() - timedelta(days=365)).isoformat(),
-            "{}",
+            json_val,
+            1 if synthetic else 0,
         ),
     )
 
@@ -904,51 +1219,379 @@ def upsert_ao(cur, schema: str, ao_name: str, channel_id: str) -> None:
     )
 
 
-def clear_seed_for_user(cur, schema: str, user_id: str) -> dict[str, int]:
-    """Delete only [SEED]-tagged rows for this user (+ their awards)."""
+def load_calendar(cur, schema: str) -> list[CalendarEvent]:
+    cur.execute(
+        f"""
+        SELECT b.ao_id, COALESCE(ao.ao, b.ao_id) AS ao_name, b.bd_date, b.q_user_id,
+               b.coq_user_id, b.pax_count, b.backblast, b.json AS bd_json,
+               a.user_id
+        FROM `{schema}`.`beatdowns` b
+        LEFT JOIN `{schema}`.`aos` ao ON ao.channel_id = b.ao_id
+        LEFT JOIN `{schema}`.`bd_attendance` a
+          ON a.ao_id = b.ao_id AND a.date = b.bd_date AND a.q_user_id = b.q_user_id
+        ORDER BY b.bd_date DESC, b.ao_id
+        """
+    )
+    rows = cur.fetchall() or []
+    grouped: dict[tuple[str, date, str], CalendarEvent] = {}
+    for r in rows:
+        bd_date = r["bd_date"]
+        if isinstance(bd_date, str):
+            bd_date = date.fromisoformat(bd_date[:10])
+        key = (r["ao_id"], bd_date, r["q_user_id"])
+        is_seed = (
+            SEED_SENTINEL in str(r.get("backblast") or "")
+            or '"seed"' in str(r.get("bd_json") or "")
+        )
+        if key not in grouped:
+            grouped[key] = CalendarEvent(
+                ao_id=r["ao_id"],
+                ao_name=str(r.get("ao_name") or r["ao_id"]),
+                bd_date=bd_date,
+                q_user_id=r["q_user_id"],
+                coq_user_id=r.get("coq_user_id"),
+                attendee_ids=[],
+                pax_count=int(r.get("pax_count") or 0),
+                is_seed=is_seed,
+            )
+        uid = r.get("user_id")
+        if uid and uid not in grouped[key].attendee_ids:
+            grouped[key].attendee_ids.append(str(uid))
+    # Collapse to one event per (ao_id, date) — prefer seed row for overlays
+    by_day: dict[tuple[str, date], CalendarEvent] = {}
+    for ev in grouped.values():
+        k = (ev.ao_id, ev.bd_date)
+        prev = by_day.get(k)
+        if prev is None or (ev.is_seed and not prev.is_seed):
+            by_day[k] = ev
+    return list(by_day.values())
+
+
+def _is_seed_beatdown_clause(alias: str = "b") -> str:
+    return (
+        f"({alias}.backblast LIKE %s OR JSON_EXTRACT({alias}.json, '$.seed') = true "
+        f"OR {alias}.json LIKE %s)"
+    )
+
+
+def clear_all_seed(cur, schema: str) -> dict[str, int]:
+    """Remove all seed-tagged beatdowns, attendance, and synthetic awards."""
     counts: dict[str, int] = {}
-    # Attendance on seed beatdowns
+    seed_like = f"%{SEED_SENTINEL}%"
+    seed_json_like = '%"seed": true%'
+
     cur.execute(
         f"""
         DELETE a FROM `{schema}`.`bd_attendance` a
         JOIN `{schema}`.`beatdowns` b
-          ON a.ao_id = b.ao_id AND a.date = b.bd_date
-        WHERE a.user_id = %s AND b.backblast LIKE %s
+          ON a.ao_id = b.ao_id AND a.date = b.bd_date AND a.q_user_id = b.q_user_id
+        WHERE {_is_seed_beatdown_clause("b")}
+           OR a.json LIKE %s
+           OR a.user_id LIKE %s
         """,
-        (user_id, f"%{SEED_SENTINEL}%"),
+        (seed_like, seed_json_like, seed_json_like, f"{SYNTHETIC_USER_PREFIX}%"),
     )
     counts["bd_attendance"] = cur.rowcount
 
-    # Seed beatdowns this user Q'd
     cur.execute(
         f"""
         DELETE FROM `{schema}`.`beatdowns`
-        WHERE q_user_id = %s AND backblast LIKE %s
+        WHERE backblast LIKE %s
+           OR JSON_EXTRACT(json, '$.seed') = true
+           OR json LIKE %s
         """,
-        (user_id, f"%{SEED_SENTINEL}%"),
+        (seed_like, seed_json_like),
     )
-    counts["beatdowns_as_q"] = cur.rowcount
+    counts["beatdowns"] = cur.rowcount
 
-    # Orphan seed beatdowns (filler Q) with no remaining attendance
     cur.execute(
         f"""
-        DELETE b FROM `{schema}`.`beatdowns` b
-        WHERE b.backblast LIKE %s
-          AND b.q_user_id = %s
-          AND NOT EXISTS (
-            SELECT 1 FROM `{schema}`.`bd_attendance` a
-            WHERE a.ao_id = b.ao_id AND a.date = b.bd_date
+        DELETE FROM `{schema}`.`achievements_awarded`
+        WHERE pax_id LIKE %s
+        """,
+        (f"{SYNTHETIC_USER_PREFIX}%",),
+    )
+    counts["achievements_awarded"] = cur.rowcount
+
+    cur.execute(
+        f"""
+        DELETE FROM `{schema}`.`users`
+        WHERE user_id LIKE %s OR user_id = %s
+        """,
+        (f"{SYNTHETIC_USER_PREFIX}%", FILLER_Q_USER_ID),
+    )
+    counts["users"] = cur.rowcount
+    return counts
+
+
+def clear_seed_for_user(cur, schema: str, user_id: str) -> dict[str, int]:
+    """Safely remove seed rows for one user (reassign Q on shared beatdowns)."""
+    counts: dict[str, int] = {}
+    seed_like = f"%{SEED_SENTINEL}%"
+    seed_json_like = '%"seed": true%'
+
+    cur.execute(
+        f"""
+        SELECT b.ao_id, b.bd_date, b.q_user_id, b.pax_count
+        FROM `{schema}`.`beatdowns` b
+        WHERE {_is_seed_beatdown_clause("b")}
+          AND (
+            b.q_user_id = %s
+            OR EXISTS (
+              SELECT 1 FROM `{schema}`.`bd_attendance` a
+              WHERE a.ao_id = b.ao_id AND a.date = b.bd_date
+                AND a.q_user_id = b.q_user_id AND a.user_id = %s
+            )
           )
         """,
-        (f"%{SEED_SENTINEL}%", FILLER_Q_USER_ID),
+        (seed_like, seed_json_like, user_id, user_id),
     )
-    counts["orphan_filler_beatdowns"] = cur.rowcount
+    beatdowns = cur.fetchall() or []
+
+    cur.execute(
+        f"""
+        DELETE FROM `{schema}`.`bd_attendance`
+        WHERE user_id = %s
+          AND (
+            json LIKE %s
+            OR EXISTS (
+              SELECT 1 FROM `{schema}`.`beatdowns` b
+              WHERE b.ao_id = `{schema}`.`bd_attendance`.ao_id
+                AND b.bd_date = `{schema}`.`bd_attendance`.date
+                AND b.q_user_id = `{schema}`.`bd_attendance`.q_user_id
+                AND (b.backblast LIKE %s OR JSON_EXTRACT(b.json, '$.seed') = true
+                     OR b.json LIKE %s)
+            )
+          )
+        """,
+        (user_id, seed_json_like, seed_like, seed_json_like),
+    )
+    counts["bd_attendance"] = cur.rowcount
+
+    for row in beatdowns:
+        ao_id = row["ao_id"]
+        bd_date = row["bd_date"]
+        old_q = row["q_user_id"]
+        if isinstance(bd_date, str):
+            bd_date = date.fromisoformat(bd_date[:10])
+
+        cur.execute(
+            f"""
+            SELECT user_id FROM `{schema}`.`bd_attendance`
+            WHERE ao_id = %s AND date = %s AND q_user_id = %s
+            """,
+            (ao_id, bd_date.isoformat(), old_q),
+        )
+        attendees = [r["user_id"] for r in (cur.fetchall() or [])]
+
+        if old_q == user_id:
+            new_q = pick_new_q(attendees, old_q, user_id)
+            if new_q:
+                cur.execute(
+                    f"""
+                    UPDATE `{schema}`.`beatdowns`
+                    SET q_user_id = %s
+                    WHERE ao_id = %s AND bd_date = %s AND q_user_id = %s
+                    """,
+                    (new_q, ao_id, bd_date.isoformat(), old_q),
+                )
+                cur.execute(
+                    f"""
+                    UPDATE `{schema}`.`bd_attendance`
+                    SET q_user_id = %s
+                    WHERE ao_id = %s AND date = %s AND q_user_id = %s
+                    """,
+                    (new_q, ao_id, bd_date.isoformat(), old_q),
+                )
+                counts["q_reassigns"] = counts.get("q_reassigns", 0) + 1
+            else:
+                cur.execute(
+                    f"""
+                    DELETE FROM `{schema}`.`beatdowns`
+                    WHERE ao_id = %s AND bd_date = %s AND q_user_id = %s
+                    """,
+                    (ao_id, bd_date.isoformat(), old_q),
+                )
+                counts["beatdowns_deleted"] = counts.get("beatdowns_deleted", 0) + 1
+                continue
+
+        cur.execute(
+            f"""
+            SELECT COUNT(*) AS c FROM `{schema}`.`bd_attendance`
+            WHERE ao_id = %s AND date = %s AND q_user_id = %s
+            """,
+            (ao_id, bd_date.isoformat(), old_q),
+        )
+        pax_count = int(cur.fetchone()["c"])
+        if pax_count == 0:
+            cur.execute(
+                f"""
+                DELETE FROM `{schema}`.`beatdowns`
+                WHERE ao_id = %s AND bd_date = %s AND q_user_id = %s
+                """,
+                (ao_id, bd_date.isoformat(), old_q),
+            )
+            counts["beatdowns_deleted"] = counts.get("beatdowns_deleted", 0) + 1
+        else:
+            cur.execute(
+                f"""
+                UPDATE `{schema}`.`beatdowns`
+                SET pax_count = %s
+                WHERE ao_id = %s AND bd_date = %s AND q_user_id = %s
+                """,
+                (pax_count, ao_id, bd_date.isoformat(), old_q),
+            )
 
     cur.execute(
         f"DELETE FROM `{schema}`.`achievements_awarded` WHERE pax_id = %s",
         (user_id,),
     )
     counts["achievements_awarded"] = cur.rowcount
+    return counts
+
+
+def write_beatdowns(
+    cur,
+    schema: str,
+    beatdowns: list[BeatdownSpec],
+    *,
+    user_names: dict[str, str] | None = None,
+) -> dict[str, int]:
+    """Insert/update seed-tagged beatdowns and attendance."""
+    user_names = user_names or {}
+    beatdowns_n = 0
+    attendance_n = 0
+    base_ts = int(datetime.now().timestamp() * 1000)
+    seen_users: set[str] = set()
+
+    for i, spec in enumerate(beatdowns):
+        attendees = _ensure_q_in_attendees(spec.q_user_id, spec.attendee_ids)
+        ts = str(base_ts + i)
+        for uid in {spec.q_user_id, *attendees}:
+            if uid in seen_users:
+                continue
+            seen_users.add(uid)
+            synthetic = uid.startswith(SYNTHETIC_USER_PREFIX) or uid == FILLER_Q_USER_ID
+            upsert_user(
+                cur,
+                schema,
+                uid,
+                user_names.get(uid, uid),
+                synthetic=synthetic,
+            )
+
+        cur.execute(
+            f"""
+            INSERT INTO `{schema}`.`beatdowns`
+            (timestamp, ts_edited, ao_id, bd_date, q_user_id, coq_user_id,
+             pax_count, backblast, fngs, fng_count, json)
+            VALUES (%s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+              json=VALUES(json),
+              pax_count=VALUES(pax_count),
+              backblast=VALUES(backblast),
+              q_user_id=VALUES(q_user_id),
+              coq_user_id=VALUES(coq_user_id),
+              fng_count=VALUES(fng_count)
+            """,
+            (
+                ts,
+                spec.ao_id,
+                spec.bd_date.isoformat(),
+                spec.q_user_id,
+                spec.coq_user_id,
+                len(attendees),
+                spec.backblast,
+                "",
+                spec.fng_count,
+                SEED_JSON,
+            ),
+        )
+        beatdowns_n += 1
+        for uid in attendees:
+            cur.execute(
+                f"""
+                INSERT INTO `{schema}`.`bd_attendance`
+                (timestamp, ts_edited, user_id, ao_id, date, q_user_id, json)
+                VALUES (%s, NULL, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                  timestamp=VALUES(timestamp),
+                  q_user_id=VALUES(q_user_id),
+                  json=VALUES(json)
+                """,
+                (
+                    ts,
+                    uid,
+                    spec.ao_id,
+                    spec.bd_date.isoformat(),
+                    spec.q_user_id,
+                    SEED_JSON,
+                ),
+            )
+            attendance_n += 1
+    return {"beatdowns": beatdowns_n, "bd_attendance": attendance_n}
+
+
+def apply_overlay_writes(cur, schema: str, overlay: OverlayResult) -> dict[str, int]:
+    counts: dict[str, int] = {"beatdowns": 0, "bd_attendance": 0, "deletes": 0, "reassigns": 0}
+
+    for ao_id, bd_date, old_q, new_q in overlay.q_reassigns:
+        d = bd_date.isoformat() if isinstance(bd_date, date) else bd_date
+        cur.execute(
+            f"""
+            UPDATE `{schema}`.`beatdowns`
+            SET q_user_id = %s WHERE ao_id = %s AND bd_date = %s AND q_user_id = %s
+            """,
+            (new_q, ao_id, d, old_q),
+        )
+        cur.execute(
+            f"""
+            UPDATE `{schema}`.`bd_attendance`
+            SET q_user_id = %s WHERE ao_id = %s AND date = %s AND q_user_id = %s
+            """,
+            (new_q, ao_id, d, old_q),
+        )
+        counts["reassigns"] += 1
+
+    for user_id, ao_id, bd_date, q_user_id in overlay.attendance_deletes:
+        d = bd_date.isoformat() if isinstance(bd_date, date) else bd_date
+        cur.execute(
+            f"""
+            DELETE FROM `{schema}`.`bd_attendance`
+            WHERE user_id = %s AND ao_id = %s AND date = %s AND q_user_id = %s
+            """,
+            (user_id, ao_id, d, q_user_id),
+        )
+        counts["deletes"] += cur.rowcount
+        cur.execute(
+            f"""
+            SELECT COUNT(*) AS c FROM `{schema}`.`bd_attendance`
+            WHERE ao_id = %s AND date = %s AND q_user_id = %s
+            """,
+            (ao_id, d, q_user_id),
+        )
+        pax_count = int(cur.fetchone()["c"])
+        if pax_count == 0:
+            cur.execute(
+                f"""
+                DELETE FROM `{schema}`.`beatdowns`
+                WHERE ao_id = %s AND bd_date = %s AND q_user_id = %s
+                """,
+                (ao_id, d, q_user_id),
+            )
+        else:
+            cur.execute(
+                f"""
+                UPDATE `{schema}`.`beatdowns`
+                SET pax_count = %s
+                WHERE ao_id = %s AND bd_date = %s AND q_user_id = %s
+                """,
+                (pax_count, ao_id, d, q_user_id),
+            )
+
+    inserted = write_beatdowns(cur, schema, overlay.beatdowns_to_upsert)
+    counts["beatdowns"] += inserted["beatdowns"]
+    counts["bd_attendance"] += inserted["bd_attendance"]
     return counts
 
 
@@ -960,59 +1603,18 @@ def write_seed_plan(
     target_user_id: str,
     target_name: str,
     aos: list[tuple[str, str]],
+    pool: list[tuple[str, str]] | None = None,
 ) -> dict[str, int]:
-    upsert_user(cur, schema, target_user_id, target_name)
-    upsert_user(cur, schema, FILLER_Q_USER_ID, FILLER_Q_NAME)
+    upsert_user(cur, schema, target_user_id, target_name, synthetic=False)
+    if pool is None:
+        upsert_user(cur, schema, FILLER_Q_USER_ID, FILLER_Q_NAME, synthetic=True)
     for ao_name, ao_id in aos:
         upsert_ao(cur, schema, ao_name, ao_id)
 
-    beatdowns_n = 0
-    attendance_n = 0
-    # Unique timestamps: base + index
-    base_ts = int(datetime.now().timestamp() * 1000)
-    for i, spec in enumerate(plan.beatdowns):
-        ts = str(base_ts + i)
-        cur.execute(
-            f"""
-            INSERT INTO `{schema}`.`beatdowns`
-            (timestamp, ts_edited, ao_id, bd_date, q_user_id, coq_user_id,
-             pax_count, backblast, fngs, fng_count)
-            VALUES (%s, NULL, %s, %s, %s, NULL, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-              pax_count=VALUES(pax_count),
-              backblast=VALUES(backblast),
-              q_user_id=VALUES(q_user_id)
-            """,
-            (
-                ts,
-                spec.ao_id,
-                spec.bd_date.isoformat(),
-                spec.q_user_id,
-                len(spec.attendee_ids),
-                spec.backblast,
-                "",
-                0,
-            ),
-        )
-        beatdowns_n += 1
-        for uid in spec.attendee_ids:
-            cur.execute(
-                f"""
-                INSERT INTO `{schema}`.`bd_attendance`
-                (timestamp, ts_edited, user_id, ao_id, date, q_user_id)
-                VALUES (%s, NULL, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE timestamp=VALUES(timestamp), q_user_id=VALUES(q_user_id)
-                """,
-                (
-                    ts,
-                    uid,
-                    spec.ao_id,
-                    spec.bd_date.isoformat(),
-                    spec.q_user_id,
-                ),
-            )
-            attendance_n += 1
-    return {"beatdowns": beatdowns_n, "bd_attendance": attendance_n}
+    names = {target_user_id: target_name, FILLER_Q_USER_ID: FILLER_Q_NAME}
+    if pool:
+        names.update({uid: name for name, uid in pool})
+    return write_beatdowns(cur, schema, plan.beatdowns, user_names=names)
 
 
 # ---------------------------------------------------------------------------
@@ -1249,8 +1851,132 @@ def print_receipt(receipts: list[dict]) -> None:
             print(f"  note: {n}")
         if r.get("error"):
             print(f"  ERROR: {r['error']}")
-    print("\nTo trigger: Schedule → select item → Run Now, or wait for the daily tick.")
+    print("\nTo trigger awards/Kotter: Schedule → select item → Run Now, or wait for the daily tick.")
+    print("Re-run achievements after clear_all_seed if real-user awards were wiped.")
     print("=" * 60)
+
+
+def count_region_rows(cur, schema: str) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for table, sql in (
+        ("users", f"SELECT COUNT(*) AS c FROM `{schema}`.`users`"),
+        ("beatdowns", f"SELECT COUNT(*) AS c FROM `{schema}`.`beatdowns`"),
+        ("bd_attendance", f"SELECT COUNT(*) AS c FROM `{schema}`.`bd_attendance`"),
+        (
+            "seed_beatdowns",
+            f"""
+            SELECT COUNT(*) AS c FROM `{schema}`.`beatdowns`
+            WHERE backblast LIKE %s OR json LIKE %s
+            """,
+        ),
+    ):
+        if table == "seed_beatdowns":
+            cur.execute(sql, (f"%{SEED_SENTINEL}%", '%"seed": true%'))
+        else:
+            cur.execute(sql)
+        out[table] = int(cur.fetchone()["c"])
+    return out
+
+
+def verify_region(
+    conn,
+    schema: str,
+    registry_schema: str,
+    region: dict,
+) -> list[dict]:
+    """Run custom-report SQL + destination checks; print summary table."""
+    from paxminer_db import read_sql_df
+    from schedule_reports import _SOURCE_SQL
+    from schedule_runner import resolve_destinations
+    from scheduling import resolve_time_window
+
+    rows: list[dict] = []
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT s.id, s.destination_type, s.enabled, d.code, d.name,
+                   d.report_type, d.source, d.time_window_type, d.window_days,
+                   d.window_start, d.window_end, d.metric, d.group_by, d.top_n
+            FROM `{registry_schema}`.`region_schedules` s
+            JOIN `{registry_schema}`.`region_report_definitions` d
+              ON d.id = s.report_definition_id
+            WHERE s.schema_name = %s
+            ORDER BY d.code
+            """,
+            (schema,),
+        )
+        schedules = cur.fetchall() or []
+
+    tz = region.get("timezone") or "America/Chicago"
+    for sched in schedules:
+        entry: dict[str, Any] = {
+            "code": sched.get("code"),
+            "report_type": sched.get("report_type"),
+            "enabled": bool(sched.get("enabled")),
+            "dest_type": sched.get("destination_type"),
+        }
+        try:
+            dests = resolve_destinations(conn, sched)
+            entry["destinations"] = len(dests)
+        except Exception as exc:
+            entry["destinations"] = f"err: {exc}"
+
+        if sched.get("report_type") == "custom_report":
+            source = (sched.get("source") or "bd_attendance").strip()
+            sql = _SOURCE_SQL.get(source)
+            if sql:
+                try:
+                    start, end = resolve_time_window(sched, timezone_name=tz)
+                    df = read_sql_df(
+                        conn, sql, params=(start.isoformat(), end.isoformat())
+                    )
+                    entry["rows"] = len(df)
+                except Exception as exc:
+                    entry["rows"] = f"err: {exc}"
+        rows.append(entry)
+
+    print("\n" + "=" * 60)
+    print("verify_region (read-only)")
+    print("=" * 60)
+    hdr = f"{'code':<22} {'type':<16} {'en':<4} {'dest':<8} {'dest_type':<18} extra"
+    print(hdr)
+    print("-" * len(hdr))
+    for r in rows:
+        extra = ""
+        if "rows" in r:
+            extra = f"rows={r['rows']}"
+        print(
+            f"{str(r.get('code','')):<22} "
+            f"{str(r.get('report_type','')):<16} "
+            f"{str(int(bool(r.get('enabled')))):<4} "
+            f"{str(r.get('destinations','')):<8} "
+            f"{str(r.get('dest_type','')):<18} "
+            f"{extra}"
+        )
+    print("=" * 60)
+    return rows
+
+
+def _confirm_yes(yes_flag: bool, prompt: str = "Proceed? [y/N]: ") -> bool:
+    if yes_flag:
+        return True
+    ans = _prompt(prompt).lower()
+    return ans in ("y", "yes")
+
+
+def write_baseline(
+    cur,
+    schema: str,
+    plan: SeedPlan,
+    pool: list[tuple[str, str]],
+    aos: list[tuple[str, str]],
+) -> dict[str, int]:
+    for name, uid in pool:
+        upsert_user(cur, schema, uid, name, synthetic=uid.startswith(SYNTHETIC_USER_PREFIX))
+    for ao_name, ao_id in aos:
+        upsert_ao(cur, schema, ao_name, ao_id)
+    names = {uid: name for name, uid in pool}
+    return write_beatdowns(cur, schema, plan.beatdowns, user_names=names)
 
 
 # ---------------------------------------------------------------------------
@@ -1272,9 +1998,46 @@ def main(argv: list[str] | None = None) -> int:
         help="Do not auto-load .env.deploy.test (env already set)",
     )
     parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Walk each user and assign Kotter/achievement overlays",
+    )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=180,
+        help="Days of baseline history (default: 180)",
+    )
+    parser.add_argument(
+        "--synthetic-pax",
+        type=int,
+        default=12,
+        help="Synthetic PAX in the pool (default: 12)",
+    )
+    parser.add_argument(
+        "--kotter",
+        default="",
+        help="Comma-separated Kotter kinds for first N real users: mia,lowq,noq",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Plan only; do not write to the database",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip confirmation prompt",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Run verify_region after seeding (or with --verify-only)",
+    )
+    parser.add_argument(
+        "--verify-only",
+        action="store_true",
+        help="Only run verify_region; no seed writes",
     )
     args = parser.parse_args(argv)
 
@@ -1282,40 +2045,41 @@ def main(argv: list[str] | None = None) -> int:
     regional_schema, registry_schema = resolve_schemas(args.schema)
     assert_test_only(regional_schema, registry_schema)
 
-    token = (os.environ.get("PM_SLACK_TOKEN") or "").strip()
-    if not token:
-        raise SystemExit("PM_SLACK_TOKEN is required in .env.deploy.test")
-    expected_team = (os.environ.get("F3_REGION_SLACK_TEAM_ID") or "").strip()
-
-    from slack_util import slack_client
-
-    client = slack_client(token)
-    assert_slack_team(client, expected_team)
-
-    print("Fetching workspace users and channels…")
-    users = fetch_workspace_users(client)
-    channels = fetch_workspace_channels(client)
-    if not users:
-        raise SystemExit("No human users returned from users_list")
-    if not channels:
-        raise SystemExit("No channels returned from conversations_list")
-    print(f"  users: {len(users)}  channels: {len(channels)}")
-
     conn = connect(regional_schema)
     try:
-        # Reconnect-style: also need registry on same host — use database switch.
+        region = load_region_row(conn, registry_schema, regional_schema)
+        if args.verify_only:
+            verify_region(conn, regional_schema, registry_schema, region)
+            return 0
+
+        token = (os.environ.get("PM_SLACK_TOKEN") or "").strip()
+        if not token:
+            raise SystemExit("PM_SLACK_TOKEN is required in .env.deploy.test")
+        expected_team = (os.environ.get("F3_REGION_SLACK_TEAM_ID") or "").strip()
+
+        from slack_util import slack_client
+
+        client = slack_client(token)
+        assert_slack_team(client, expected_team)
+
+        print("Fetching workspace users and channels…")
+        users = fetch_workspace_users(client)
+        channels = fetch_workspace_channels(client)
+        if not users:
+            raise SystemExit("No human users returned from users_list")
+        if not channels:
+            raise SystemExit("No channels returned from conversations_list")
+        print(f"  users: {len(users)}  channels: {len(channels)}")
+
         with conn.cursor() as cur:
             ensure_achievement_tables(cur, regional_schema)
             catalog = load_achievement_catalog(cur, regional_schema)
         conn.commit()
 
-        # Load region from registry (same server, different schema)
-        region = load_region_row(conn, registry_schema, regional_schema)
         print_region_context(region, regional_schema, registry_schema)
-        _print_achievement_catalog(catalog)
+        if args.interactive:
+            _print_achievement_catalog(catalog)
 
-        # QSignups owns the curated AO list; PAXMiner's aos table includes every
-        # channel it has seen (paxminer_logs, social, ...) so it is a fallback only.
         qs_schema = resolve_qsignups_schema()
         qs_aos = load_qsignups_aos(conn, qs_schema, expected_team)
         with conn.cursor() as cur:
@@ -1338,98 +2102,205 @@ def main(argv: list[str] | None = None) -> int:
                 len(ao_missing),
                 ", ".join(f"{n} ({c})" for n, c in ao_missing),
             )
-        if ao_source == "slack_channels":
-            LOG.warning(
-                "Falling back to every Slack channel; non-AO channels like "
-                "paxminer_logs will appear in the list."
-            )
 
-        actions = interactive_user_pass(users, aos, catalog, region)
+        pool = build_pax_pool(users, args.synthetic_pax)
         receipts: list[dict] = []
 
         with conn.cursor() as cur:
-            for act in actions:
-                uid = act["user_id"]
-                name = act["name"]
-                if act["action"] == "skip":
-                    receipts.append({"user_id": uid, "name": name, "action": "skip"})
-                    continue
-                if act["action"] == "clear":
-                    if args.dry_run:
+            before = count_region_rows(cur, regional_schema)
+        print(f"\nCounts before: {before}")
+
+        if not _confirm_yes(args.yes, "Write seed data to test region? [y/N]: "):
+            print("Aborted.")
+            return 1
+
+        if args.interactive:
+            actions = interactive_user_pass(users, aos, catalog, region)
+            with conn.cursor() as cur:
+                for act in actions:
+                    uid = act["user_id"]
+                    name = act["name"]
+                    if act["action"] == "skip":
+                        receipts.append({"user_id": uid, "name": name, "action": "skip"})
+                        continue
+                    if act["action"] == "clear":
+                        if args.dry_run:
+                            receipts.append(
+                                {
+                                    "user_id": uid,
+                                    "name": name,
+                                    "action": "clear",
+                                    "notes": ["dry-run: not cleared"],
+                                }
+                            )
+                            continue
+                        cleared = clear_seed_for_user(cur, regional_schema, uid)
                         receipts.append(
                             {
                                 "user_id": uid,
                                 "name": name,
                                 "action": "clear",
-                                "notes": ["dry-run: not cleared"],
+                                "cleared": cleared,
                             }
                         )
                         continue
-                    cleared = clear_seed_for_user(cur, regional_schema, uid)
+
+                    calendar = load_calendar(cur, regional_schema)
+                    try:
+                        overlay = plan_realistic_overlay(
+                            calendar=calendar,
+                            goal_type=act["goal_type"],
+                            target_user_id=uid,
+                            aos=act["aos"],
+                            pool=pool,
+                            thresholds=region,
+                            achievement=act.get("achievement"),
+                            kotter_kind=act.get("kotter_kind"),
+                            catalog=catalog,
+                        )
+                    except Exception as exc:
+                        receipts.append(
+                            {
+                                "user_id": uid,
+                                "name": name,
+                                "action": "seed",
+                                "error": str(exc),
+                            }
+                        )
+                        continue
+
+                    inserted = {"beatdowns": 0, "bd_attendance": 0}
+                    if not args.dry_run:
+                        clear_seed_for_user(cur, regional_schema, uid)
+                        upsert_user(cur, regional_schema, uid, name, synthetic=False)
+                        for ao_name, ao_id in act["aos"]:
+                            upsert_ao(cur, regional_schema, ao_name, ao_id)
+                        inserted = apply_overlay_writes(cur, regional_schema, overlay)
                     receipts.append(
                         {
                             "user_id": uid,
                             "name": name,
-                            "action": "clear",
-                            "cleared": cleared,
+                            "action": "seed" + (" (dry-run)" if args.dry_run else ""),
+                            "goal_label": overlay.goal_label,
+                            "aos": [f"{n}:{c}" for n, c in act["aos"]],
+                            "inserted": inserted,
+                            "expected_outcome": overlay.expected_outcome,
+                            "co_triggered": overlay.co_triggered,
+                            "notes": overlay.notes,
                         }
                     )
-                    continue
+        else:
+            baseline_aos = aos[: min(len(aos), 8)]
+            baseline_plan = build_baseline_plan(
+                aos=baseline_aos, pool=pool, days=args.days
+            )
+            receipts.append(
+                {
+                    "action": "baseline",
+                    "goal_label": baseline_plan.goal_label,
+                    "expected_outcome": baseline_plan.expected_outcome,
+                    "notes": baseline_plan.notes,
+                    "beatdowns_planned": len(baseline_plan.beatdowns),
+                }
+            )
 
-                try:
-                    plan = build_seed_plan(
-                        goal_type=act["goal_type"],
-                        target_user_id=uid,
-                        aos=act["aos"],
-                        thresholds=region,
-                        achievement=act.get("achievement"),
-                        kotter_kind=act.get("kotter_kind"),
-                        catalog=catalog,
-                    )
-                except Exception as exc:
-                    receipts.append(
-                        {
-                            "user_id": uid,
-                            "name": name,
-                            "action": "seed",
-                            "error": str(exc),
-                        }
-                    )
-                    continue
+            kotter_kinds = [
+                k.strip().lower().replace("lowq", "low-q").replace("noq", "never-q")
+                for k in args.kotter.split(",")
+                if k.strip()
+            ]
+            kotter_users = users[: len(kotter_kinds)] if kotter_kinds else []
 
-                inserted = {"beatdowns": 0, "bd_attendance": 0}
+            almost_achievement = next(
+                (a for a in catalog if a.get("code") == "el_quatro"),
+                catalog[0] if catalog else None,
+            )
+
+            with conn.cursor() as cur:
                 if not args.dry_run:
-                    # Clear prior seed for this user so re-runs are clean
-                    clear_seed_for_user(cur, regional_schema, uid)
-                    inserted = write_seed_plan(
-                        cur,
-                        regional_schema,
-                        plan,
-                        target_user_id=uid,
-                        target_name=name,
-                        aos=act["aos"],
+                    cleared = clear_all_seed(cur, regional_schema)
+                    receipts.append({"action": "clear_all", "cleared": cleared})
+                    inserted = write_baseline(
+                        cur, regional_schema, baseline_plan, pool, baseline_aos
                     )
+                    receipts.append({"action": "baseline_write", "inserted": inserted})
+
+                    calendar = load_calendar(cur, regional_schema)
+                    for (name, uid), kind in zip(kotter_users, kotter_kinds):
+                        overlay = plan_realistic_overlay(
+                            calendar=calendar,
+                            goal_type="kotter",
+                            target_user_id=uid,
+                            aos=baseline_aos[:1],
+                            pool=pool,
+                            thresholds=region,
+                            kotter_kind=kind,
+                        )
+                        stats = apply_overlay_writes(cur, regional_schema, overlay)
+                        calendar = load_calendar(cur, regional_schema)
+                        receipts.append(
+                            {
+                                "user_id": uid,
+                                "name": name,
+                                "action": f"kotter:{kind}",
+                                "inserted": stats,
+                                "expected_outcome": overlay.expected_outcome,
+                                "notes": overlay.notes,
+                            }
+                        )
+
+                    for name, uid in users[3:6]:
+                        if not almost_achievement:
+                            break
+                        ach = dict(almost_achievement)
+                        threshold = int(ach.get("threshold") or 1)
+                        ach["threshold"] = max(1, threshold - 1)
+                        overlay = plan_realistic_overlay(
+                            calendar=load_calendar(cur, regional_schema),
+                            goal_type="achievement",
+                            target_user_id=uid,
+                            aos=baseline_aos[:1],
+                            pool=pool,
+                            thresholds=region,
+                            achievement=ach,
+                            catalog=catalog,
+                        )
+                        stats = apply_overlay_writes(cur, regional_schema, overlay)
+                        receipts.append(
+                            {
+                                "user_id": uid,
+                                "name": name,
+                                "action": "almost-there",
+                                "goal_label": overlay.goal_label,
+                                "inserted": stats,
+                                "expected_outcome": overlay.expected_outcome,
+                                "notes": overlay.notes,
+                            }
+                        )
+
+            if args.dry_run:
                 receipts.append(
                     {
-                        "user_id": uid,
-                        "name": name,
-                        "action": "seed" + (" (dry-run)" if args.dry_run else ""),
-                        "goal_label": plan.goal_label,
-                        "aos": [f"{n}:{c}" for n, c in act["aos"]],
-                        "inserted": inserted,
-                        "expected_outcome": plan.expected_outcome,
-                        "co_triggered": plan.co_triggered,
-                        "notes": plan.notes,
+                        "action": "dry-run",
+                        "notes": [
+                            f"Would clear seed and write {len(baseline_plan.beatdowns)} baseline beatdowns",
+                            f"Kotter overlays: {len(kotter_users)}",
+                        ],
                     }
                 )
-            if not args.dry_run:
-                conn.commit()
-            else:
-                conn.rollback()
+
+        if not args.dry_run:
+            conn.commit()
+        else:
+            conn.rollback()
+
+        if args.verify:
+            verify_region(conn, regional_schema, registry_schema, region)
+
+        print_receipt(receipts)
     finally:
         conn.close()
 
-    print_receipt(receipts)
     return 0
 
 

@@ -185,6 +185,7 @@ def test_plan_cadre_needs_seven_aos():
     )
     assert len(plan.beatdowns) == 7
     assert len({b.ao_id for b in plan.beatdowns}) == 7
+    assert len({b.bd_date for b in plan.beatdowns}) == 7
     assert all(b.q_user_id == "U1" for b in plan.beatdowns)
 
 
@@ -471,3 +472,108 @@ def test_missing_view_attempt_is_tolerated():
     assert seeder._view_exists(cur, "f3ttown_test", "attendance_view") is False
     assert seeder._try_ddl(cur, "CREATE VIEW v AS SELECT 1", "v") is False
     assert len(cur.ddl_attempts) == 1
+
+
+# ---- pool / baseline / overlay ------------------------------------------------
+
+
+POOL = [(f"P{i}", f"U{i}") for i in range(1, 15)]
+
+
+def test_build_pax_pool_adds_synthetic():
+    real = [("Alice", "UA"), ("Bob", "UB")]
+    pool = seeder.build_pax_pool(real, 3)
+    assert pool[:2] == real
+    assert len(pool) == 5
+    assert pool[2][1].startswith(seeder.SYNTHETIC_USER_PREFIX)
+    assert seeder.SEED_SENTINEL in pool[2][0]
+
+
+def test_build_baseline_plan_multi_attendees_and_q_in_attendees():
+    plan = seeder.build_baseline_plan(
+        aos=AOS[:2],
+        pool=POOL,
+        days=28,
+        today=TODAY,
+    )
+    assert plan.beatdowns
+    for spec in plan.beatdowns:
+        assert spec.q_user_id in spec.attendee_ids
+        assert 3 <= len(spec.attendee_ids) <= 12
+        assert len(spec.attendee_ids) == len(set(spec.attendee_ids))
+
+
+def test_build_seed_plan_with_pool_adds_multi_attendees():
+    plan = seeder.build_seed_plan(
+        goal_type="achievement",
+        achievement=_seed("el_quatro"),
+        target_user_id="U1",
+        aos=AOS[:1],
+        thresholds=THRESHOLDS,
+        today=TODAY,
+        pool=POOL,
+    )
+    assert len(plan.beatdowns) == 25
+    assert all(len(b.attendee_ids) >= 3 for b in plan.beatdowns)
+    assert all(b.q_user_id != seeder.FILLER_Q_USER_ID for b in plan.beatdowns)
+    assert all("U1" in b.attendee_ids for b in plan.beatdowns)
+
+
+def test_plan_realistic_overlay_joins_existing_calendar():
+    ideal = seeder.build_seed_plan(
+        goal_type="achievement",
+        achievement=_seed("6_pack"),
+        target_user_id="U1",
+        aos=AOS[:1],
+        thresholds=THRESHOLDS,
+        today=TODAY,
+        pool=POOL,
+    )
+    match_date = ideal.beatdowns[0].bd_date
+    existing = seeder.CalendarEvent(
+        ao_id="C0001",
+        ao_name="AO1",
+        bd_date=match_date,
+        q_user_id="U2",
+        coq_user_id=None,
+        attendee_ids=["U2", "U3"],
+        pax_count=2,
+        is_seed=True,
+    )
+    overlay = seeder.plan_realistic_overlay(
+        calendar=[existing],
+        goal_type="achievement",
+        achievement=_seed("6_pack"),
+        target_user_id="U1",
+        aos=AOS[:1],
+        pool=POOL,
+        thresholds=THRESHOLDS,
+        today=TODAY,
+    )
+    assert overlay.beatdowns_to_upsert
+    joined = next(
+        b for b in overlay.beatdowns_to_upsert if b.bd_date == match_date
+    )
+    assert "U1" in joined.attendee_ids
+    assert "U2" in joined.attendee_ids
+    assert any("Joined" in n for n in overlay.notes)
+
+
+def test_plan_realistic_overlay_creates_when_no_calendar_match():
+    overlay = seeder.plan_realistic_overlay(
+        calendar=[],
+        goal_type="achievement",
+        achievement=_seed("6_pack"),
+        target_user_id="U1",
+        aos=AOS[:1],
+        pool=POOL,
+        thresholds=THRESHOLDS,
+        today=TODAY,
+    )
+    assert len(overlay.beatdowns_to_upsert) == 6
+    assert not overlay.attendance_deletes
+
+
+def test_pick_new_q_reassigns_after_q_removed():
+    assert seeder.pick_new_q(["U2", "U3"], "U1", "U1") == "U2"
+    assert seeder.pick_new_q([], "U1", "U1") is None
