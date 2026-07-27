@@ -115,7 +115,14 @@ def build_almost_there_message(
     return text, blocks
 
 
-def run_leaderboard_for_region(conn, pm_schema: str, region_row: dict, *, dry_run: bool = False) -> dict:
+def run_leaderboard_for_region(
+    conn,
+    pm_schema: str,
+    region_row: dict,
+    *,
+    dry_run: bool = False,
+    window: tuple[date, date] | None = None,
+) -> dict:
     del pm_schema  # retained for call-site compatibility; attendance is single-region now
     schema = region_row.get("schema_name")
     channel = region_row.get("achievement_channel")
@@ -123,14 +130,22 @@ def run_leaderboard_for_region(conn, pm_schema: str, region_row: dict, *, dry_ru
     if not schema or not channel or not token_enc:
         return {"skipped": "missing schema, channel, or token"}
 
-    year = date.today().year
     with conn.cursor() as cur:
         cur.execute(f"SELECT * FROM `{schema}`.`achievements_list` ORDER BY id")
         rules = cur.fetchall()
-        cur.execute(
-            f"SELECT * FROM `{schema}`.`achievements_awarded` WHERE YEAR(date_awarded)=%s",
-            (year,),
-        )
+        if window is not None:
+            start, end = window
+            cur.execute(
+                f"SELECT * FROM `{schema}`.`achievements_awarded` "
+                f"WHERE date_awarded BETWEEN %s AND %s",
+                (start.isoformat(), end.isoformat()),
+            )
+        else:
+            year = date.today().year
+            cur.execute(
+                f"SELECT * FROM `{schema}`.`achievements_awarded` WHERE YEAR(date_awarded)=%s",
+                (year,),
+            )
         awarded_rows = cur.fetchall()
         cur.execute(f"SELECT user_id, user_name FROM `{schema}`.`users`")
         users = pd.DataFrame(cur.fetchall())
@@ -144,15 +159,20 @@ def run_leaderboard_for_region(conn, pm_schema: str, region_row: dict, *, dry_ru
     text, blocks = build_leaderboard_message(awarded, users)
     almost_text, almost_blocks = build_almost_there_message(nation, rules, awarded, schema, users)
 
+    result: dict = {}
+    if window is not None:
+        result["window_start"] = window[0].isoformat()
+        result["window_end"] = window[1].isoformat()
+
     if dry_run:
-        return {"chars": len(text) + len(almost_text), "dry_run": True}
+        return {**result, "chars": len(text) + len(almost_text), "dry_run": True}
 
     token = decrypt_field(token_enc)
     client = slack_client(token)
     all_blocks = list(blocks) + list(almost_blocks)
     for chunk in chunk_messages(all_blocks):
         post_message(client, channel, fallback_text(chunk), blocks=chunk)
-    return {"posted": True}
+    return {**result, "posted": True}
 
 
 def run_leaderboard(conn, pm_schema: str, *, dry_run: bool = False) -> list[dict]:

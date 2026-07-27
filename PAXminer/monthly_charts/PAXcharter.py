@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import datetime
 import logging
-import os
 import sys
+from datetime import date
 from pathlib import Path
 
 import matplotlib
@@ -26,11 +26,11 @@ _PAX_ROOT = Path(__file__).resolve().parent.parent
 if str(_PAX_ROOT) not in sys.path:
     sys.path.insert(0, str(_PAX_ROOT))
 
-
-def _pax_charter_period():
-    off = int(os.environ.get("CHART_PERIOD_OFFSET_DAYS", "7"))
-    d = datetime.datetime.now() - datetime.timedelta(days=off)
-    return d.strftime("%m"), d.strftime("%b"), d.strftime("%B"), d.strftime("%Y")
+from scheduling import (  # noqa: E402
+    default_chart_window,
+    format_window_label,
+    window_file_tag,
+)
 
 
 def run_pax_charter(
@@ -41,11 +41,14 @@ def run_pax_charter(
     region_method: str = "v2",
     log_to_file: bool = False,
     user_ids: list[str] | None = None,
+    window: tuple[date, date] | None = None,
 ) -> dict:
     """
     Build per-PAX attendance charts and DM via Slack (v2) or legacy channel upload (v1).
 
     When ``user_ids`` is provided, only those users receive charts (schedule destinations).
+    ``window`` is (start_inclusive, end_inclusive); defaults to the legacy
+    CHART_PERIOD_OFFSET_DAYS calendar month.
     """
     plot_base = Path(plot_dir) / schema
     plot_base.mkdir(parents=True, exist_ok=True)
@@ -65,7 +68,9 @@ def run_pax_charter(
     rate_limit_handler = RateLimitErrorRetryHandler(max_retry_count=5)
     slack.retry_handlers.append(rate_limit_handler)
 
-    thismonthname, _, _, yearnum = _pax_charter_period()
+    start, end = window or default_chart_window()
+    label = format_window_label(start, end)
+    tag = window_file_tag(start, end)
 
     column_names = ["user_id", "user_name", "real_name"]
     users_df = pd.DataFrame(columns=column_names)
@@ -136,9 +141,13 @@ def run_pax_charter(
         try:
             attendance_tmp_df = pd.DataFrame([])
             with mydb.cursor() as cursor:
-                sql = "SELECT * FROM attendance_view WHERE PAX = (SELECT user_name FROM users WHERE user_id = %s) AND YEAR(Date) = %s ORDER BY Date"
+                sql = (
+                    "SELECT * FROM attendance_view WHERE PAX = "
+                    "(SELECT user_name FROM users WHERE user_id = %s) "
+                    "AND Date BETWEEN %s AND %s ORDER BY Date"
+                )
                 user_id_tmp = user_id
-                val = (user_id_tmp, yearnum)
+                val = (user_id_tmp, start.isoformat(), end.isoformat())
                 cursor.execute(sql, val)
                 attendance_tmp = cursor.fetchall()
                 attendance_tmp_df = pd.DataFrame(attendance_tmp)
@@ -170,17 +179,17 @@ def run_pax_charter(
                         verticalalignment="top",
                         horizontalalignment="right",
                     )
-                    plt.title("Number of posts by " + pax + " by AO/Month for " + yearnum)
+                    plt.title("Number of posts by " + pax + " by AO/Month for " + label)
                     plt.legend(loc="center left", bbox_to_anchor=(1, 0.5), frameon=False)
                     plt.ioff()
-                    out_jpg = plot_base / f"{user_id_tmp}_{thismonthname}{yearnum}.jpg"
+                    out_jpg = plot_base / f"{user_id_tmp}_{tag}.jpg"
                     plt.savefig(str(out_jpg), bbox_inches="tight")
                     total_graphs += 1
                     message = (
                         "Hey "
                         + pax
-                        + "! Here is your monthly posting summary for "
-                        + yearnum
+                        + "! Here is your posting summary for "
+                        + label
                         + ". \nPush yourself, get those bars higher every month! SYITG!"
                     )
                     file = str(out_jpg)
@@ -239,6 +248,8 @@ def run_pax_charter(
         "failed_users": failed_users,
         "user_count": len(posted_users),
         "channel_count": 0,
+        "window_start": start.isoformat(),
+        "window_end": end.isoformat(),
     }
 
 

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -25,13 +24,13 @@ _PAX_ROOT = Path(__file__).resolve().parent.parent
 if str(_PAX_ROOT) not in sys.path:
     sys.path.insert(0, str(_PAX_ROOT))
 
+from scheduling import (  # noqa: E402
+    default_chart_window,
+    format_window_label,
+    window_file_tag,
+)
+
 _LOG = logging.getLogger(__name__)
-
-
-def _q_charter_period():
-    off = int(os.environ.get("CHART_PERIOD_OFFSET_DAYS", "7"))
-    d = datetime.datetime.now() - datetime.timedelta(days=off)
-    return d.strftime("%m"), d.strftime("%b"), d.strftime("%B"), d.strftime("%Y")
 
 
 def run_q_charter(
@@ -43,6 +42,7 @@ def run_q_charter(
     plot_dir: str | Path = "/tmp/paxminer_plots",
     destinations: list[str] | None = None,
     post_per_ao: bool = True,
+    window: tuple[datetime.date, datetime.date] | None = None,
 ) -> dict:
     """
     Generate per-AO and region-wide Q charts and upload to Slack.
@@ -50,6 +50,8 @@ def run_q_charter(
     ``mydb`` is an open PyMySQL connection to the regional schema.
     When ``post_per_ao`` is False, only the region summary is posted to
     ``destinations`` (or ``firstf``).
+    ``window`` is (start_inclusive, end_inclusive); defaults to the legacy
+    CHART_PERIOD_OFFSET_DAYS calendar month.
     """
     plot_base = Path(plot_dir) / schema
     plot_base.mkdir(parents=True, exist_ok=True)
@@ -58,7 +60,9 @@ def run_q_charter(
     rate_limit_handler = RateLimitErrorRetryHandler(max_retry_count=5)
     slack.retry_handlers.append(rate_limit_handler)
 
-    thismonth, thismonthname, thismonthnamelong, yearnum = _q_charter_period()
+    start, end = window or default_chart_window()
+    label = format_window_label(start, end)
+    tag = window_file_tag(start, end)
     total_ao_graphs = 0
     summary_channels = list(destinations) if destinations else ([firstf] if firstf else [])
     posted_channels: list[dict] = []
@@ -102,13 +106,13 @@ def run_q_charter(
             ((`U2`.`user_id` = `B`.`coq_user_id`)))
         left join `aos` `a` on
             ((`a`.`channel_id` = `B`.`ao_id`)))
-        WHERE `a`.`ao` = %s AND YEAR(`bd_date`) = %s AND MONTH(`bd_date`) = %s and `U1`.`app` != 1
+        WHERE `a`.`ao` = %s AND `bd_date` BETWEEN %s AND %s and `U1`.`app` != 1
         order by
             `B`.`bd_date`,
             `a`.`ao`
         """
 
-            val = (ao, yearnum, thismonth)
+            val = (ao, start.isoformat(), end.isoformat())
             cursor.execute(sql, val)
             bd_tmp = cursor.fetchall()
             bd_tmp_df = pd.DataFrame(bd_tmp)
@@ -132,10 +136,10 @@ def run_q_charter(
                 melted_df.groupby(["Q", "Month"]).size().unstack().sort_values(["Q"], ascending=True).plot(
                     kind="bar"
                 )
-                plt.title("Number of Qs by individual at " + ao + " for " + thismonthnamelong + ", " + yearnum)
+                plt.title("Number of Qs by individual at " + ao + " for " + label)
                 plt.legend("")
                 plt.ioff()
-                out_path = plot_base / f"Q_Counts_{ao}_{thismonthname}{yearnum}.jpg"
+                out_path = plot_base / f"Q_Counts_{ao}_{tag}.jpg"
                 plt.savefig(str(out_path), bbox_inches="tight")
                 try:
                     slack.conversations_join(channel=channel_id)
@@ -184,12 +188,12 @@ def run_q_charter(
             ((`U2`.`user_id` = `B`.`coq_user_id`)))
         left join `aos` `a` on
             ((`a`.`channel_id` = `B`.`ao_id`)))
-        WHERE YEAR(`bd_date`) = %s AND MONTH(`bd_date`) = %s and `U1`.`app` != 1
+        WHERE `bd_date` BETWEEN %s AND %s and `U1`.`app` != 1
         order by
             `B`.`bd_date`,
             `a`.`ao`
         """
-            val = (yearnum, thismonth)
+            val = (start.isoformat(), end.isoformat())
             cursor.execute(sql, val)
             bd_tmp2 = cursor.fetchall()
             bd_tmp_df2 = pd.DataFrame(bd_tmp2)
@@ -209,11 +213,11 @@ def run_q_charter(
                 melted_df = melted_df.rename(columns={"TempQ": "Q"})
                 melted_df.groupby(["Q", "AO"]).size().unstack().plot(kind="bar", stacked=True, figsize=(25, 4))
                 plt.title(
-                    "Number of Qs by individual across all AOs for " + thismonthnamelong + ", " + yearnum
+                    "Number of Qs by individual across all AOs for " + label
                 )
                 plt.legend(loc="center left", bbox_to_anchor=(1, 0.5), frameon=False)
                 plt.ioff()
-                out_path = plot_base / f"Q_Counts_{schema}_{thismonthname}{yearnum}.jpg"
+                out_path = plot_base / f"Q_Counts_{schema}_{tag}.jpg"
                 plt.savefig(str(out_path), bbox_inches="tight")
                 comment = (
                     "Hey "
@@ -251,6 +255,8 @@ def run_q_charter(
         "failed_channels": failed_channels,
         "skipped_no_data": skipped_no_data,
         "channel_count": len(posted_channels),
+        "window_start": start.isoformat(),
+        "window_end": end.isoformat(),
     }
 
 

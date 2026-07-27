@@ -12,7 +12,7 @@ from typing import Any
 
 from common.encryption import decrypt_field
 from paxminer_db import connect_from_env
-from scheduling import is_due_now, region_local_now
+from scheduling import is_due_now, region_local_now, resolve_time_window
 from slack_util import open_dm_channel, post_log, post_message, slack_client, upload_file
 
 LOG = logging.getLogger(__name__)
@@ -502,6 +502,12 @@ def _dispatch_report(
                 "user_count": 0,
             }
 
+        window = None
+        if report_type != "kotter":
+            window = resolve_time_window(
+                definition, timezone_name=region.get("timezone")
+            )
+
         if report_type == "pax_charts":
             from monthly_charts.PAXcharter import run_pax_charter
 
@@ -512,6 +518,7 @@ def _dispatch_report(
                 schema_name,
                 plot_dir=plot_dir,
                 user_ids=user_ids,
+                window=window,
             )
             if isinstance(result, dict):
                 return _apply_delivery_result(result, attempted_users=len(user_ids))
@@ -528,6 +535,7 @@ def _dispatch_report(
                 plot_dir=plot_dir,
                 destinations=channel_ids,
                 post_per_ao=(dest_type == "all_ao_channels"),
+                window=window,
             )
             if isinstance(result, dict):
                 return _apply_delivery_result(result, attempted_channels=len(channel_ids))
@@ -544,6 +552,7 @@ def _dispatch_report(
                 dest,
                 plot_dir=plot_dir,
                 destinations=channel_ids,
+                window=window,
             )
             if isinstance(result, dict):
                 return _apply_delivery_result(result, attempted_channels=len(channel_ids))
@@ -560,6 +569,7 @@ def _dispatch_report(
                 plot_dir=plot_dir,
                 destinations=channel_ids,
                 post_per_ao=(dest_type == "all_ao_channels"),
+                window=window,
             )
             if isinstance(result, dict):
                 return _apply_delivery_result(result, attempted_channels=len(channel_ids))
@@ -570,7 +580,9 @@ def _dispatch_report(
             region = dict(region)
             if channel_ids:
                 region["achievement_channel"] = channel_ids[0]
-            result = run_leaderboard_for_region(registry_conn, pm_schema, region)
+            result = run_leaderboard_for_region(
+                registry_conn, pm_schema, region, window=window
+            )
             client = slack_client(token)
             posted_channels: list[dict] = []
             failed_channels: list[dict] = []

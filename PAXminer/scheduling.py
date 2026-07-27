@@ -258,6 +258,46 @@ def resolve_time_window(
     return first_prev, last_prev
 
 
+def is_calendar_month(start: date, end: date) -> bool:
+    """True when [start, end] is exactly one calendar month."""
+    if start.day != 1 or start.year != end.year or start.month != end.month:
+        return False
+    import calendar
+
+    return end.day == calendar.monthrange(start.year, start.month)[1]
+
+
+def format_window_label(start: date, end: date) -> str:
+    """Human label for chart titles: 'July 2026' or 'Jun 01 - Jul 27, 2026'."""
+    if is_calendar_month(start, end):
+        return start.strftime("%B %Y")
+    if start == end:
+        return start.strftime("%b %d, %Y")
+    if start.year == end.year:
+        return f"{start.strftime('%b %d')} - {end.strftime('%b %d, %Y')}"
+    return f"{start.strftime('%b %d, %Y')} - {end.strftime('%b %d, %Y')}"
+
+
+def window_file_tag(start: date, end: date) -> str:
+    """Short slug for chart filenames."""
+    if is_calendar_month(start, end):
+        return start.strftime("%b%Y")
+    return f"{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}"
+
+
+def default_chart_window() -> tuple[date, date]:
+    """Legacy CHART_PERIOD_OFFSET_DAYS → prior calendar month containing that day."""
+    import os
+
+    off = int(os.environ.get("CHART_PERIOD_OFFSET_DAYS", "7"))
+    d = (datetime.now() - timedelta(days=off)).date()
+    first = date(d.year, d.month, 1)
+    import calendar
+
+    last = date(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
+    return first, last
+
+
 def destination_valid_for_report(report_type: str, destination_type: str) -> bool:
     allowed = VALID_DESTINATIONS.get(report_type, DESTINATION_TYPES)
     return destination_type in allowed
