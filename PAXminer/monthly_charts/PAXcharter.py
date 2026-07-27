@@ -77,10 +77,13 @@ def run_pax_charter(
         next_cursor = response_metadata.get("next_cursor")
         users = users_response.data["members"]
         users_df_tmp = pd.json_normalize(users)
-        users_df_tmp = users_df_tmp[["id", "profile.display_name", "profile.real_name"]]
+        users_df_tmp = users_df_tmp.reindex(
+            columns=["id", "profile.display_name", "profile.real_name"]
+        )
         users_df_tmp = users_df_tmp.rename(
             columns={"id": "user_id", "profile.display_name": "user_name", "profile.real_name": "real_name"}
         )
+        users_df_tmp = users_df_tmp.fillna({"user_name": "", "real_name": ""})
         users_df = pd.concat([users_df, users_df_tmp], ignore_index=True)
         if next_cursor:
             data = next_cursor

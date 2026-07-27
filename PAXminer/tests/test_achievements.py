@@ -62,7 +62,7 @@ def test_load_nation_attendance_coerces_bad_dates():
             "backblast": ["bb", "bb"],
         }
     )
-    with patch("achievements.attendance.pd.read_sql", return_value=frame):
+    with patch("paxminer_db.read_sql_df", return_value=frame):
         out = load_nation_attendance(MagicMock(), ["f3ttown"])
     assert len(out) == 1
     assert str(out.iloc[0]["date"].date()) == "2026-07-01"
@@ -106,7 +106,7 @@ def test_kotter_nation_coerces_bad_dates():
         return out
 
     with (
-        patch.object(kotter_mod.pd, "read_sql", return_value=bad_frame),
+        patch("paxminer_db.read_sql_df", return_value=bad_frame),
         patch.object(kotter_mod, "attach_home_regions", side_effect=_attach),
         patch.object(kotter_mod, "build_kotter_message", return_value=("ok", [])),
     ):
@@ -774,7 +774,7 @@ def test_kotter_loads_only_regional_schema():
         return out
 
     with (
-        patch.object(kotter_mod.pd, "read_sql", return_value=frame) as mock_sql,
+        patch("paxminer_db.read_sql_df", return_value=frame) as mock_sql,
         patch.object(kotter_mod, "attach_home_regions", side_effect=_attach),
         patch.object(kotter_mod, "build_kotter_message", return_value=("ok", [])),
     ):
@@ -981,11 +981,11 @@ def test_kotter_empty_attendance_vs_query_error():
     }
     conn = MagicMock()
 
-    with patch.object(kr.pd, "read_sql", return_value=pd.DataFrame()):
+    with patch("paxminer_db.read_sql_df", return_value=pd.DataFrame()):
         result = kr.run_kotter_for_region(conn, "paxminer", region_row, dry_run=True)
     assert result.get("skipped") == "no attendance rows for f3ttown_test"
 
-    with patch.object(kr.pd, "read_sql", side_effect=RuntimeError("table missing")):
+    with patch("paxminer_db.read_sql_df", side_effect=RuntimeError("table missing")):
         result = kr.run_kotter_for_region(conn, "paxminer", region_row, dry_run=True)
     assert result.get("error", "").startswith("attendance query failed:")
 

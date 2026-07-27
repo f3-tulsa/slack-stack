@@ -88,7 +88,9 @@ def run_kotter_for_region(
     first_error: Exception | None = None
     for s in schemas:
         try:
-            df = pd.read_sql(_kotter_nation_sql(s), conn)
+            from paxminer_db import read_sql_df
+
+            df = read_sql_df(conn, _kotter_nation_sql(s))
             LOG.info("kotter attendance schema=%s rows=%s", s, len(df))
             if df.empty:
                 continue
@@ -107,10 +109,16 @@ def run_kotter_for_region(
         if first_error is not None:
             return {"error": f"attendance query failed: {first_error}"}
         return {"skipped": f"no attendance rows for {schema}"}
+    raw_dates = nation["date"].copy()
     nation["date"] = pd.to_datetime(nation["date"], errors="coerce")
     bad = int(nation["date"].isna().sum())
     if bad:
-        LOG.warning("Dropping %s kotter rows with unparseable bd_date", bad)
+        sample = raw_dates.loc[nation["date"].isna()].head(5).tolist()
+        LOG.warning(
+            "Dropping %s kotter rows with unparseable bd_date (sample=%r)",
+            bad,
+            sample,
+        )
         nation = nation[nation["date"].notna()].copy()
     if nation.empty:
         if first_error is not None:

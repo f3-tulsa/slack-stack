@@ -150,7 +150,9 @@ def run_custom_report(
         raise ValueError(f"source not allowed: {source}")
     sql = _SOURCE_SQL[source]
     start, end = resolve_time_window(definition, timezone_name=timezone_name)
-    df = pd.read_sql(sql, regional_conn, params=(start.isoformat(), end.isoformat()))
+    from paxminer_db import read_sql_df
+
+    df = read_sql_df(regional_conn, sql, params=(start.isoformat(), end.isoformat()))
     fields = _parse_fields(definition.get("fields"))
     if fields:
         keep = [c for c in fields if c in df.columns]

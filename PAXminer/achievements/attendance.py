@@ -106,10 +106,12 @@ def load_nation_attendance(conn, schemas: list[str]) -> pd.DataFrame:
 
     TODO: union external_attendance from brother regions when Nation API sync exists.
     """
+    from paxminer_db import read_sql_df
+
     frames: list[pd.DataFrame] = []
     for schema in schemas:
         try:
-            df = pd.read_sql(_nation_sql_for_schema(schema), conn)
+            df = read_sql_df(conn, _nation_sql_for_schema(schema))
             LOG.info("nation attendance schema=%s rows=%s", schema, len(df))
             df["region"] = schema
             frames.append(df)
@@ -118,10 +120,16 @@ def load_nation_attendance(conn, schemas: list[str]) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame()
     out = pd.concat(frames, ignore_index=True)
+    raw_dates = out["date"].copy()
     out["date"] = pd.to_datetime(out["date"], errors="coerce")
     bad = int(out["date"].isna().sum())
     if bad:
-        LOG.warning("Dropping %s attendance rows with unparseable bd_date", bad)
+        sample = raw_dates.loc[out["date"].isna()].head(5).tolist()
+        LOG.warning(
+            "Dropping %s attendance rows with unparseable bd_date (sample=%r)",
+            bad,
+            sample,
+        )
         out = out[out["date"].notna()].copy()
     if out.empty:
         return out
@@ -137,11 +145,13 @@ def attach_home_regions(conn, nation_df: pd.DataFrame, schemas: list[str]) -> pd
         nation_df = nation_df.copy()
         nation_df["region"] = schemas[0]
         return nation_df
+    from paxminer_db import read_sql_df
+
     tiers = home_region_date_tiers()
     frames: list[pd.DataFrame] = []
     for schema in schemas:
         try:
-            frames.append(pd.read_sql(_home_region_sql_for_schema(schema, tiers), conn))
+            frames.append(read_sql_df(conn, _home_region_sql_for_schema(schema, tiers)))
         except Exception as e:
             LOG.error("home region schema=%s: %s", schema, e)
     if not frames:
@@ -151,19 +161,26 @@ def attach_home_regions(conn, nation_df: pd.DataFrame, schemas: list[str]) -> pd
     return nation_df.merge(home.drop(columns=["attendance"], errors="ignore"), on="email", how="left")
 
 
+# Q-source / Q1.1 patterns in the first 100 chars of backblast (or AO name).
+# Character class must close with ]; a typo "[0-9}" raises re.error at runtime.
+QSOURCE_BB_RE = r"q.{0,1}source|q{0,1}[1-9]\.[0-9]\s"
+QSOURCE_AO_RE = r"q.{0,1}source"
+BEATDOWN_EXCLUDE_AO_RE = r"q.{0,1}source|ruck"
+
+
 def qsource_mask(df: pd.DataFrame) -> pd.Series:
     bb = df["backblast"].str.slice(0, 100).str.lower()
     ao = df["ao"].str.lower()
-    return bb.str.contains(r"q.{0,1}source|q{0,1}[1-9]\.[0-9}\s", regex=True) | ao.str.contains(
-        r"q.{0,1}source", regex=True
+    return bb.str.contains(QSOURCE_BB_RE, regex=True) | ao.str.contains(
+        QSOURCE_AO_RE, regex=True
     )
 
 
 def beatdown_mask(df: pd.DataFrame) -> pd.Series:
     bb = df["backblast"].str.slice(0, 100).str.lower()
     ao = df["ao"].str.lower()
-    return ~bb.str.contains(r"q.{0,1}source|q{0,1}[1-9]\.[0-9]\s", regex=True) & ~ao.str.contains(
-        r"q.{0,1}source|ruck", regex=True
+    return ~bb.str.contains(QSOURCE_BB_RE, regex=True) & ~ao.str.contains(
+        BEATDOWN_EXCLUDE_AO_RE, regex=True
     )
 
 
