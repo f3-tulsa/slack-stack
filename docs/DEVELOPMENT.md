@@ -45,3 +45,12 @@ python PAXminer/scripts/seed_test_region.py
 ```
 
 Pulls real test-workspace users and AO channels via `PM_SLACK_TOKEN`, walks each user (Kotter / one Achievement / clear `[SEED]` data / skip), auto pre-selects the required AO(s), and writes attendance sized to live Kotter thresholds / achievement rules. Requires `F3_REGION_SLACK_TEAM_ID` to match Slack `auth.test`. Dev-only — not part of CI or deploy.
+
+Prod-derived attendance is not useful in test (different Slack user IDs), so start from a clean slate:
+
+```bash
+python PAXminer/scripts/reset_test_region.py --dry-run
+python PAXminer/scripts/reset_test_region.py
+```
+
+Reset shares the seeder's test-only guards, deletes all `bd_attendance` / `beatdowns` / `achievements_awarded`, prunes `users` / `aos` missing from the test workspace (`--keep-roster` to skip), and keeps `achievements_list` + views.

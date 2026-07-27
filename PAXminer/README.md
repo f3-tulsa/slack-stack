@@ -101,6 +101,15 @@ python PAXminer/scripts/seed_test_region.py --schema f3ttown_test
 
 The script pulls real users and channels from the test workspace, then for each user asks: Kotter / one Achievement / clear synthesized data / skip. AOs are pre-selected from the goal’s requirement (e.g. 7 for Cadre) with a minimum-AO note; you can override. Seeded beatdowns are tagged `[SEED]` so clear only removes synthetic rows. Not wired into CI or deploy.
 
+To wipe prod-derived attendance first (same test-only guards, typed confirmation):
+
+```bash
+python PAXminer/scripts/reset_test_region.py --dry-run   # report only
+python PAXminer/scripts/reset_test_region.py
+```
+
+Reset clears **all** `bd_attendance` / `beatdowns` / `achievements_awarded`, and prunes `users` / `aos` rows whose Slack IDs are not in the test workspace (`--keep-roster` skips the prune). `achievements_list` rules and views are preserved. Migrated prod attendance is not useful in test because the Slack user IDs differ — reset, then seed.
+
 Manual **Run Now** does **not** post here; the admin gets a DM instead.
 
 ## Slack app manifest
