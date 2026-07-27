@@ -686,3 +686,227 @@ def test_schedule_edit_modal_omits_null_initial_option():
         el = block.get("element") or {}
         if "initial_option" in el:
             assert el["initial_option"] is not None
+
+
+def test_format_window_label_and_calendar_month():
+    from datetime import date
+
+    from scheduling import (
+        format_window_label,
+        is_calendar_month,
+        resolve_time_window,
+        window_file_tag,
+    )
+
+    start, end = date(2026, 6, 1), date(2026, 6, 30)
+    assert is_calendar_month(start, end)
+    assert format_window_label(start, end) == "June 2026"
+    assert window_file_tag(start, end) == "Jun2026"
+
+    start2, end2 = date(2026, 6, 1), date(2026, 7, 15)
+    assert not is_calendar_month(start2, end2)
+    assert "Jun 01" in format_window_label(start2, end2)
+
+    # last_month default matches calendar prior month
+    from datetime import datetime, timezone
+
+    fixed = datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc)
+    w = resolve_time_window(
+        {"time_window_type": "last_month"},
+        timezone_name="America/Chicago",
+        utc_now=fixed,
+    )
+    assert w == (date(2026, 6, 1), date(2026, 6, 30))
+
+
+def test_reports_list_empty_shows_load_defaults():
+    from config_schedule import LOAD_DEFAULTS_ACTION_ID, _reports_list_modal, _schedules_list_modal
+
+    reports = _reports_list_modal("T1", "f3test", [])
+    actions = [b for b in reports["blocks"] if b.get("type") == "actions"]
+    assert any(
+        LOAD_DEFAULTS_ACTION_ID in [e.get("action_id") for e in a.get("elements", [])]
+        for a in actions
+    )
+
+    schedules = _schedules_list_modal("T1", "f3test", [])
+    actions = [b for b in schedules["blocks"] if b.get("type") == "actions"]
+    assert any(
+        LOAD_DEFAULTS_ACTION_ID in [e.get("action_id") for e in a.get("elements", [])]
+        for a in actions
+    )
+
+
+def test_report_edit_modal_code_rendered_vs_custom():
+    from config_schedule import _report_edit_modal
+
+    builtin = _report_edit_modal(
+        "T1",
+        "f3test",
+        {
+            "id": 1,
+            "name": "Q charts",
+            "code": "q_charts",
+            "report_type": "q_charts",
+            "is_builtin": 1,
+            "time_window_type": "last_month",
+        },
+    )
+    block_ids = [b.get("block_id") for b in builtin["blocks"] if b.get("block_id")]
+    assert "name" in block_ids
+    assert "time_window_type" in block_ids
+    assert "source" not in block_ids
+    assert "kind" not in block_ids
+    assert "code" not in block_ids
+
+    kotter = _report_edit_modal(
+        "T1",
+        "f3test",
+        {
+            "id": 2,
+            "name": "Kotter",
+            "code": "kotter",
+            "report_type": "kotter",
+            "is_builtin": 1,
+            "time_window_type": None,
+        },
+    )
+    kotter_ids = [b.get("block_id") for b in kotter["blocks"] if b.get("block_id")]
+    assert "name" in kotter_ids
+    assert "time_window_type" not in kotter_ids
+
+    custom = _report_edit_modal("T1", "f3test", None)
+    custom_ids = [b.get("block_id") for b in custom["blocks"] if b.get("block_id")]
+    assert "code" in custom_ids
+    assert "source" in custom_ids
+    assert "kind" in custom_ids
+
+
+def test_reports_list_has_duplicate_action():
+    from config_schedule import DUPLICATE_REPORT_ACTION_ID, _reports_list_modal
+
+    view = _reports_list_modal(
+        "T1",
+        "f3test",
+        [
+            {
+                "id": 1,
+                "name": "Kotter",
+                "code": "kotter",
+                "report_type": "kotter",
+                "is_builtin": 1,
+            }
+        ],
+    )
+    action_ids = []
+    for b in view["blocks"]:
+        for e in b.get("elements") or []:
+            if e.get("action_id"):
+                action_ids.append(e["action_id"])
+    assert DUPLICATE_REPORT_ACTION_ID in action_ids
+
+
+def test_uniquify_and_duplicate_definition():
+    from unittest.mock import MagicMock
+
+    from schedule_schema import duplicate_definition, uniquify_definition_code
+
+    cur = MagicMock()
+    # First candidate taken, second free
+    cur.fetchone.side_effect = [{"c": 1}, {"c": 0}, {"id": 99, "code": "kotter_copy_2", "name": "Kotter (copy)"}]
+    code = uniquify_definition_code(cur, "pm", "f3", "kotter")
+    assert code == "kotter_copy_2"
+
+    cur2 = MagicMock()
+    cur2.fetchone.side_effect = [
+        {"c": 0},  # uniquify first try
+        {
+            "id": 7,
+            "code": "kotter_copy",
+            "name": "Kotter (copy)",
+            "report_type": "kotter",
+            "is_builtin": 0,
+        },
+    ]
+    copy = duplicate_definition(
+        cur2,
+        "pm",
+        "f3",
+        {"code": "kotter", "name": "Kotter", "report_type": "kotter", "is_builtin": 1},
+    )
+    assert copy["code"] == "kotter_copy"
+    assert copy["is_builtin"] == 0
+    insert_sql = cur2.execute.call_args_list[1].args[0]
+    assert "is_builtin" in insert_sql or "0,0" in str(cur2.execute.call_args_list[1])
+
+
+def test_delete_definition_and_schedules():
+    from unittest.mock import MagicMock
+
+    from schedule_schema import delete_definition_and_schedules
+
+    cur = MagicMock()
+    cur.rowcount = 2
+    # Two deletes; rowcount applies to last — simulate via side_effect on property is hard;
+    # just assert both DELETEs ran.
+    counts = delete_definition_and_schedules(cur, "pm", 5, "f3")
+    assert len(cur.execute.call_args_list) == 2
+    assert "region_schedules" in cur.execute.call_args_list[0].args[0]
+    assert "region_report_definitions" in cur.execute.call_args_list[1].args[0]
+    assert counts["schedules"] == 2
+    assert counts["definitions"] == 2
+
+
+def test_dispatch_passes_window_to_q_charts():
+    from datetime import date
+    from unittest.mock import MagicMock, patch
+
+    from schedule_runner import _dispatch_report
+
+    regional = MagicMock()
+    registry = MagicMock()
+    definition = {
+        "report_type": "q_charts",
+        "time_window_type": "last_month",
+        "code": "q_charts",
+        "name": "Q charts",
+    }
+    schedule = {
+        "destination_type": "specific_channels",
+        "destination_channels": '["C1"]',
+        "destination_users": None,
+    }
+    region = {
+        "schema_name": "f3ttown_test",
+        "region": "Tulsa",
+        "slack_token": "enc",
+        "timezone": "America/Chicago",
+    }
+    captured = {}
+
+    def fake_q(*args, **kwargs):
+        captured["window"] = kwargs.get("window")
+        return {"posted_channels": [{"ao": "x", "channel_id": "C1"}]}
+
+    with (
+        patch("schedule_runner.decrypt_field", return_value="tok"),
+        patch("schedule_runner.connect_from_env", return_value=regional),
+        patch(
+            "schedule_runner.resolve_destinations",
+            return_value=[{"kind": "channel", "id": "C1"}],
+        ),
+        patch(
+            "schedule_runner.resolve_time_window",
+            return_value=(date(2026, 6, 1), date(2026, 6, 30)),
+        ),
+        patch("monthly_charts.Qcharter.run_q_charter", side_effect=fake_q),
+    ):
+        _dispatch_report(registry, "paxminer", region, schedule, definition)
+
+    assert captured["window"] == (date(2026, 6, 1), date(2026, 6, 30))
+
+
+def test_ddl_includes_is_customized():
+    from schedule_schema import DDL_REGION_REPORT_DEFINITIONS
+
+    assert "is_customized" in DDL_REGION_REPORT_DEFINITIONS
