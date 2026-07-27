@@ -16,17 +16,21 @@ Posting cadence and destinations come from PAXMiner-owned schedule tables (alway
 
 | Table | Role |
 |-------|------|
-| `paxminer.region_report_definitions` | What a report is (builtin native producers + custom builder reports) |
+| `paxminer.region_report_definitions` | What a report is (builtin code-rendered producers + custom builder reports). Builtins are editable/deletable; `is_builtin` is provenance, `is_customized` marks admin edits. |
 | `paxminer.region_schedules` | When/where (destination, frequency, `time_of_day`, enabled) |
 | `paxminer.regions.timezone` | Region TZ (default `America/Chicago`) for due-now evaluation |
 
-`ScheduleFunction` ticks every **15 minutes**, evaluates region-local now, and runs due items (idempotent via `last_run_on` / `last_run_status`). Configure via `/config-paxminer` → **Schedule**. **Restore Defaults** merges builtin schedule rows from **`report_defaults.json`** (all six builtins enabled); **Delete All** clears schedules first if you want a clean reseed.
+`ScheduleFunction` ticks every **15 minutes**, evaluates region-local now, and runs due items (idempotent via `last_run_on` / `last_run_status`). Configure via `/config-paxminer` → **Schedule** / **PAX Reports**.
+
+**Builtin reports** (from `report_defaults.json`) render from dedicated Python (charts, Kotter, achievement leaderboard). You can **rename**, set a **time window** (honored by the SQL), **duplicate**, **delete**, and **schedule** them. Kotter has no time window — it uses Kotter threshold config. **Custom reports** use the full builder (source, fields, metric, chart vs table).
+
+**Defaults load on demand only** — migration creates tables/columns but does **not** seed `report_defaults.json`. Use **Load defaults** on an empty Reports/Schedule list, or **Restore Defaults** later. Restore merges missing builtins/schedules; rows with `is_customized=1` keep their edits. **Delete** removes the definition and any schedules that reference it (FK stays `RESTRICT` with app-level cascade). **Duplicate** copies a definition with a uniquified `*_copy` code and no schedules.
 
 Builtin defaults seed **`specific_channels`** destinations with an **empty** channel list — those items stay **skipped** until an admin picks a channel under Schedule. `dm_all_pax` and `all_ao_channels` destinations fan out immediately once due.
 
-Migration: `python migration/paxminer_migrate.py --env test|prod --all` (phases: weaselbot → scheduler → drop-legacy-columns). Deploy updated Slackblast + PAXMiner code **before** `--all`. Legacy scripts `migrate_weaselbot_to_paxminer.py` and `add_report_scheduler.py` are deprecated wrappers.
+Migration: `python migration/paxminer_migrate.py --env test|prod --all` (phases: weaselbot → scheduler DDL → drop-legacy-columns). Deploy updated Slackblast + PAXMiner code **before** `--all`. Legacy scripts `migrate_weaselbot_to_paxminer.py` and `add_report_scheduler.py` are deprecated wrappers.
 
-**Production cutover order:** (1) deploy updated Slackblast + PAXMiner code, (2) run `paxminer_migrate.py --all`, (3) set Schedule channels and disable any unwanted fan-out.
+**Production cutover order:** (1) deploy updated Slackblast + PAXMiner code, (2) run `paxminer_migrate.py --all`, (3) **Load defaults** (or Restore Defaults) in Slack if the region has no reports yet, (4) set Schedule channels and disable any unwanted fan-out.
 
 ## What PAXMiner posts
 
@@ -58,7 +62,7 @@ Daily achievement **grant/revoke** uses `achievement_channel` from `/config-paxm
 | Surface | Trigger | Notes |
 |---------|---------|-------|
 | `/config-paxminer` hub | slash | admin-only; timezone + Achievements on Save; hub buttons for Reports / Kotter thresholds / Schedule |
-| Schedule / Reports modals | hub buttons | line-item schedule, report builder, Delete All, Restore Defaults, Run Now (DMs result) |
+| Schedule / Reports modals | hub buttons | editable builtins + custom builder; Duplicate; Load/Restore defaults; Delete All; Run Now (DMs result) |
 | App Home | `app_home_opened` | minimal stub; full dashboard later |
 
 ## Lambdas (four functions)
