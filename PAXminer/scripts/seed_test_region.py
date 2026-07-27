@@ -1040,17 +1040,36 @@ def _print_achievement_catalog(catalog: list[dict]) -> None:
 
 
 def _print_ao_list(aos: list[tuple[str, str]]) -> None:
-    print("\nAO channels:")
+    print("\nAOs:")
     for i, (name, cid) in enumerate(aos, 1):
         print(f"  {i:2d}. {name} ({cid})")
 
 
+def _ao_names(aos: Iterable[tuple[str, str]]) -> str:
+    return ", ".join(name for name, _ in aos)
+
+
 def _parse_index_list(raw: str, n: int) -> list[int] | None:
+    """Parse a 1-based selection into 0-based indexes, or None if invalid.
+
+    Accepts commas and/or spaces as separators and inclusive ranges:
+    ``1,3,5``, ``1 3 5``, ``1-5``, ``1-3, 7`` all work.
+    """
     raw = raw.strip()
     if not raw:
         return []
     out: list[int] = []
     for part in raw.replace(",", " ").split():
+        if "-" in part[1:]:
+            lo_s, _, hi_s = part.partition("-")
+            try:
+                lo, hi = int(lo_s), int(hi_s)
+            except ValueError:
+                return None
+            if lo < 1 or hi > n or lo > hi:
+                return None
+            out.extend(range(lo - 1, hi))
+            continue
         try:
             idx = int(part)
         except ValueError:
@@ -1074,18 +1093,22 @@ def pick_aos_simple(
     _print_ao_list(all_aos)
     pre_idx = list(range(1, minimum + 1))
     pre_str = ",".join(str(i) for i in pre_idx)
-    print(f"\nPre-selected AO index(es): {pre_str}")
-    print(f"Minimum AOs required: {minimum}")
+    print(f"\nPre-selected AO(s): {pre_str} ({_ao_names(preselect)})")
+    print(f"Minimum AOs required: {minimum} of {len(all_aos)}")
+    print(
+        "  Separate numbers with commas or spaces; ranges work too "
+        f"(e.g. \"1,3,5\" or \"1 3 5\" or \"1-{minimum}\")."
+    )
     while True:
-        raw = _prompt(
-            "Accept pre-selection with Enter, or type AO numbers "
-            f"(e.g. {pre_str}) [min {minimum}]: "
-        )
+        raw = _prompt(f"Enter to accept, or type AO numbers [min {minimum}]: ")
         if not raw:
             return list(preselect)
         idxs = _parse_index_list(raw, len(all_aos))
         if idxs is None:
-            print("Invalid selection; enter numbers from the list.")
+            print(
+                f"Invalid selection; use numbers 1-{len(all_aos)} separated by "
+                'commas or spaces, or a range like "1-5".'
+            )
             continue
         seen: set[int] = set()
         chosen: list[tuple[str, str]] = []
@@ -1096,6 +1119,7 @@ def pick_aos_simple(
         if len(chosen) < minimum:
             print(f"Need at least {minimum} AO(s); got {len(chosen)}.")
             continue
+        print(f"  Selected {len(chosen)} AO(s): {_ao_names(chosen)}")
         return chosen
 
 

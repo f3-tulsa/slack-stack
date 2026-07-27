@@ -316,6 +316,55 @@ class _DenyingCursor:
         return getattr(self, "_row", None)
 
 
+# ---- AO index parsing / picker ----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("1,3,5", [0, 2, 4]),
+        ("1 3 5", [0, 2, 4]),
+        ("1, 3  5", [0, 2, 4]),
+        ("1-5", [0, 1, 2, 3, 4]),
+        ("1-3, 7", [0, 1, 2, 6]),
+        ("  2  ", [1]),
+        ("", []),
+    ],
+)
+def test_parse_index_list_accepts_commas_spaces_and_ranges(raw, expected):
+    assert seeder._parse_index_list(raw, 10) == expected
+
+
+@pytest.mark.parametrize("raw", ["0", "11", "abc", "1-11", "5-2", "1;2", "-3", "1-"])
+def test_parse_index_list_rejects_bad_input(raw):
+    assert seeder._parse_index_list(raw, 10) is None
+
+
+def test_pick_aos_simple_enter_accepts_preselection(monkeypatch):
+    aos = [(f"AO{i}", f"C{i}") for i in range(5)]
+    monkeypatch.setattr(seeder, "_prompt", lambda *_a, **_k: "")
+    assert seeder.pick_aos_simple(aos, minimum=3) == aos[:3]
+
+
+def test_pick_aos_simple_range_selection(monkeypatch):
+    aos = [(f"AO{i}", f"C{i}") for i in range(5)]
+    monkeypatch.setattr(seeder, "_prompt", lambda *_a, **_k: "2-4")
+    assert seeder.pick_aos_simple(aos, minimum=3) == aos[1:4]
+
+
+def test_pick_aos_simple_reprompts_below_minimum(monkeypatch):
+    aos = [(f"AO{i}", f"C{i}") for i in range(5)]
+    replies = iter(["1", "1,2,5"])
+    monkeypatch.setattr(seeder, "_prompt", lambda *_a, **_k: next(replies))
+    assert seeder.pick_aos_simple(aos, minimum=3) == [aos[0], aos[1], aos[4]]
+
+
+def test_pick_aos_simple_dedupes_repeats(monkeypatch):
+    aos = [(f"AO{i}", f"C{i}") for i in range(5)]
+    monkeypatch.setattr(seeder, "_prompt", lambda *_a, **_k: "1,1,2,3-3")
+    assert seeder.pick_aos_simple(aos, minimum=3) == aos[:3]
+
+
 # ---- AO source selection ----------------------------------------------------
 
 QS_AOS = [("The Goose", "CGOOSE"), ("COPA", "CCOPA")]

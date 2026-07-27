@@ -99,7 +99,7 @@ python PAXminer/scripts/seed_test_region.py
 python PAXminer/scripts/seed_test_region.py --schema f3ttown_test
 ```
 
-The script pulls real users from the test workspace and the AO list from QSignups (`qsignups_test.qsignups_aos` for the test team), so non-AO channels like `paxminer_logs` and `social` never show up as choices; it falls back to the regional `aos` table and then to all Slack channels if QSignups has no AOs. For each user it asks: Kotter / one Achievement / clear synthesized data / skip. AOs are pre-selected from the goal’s requirement (e.g. 7 for Cadre) with a minimum-AO note; you can override. Seeded beatdowns are tagged `[SEED]` so clear only removes synthetic rows. Not wired into CI or deploy.
+The script pulls real users from the test workspace and the AO list from QSignups (`qsignups_test.qsignups_aos` for the test team), so non-AO channels like `paxminer_logs` and `social` never show up as choices; it falls back to the regional `aos` table and then to all Slack channels if QSignups has no AOs. For each user it asks: Kotter / one Achievement / clear synthesized data / skip. AOs are pre-selected from the goal’s requirement (e.g. 7 for Cadre) with a minimum-AO note; press Enter to accept, or override by typing numbers separated by commas or spaces, with inclusive ranges allowed (`1,3,5`, `1 3 5`, `1-5`, `1-3, 7`). Seeded beatdowns are tagged `[SEED]` so clear only removes synthetic rows. Not wired into CI or deploy.
 
 To wipe prod-derived attendance first (same test-only guards, typed confirmation):
 
