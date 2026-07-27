@@ -13,9 +13,11 @@ from config_schedule import (
     DELETE_ALL_SCHEDULES_ACTION_ID,
     DELETE_REPORT_ACTION_ID,
     DELETE_SCHEDULE_ACTION_ID,
+    DUPLICATE_REPORT_ACTION_ID,
     EDIT_REPORT_ACTION_ID,
     EDIT_SCHEDULE_ACTION_ID,
     KOTTER_CONFIG_CALLBACK_ID,
+    LOAD_DEFAULTS_ACTION_ID,
     OPEN_ACHIEVEMENTS_ACTION_ID,
     OPEN_KOTTER_CONFIG_ACTION_ID,
     OPEN_REPORTS_ACTION_ID,
@@ -38,6 +40,7 @@ from config_schedule import (
     _schedules_list_modal,
     draft_from_report_state,
     draft_from_schedule_state,
+    is_code_rendered,
     load_definition,
     load_definitions,
     load_schedule,
@@ -56,8 +59,11 @@ from config_paxminer import (
 )
 from paxminer_db import connect_from_env, paxminer_schema_from_env
 from schedule_schema import (
+    count_customized_builtins,
     count_schedules_for_definition,
     delete_all_schedules,
+    delete_definition_and_schedules,
+    duplicate_definition,
     restore_defaults,
 )
 from slack_http import is_slack_admin, notify_admin_required
@@ -458,19 +464,66 @@ def register_schedule_listeners(app) -> None:
         )
         try:
             with conn.cursor() as cur:
+                customized = count_customized_builtins(cur, pm, regional_schema)
                 n = restore_defaults(cur, pm, region)
                 conn.commit()
                 schedules = load_schedules(cur, pm, regional_schema)
             selected = schedules[0]["id"] if schedules else None
+            notice = f"Restored defaults ({n} schedule row(s) added)."
+            if customized:
+                notice += (
+                    f" Kept {customized} customized builtin report(s); "
+                    "missing builtins were re-added."
+                )
             _refresh_schedule_list(
                 client,
                 body,
                 team_id,
                 regional_schema,
                 region,
-                notice=f"Restored defaults ({n} schedule row(s) added).",
+                notice=notice,
                 selected_id=selected,
             )
+        finally:
+            conn.close()
+
+    @app.action(LOAD_DEFAULTS_ACTION_ID)
+    def load_defaults(ack, body, client, logger):
+        """Same as Restore Defaults; shown on empty Reports / Schedule lists."""
+        if not _admin_ack(ack, body, client):
+            return
+        team_id, regional_schema, region = _ctx(body)
+        if not region or not regional_schema:
+            return
+        pm = paxminer_schema_from_env()
+        conn = connect_from_env(
+            os.environ.get("PAXMINER_REGISTRY_DATABASE")
+            or os.environ.get("PAXMINER_SCHEMA")
+            or "paxminer"
+        )
+        try:
+            with conn.cursor() as cur:
+                n = restore_defaults(cur, pm, region)
+                conn.commit()
+                defs = load_definitions(cur, pm, regional_schema)
+                schedules = load_schedules(cur, pm, regional_schema)
+            view_cb = (body.get("view") or {}).get("callback_id")
+            notice = f"Loaded defaults ({n} schedule row(s), {len(defs)} report(s))."
+            if view_cb == REPORTS_LIST_CALLBACK_ID:
+                _refresh_reports_list(
+                    client, body, team_id, regional_schema, notice=notice
+                )
+            else:
+                selected = schedules[0]["id"] if schedules else None
+                _refresh_schedule_list(
+                    client,
+                    body,
+                    team_id,
+                    regional_schema,
+                    region,
+                    notice=notice,
+                    selected_id=selected,
+                )
         finally:
             conn.close()
 
@@ -683,19 +736,43 @@ def register_schedule_listeners(app) -> None:
                     client, body, team_id, regional_schema, notice="Report not found."
                 )
                 return
-            if row.get("is_builtin") and row.get("report_type") != "custom_report":
-                _refresh_reports_list(
-                    client,
-                    body,
-                    team_id,
-                    regional_schema,
-                    notice="Builtin reports are not builder-editable. Schedule them, or add a custom report.",
-                )
-                return
             client.views_push(
                 trigger_id=body["trigger_id"],
                 view=_report_edit_modal(team_id, regional_schema, row),
             )
+        finally:
+            conn.close()
+
+    @app.action(DUPLICATE_REPORT_ACTION_ID)
+    def duplicate_report(ack, body, client, logger):
+        if not _admin_ack(ack, body, client):
+            return
+        team_id, regional_schema, region = _ctx(body)
+        rid = selected_report_id(body)
+        if not rid:
+            _refresh_reports_list(
+                client, body, team_id, regional_schema, notice="Select a report first."
+            )
+            return
+        pm = paxminer_schema_from_env()
+        conn = connect_from_env(
+            os.environ.get("PAXMINER_REGISTRY_DATABASE")
+            or os.environ.get("PAXMINER_SCHEMA")
+            or "paxminer"
+        )
+        try:
+            with conn.cursor() as cur:
+                row = load_definition(cur, pm, rid)
+                if not row:
+                    notice = "Report not found."
+                else:
+                    copy = duplicate_definition(cur, pm, regional_schema, row)
+                    conn.commit()
+                    notice = (
+                        f"Duplicated as `{copy['code']}` "
+                        f"({copy.get('name')}). No schedules copied."
+                    )
+            _refresh_reports_list(client, body, team_id, regional_schema, notice=notice)
         finally:
             conn.close()
 
@@ -721,19 +798,18 @@ def register_schedule_listeners(app) -> None:
                 row = load_definition(cur, pm, rid)
                 if not row:
                     notice = "Report not found."
-                elif row.get("is_builtin"):
-                    notice = "Cannot delete a builtin report definition."
                 else:
-                    n = count_schedules_for_definition(cur, pm, rid)
-                    if n:
-                        notice = f"Cannot delete: {n} schedule(s) still reference it."
-                    else:
-                        cur.execute(
-                            f"DELETE FROM `{pm}`.`region_report_definitions` WHERE id=%s",
-                            (rid,),
-                        )
-                        conn.commit()
-                        notice = "Deleted custom report."
+                    n_sched = count_schedules_for_definition(cur, pm, rid)
+                    counts = delete_definition_and_schedules(
+                        cur, pm, rid, regional_schema
+                    )
+                    conn.commit()
+                    notice = (
+                        f"Deleted `{row.get('code')}` "
+                        f"({counts['definitions']} report, {counts['schedules']} schedule(s))."
+                    )
+                    if n_sched and counts["schedules"] == 0:
+                        notice = f"Deleted report; schedule cleanup unexpected (had {n_sched})."
             _refresh_reports_list(client, body, team_id, regional_schema, notice=notice)
         finally:
             conn.close()
@@ -802,40 +878,72 @@ def register_schedule_listeners(app) -> None:
             with conn.cursor() as cur:
                 fields_json = json.dumps(values.get("fields") or [])
                 if values.get("definition_id"):
-                    cur.execute(
-                        f"""
-                        UPDATE `{pm}`.`region_report_definitions`
-                        SET name=%s, code=%s, kind=%s, source=%s, fields=%s,
-                            metric=%s, group_by=%s, top_n=%s, time_window_type=%s,
-                            window_days=%s, window_start=%s, window_end=%s
-                        WHERE id=%s AND schema_name=%s AND is_builtin=0
-                        """,
-                        (
-                            values["name"],
-                            values["code"],
-                            values["kind"],
-                            values["source"],
-                            fields_json,
-                            values["metric"],
-                            values["group_by"],
-                            values["top_n"],
-                            values["time_window_type"],
-                            values["window_days"],
-                            values.get("window_start"),
-                            values.get("window_end"),
-                            values["definition_id"],
-                            regional_schema,
-                        ),
-                    )
+                    existing = load_definition(cur, pm, int(values["definition_id"]))
+                    if not existing or existing.get("schema_name") != regional_schema:
+                        ack(
+                            response_action="errors",
+                            errors={"name": "Report not found"},
+                        )
+                        return
+                    code_rendered = is_code_rendered(existing.get("report_type"))
+                    if code_rendered:
+                        # Name + window only; mark customized when originally builtin.
+                        is_customized = 1 if existing.get("is_builtin") else int(
+                            existing.get("is_customized") or 0
+                        )
+                        cur.execute(
+                            f"""
+                            UPDATE `{pm}`.`region_report_definitions`
+                            SET name=%s, time_window_type=%s, window_days=%s,
+                                window_start=%s, window_end=%s, is_customized=%s
+                            WHERE id=%s AND schema_name=%s
+                            """,
+                            (
+                                values["name"],
+                                values.get("time_window_type"),
+                                values.get("window_days"),
+                                values.get("window_start"),
+                                values.get("window_end"),
+                                is_customized,
+                                values["definition_id"],
+                                regional_schema,
+                            ),
+                        )
+                    else:
+                        cur.execute(
+                            f"""
+                            UPDATE `{pm}`.`region_report_definitions`
+                            SET name=%s, code=%s, kind=%s, source=%s, fields=%s,
+                                metric=%s, group_by=%s, top_n=%s, time_window_type=%s,
+                                window_days=%s, window_start=%s, window_end=%s
+                            WHERE id=%s AND schema_name=%s
+                            """,
+                            (
+                                values["name"],
+                                values["code"],
+                                values["kind"],
+                                values["source"],
+                                fields_json,
+                                values["metric"],
+                                values["group_by"],
+                                values["top_n"],
+                                values["time_window_type"],
+                                values["window_days"],
+                                values.get("window_start"),
+                                values.get("window_end"),
+                                values["definition_id"],
+                                regional_schema,
+                            ),
+                        )
                 else:
                     try:
                         cur.execute(
                             f"""
                             INSERT INTO `{pm}`.`region_report_definitions`
-                            (schema_name, code, name, report_type, is_builtin, kind, source,
-                             fields, metric, group_by, top_n, time_window_type, window_days,
-                             window_start, window_end)
-                            VALUES (%s,%s,%s,'custom_report',0,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                            (schema_name, code, name, report_type, is_builtin, is_customized,
+                             kind, source, fields, metric, group_by, top_n, time_window_type,
+                             window_days, window_start, window_end)
+                            VALUES (%s,%s,%s,'custom_report',0,0,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                             """,
                             (
                                 regional_schema,
