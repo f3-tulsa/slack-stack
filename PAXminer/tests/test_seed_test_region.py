@@ -316,6 +316,16 @@ class _DenyingCursor:
         return getattr(self, "_row", None)
 
 
+def test_attendance_view_ddl_matches_migrated_shape():
+    """Consumers do SELECT * (PAXcharter), so columns/joins must match prod."""
+    ddl = seeder.ATTENDANCE_VIEW_DDL.format(schema="f3ttown_test")
+    for col in ("`Date`", "`AO`", "`PAX`", "`Q`"):
+        assert col in ddl
+    # Q comes from a second users join; inner joins would drop rows prod keeps.
+    assert ddl.upper().count("LEFT JOIN") == 3
+    assert "bd.q_user_id = q.user_id" in ddl
+
+
 def test_is_permission_denied_detects_1142_and_message():
     import pymysql
 

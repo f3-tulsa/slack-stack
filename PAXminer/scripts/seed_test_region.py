@@ -39,15 +39,20 @@ FILLER_Q_USER_ID = "USEEDFILLER0XX"
 FILLER_Q_NAME = f"{SEED_SENTINEL} Q"
 DEPLOY_ENV_FILE = _REPO_ROOT / ".env.deploy.test"
 
+# Mirrors the national PAXMiner attendance_view that migration copies, including
+# the Q column and LEFT JOINs — consumers do SELECT * (e.g. PAXcharter.py).
 ATTENDANCE_VIEW_DDL = """
 CREATE OR REPLACE VIEW `{schema}`.`attendance_view` AS
 SELECT
-  a.date AS Date,
-  ao.ao AS AO,
-  u.user_name AS PAX
-FROM `{schema}`.`bd_attendance` a
-JOIN `{schema}`.`users` u ON u.user_id = a.user_id
-JOIN `{schema}`.`aos` ao ON ao.channel_id = a.ao_id
+  bd.date AS `Date`,
+  ao.ao AS `AO`,
+  u.user_name AS `PAX`,
+  q.user_name AS `Q`
+FROM `{schema}`.`bd_attendance` bd
+LEFT JOIN `{schema}`.`aos` ao ON bd.ao_id = ao.channel_id
+LEFT JOIN `{schema}`.`users` u ON bd.user_id = u.user_id
+LEFT JOIN `{schema}`.`users` q ON bd.q_user_id = q.user_id
+ORDER BY bd.date DESC, ao.ao
 """
 
 
