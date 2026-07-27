@@ -285,3 +285,69 @@ def test_awarded_ddl_no_fk_omits_references():
     assert "FOREIGN KEY" not in ddl.upper()
     assert "REFERENCES" not in ddl.upper()
     assert "achievements_awarded" in ddl
+
+
+# ---- DDL privilege tolerance -------------------------------------------------
+
+
+class _DenyingCursor:
+    """Cursor that reports objects exist, and denies any DDL."""
+
+    def __init__(self, *, exists: bool = True, errno: int = 1142):
+        self.exists = exists
+        self.errno = errno
+        self.ddl_attempts: list[str] = []
+
+    def execute(self, sql, params=None):
+        upper = sql.strip().upper()
+        if upper.startswith("SELECT 1 FROM INFORMATION_SCHEMA"):
+            self._row = {"1": 1} if self.exists else None
+            return
+        if upper.startswith(("CREATE", "ALTER", "DROP")):
+            self.ddl_attempts.append(sql)
+            import pymysql
+
+            raise pymysql.err.OperationalError(
+                self.errno, "CREATE VIEW command denied to user 'app'@'%'"
+            )
+        self._row = None
+
+    def fetchone(self):
+        return getattr(self, "_row", None)
+
+
+def test_is_permission_denied_detects_1142_and_message():
+    import pymysql
+
+    assert seeder._is_permission_denied(
+        pymysql.err.OperationalError(1142, "CREATE VIEW command denied to user")
+    )
+    assert seeder._is_permission_denied(Exception("REFERENCES command denied to user"))
+    assert not seeder._is_permission_denied(Exception("some other failure"))
+
+
+def test_try_ddl_returns_false_when_denied():
+    cur = _DenyingCursor()
+    assert seeder._try_ddl(cur, "CREATE VIEW x AS SELECT 1", "x") is False
+
+
+def test_try_ddl_reraises_non_permission_errors():
+    class Boom:
+        def execute(self, sql, params=None):
+            raise RuntimeError("syntax error")
+
+    with pytest.raises(RuntimeError, match="syntax error"):
+        seeder._try_ddl(Boom(), "CREATE VIEW x AS SELECT 1", "x")
+
+
+def test_existing_views_are_not_recreated():
+    cur = _DenyingCursor(exists=True)
+    assert seeder._view_exists(cur, "f3ttown_test", "attendance_view") is True
+    assert cur.ddl_attempts == []
+
+
+def test_missing_view_attempt_is_tolerated():
+    cur = _DenyingCursor(exists=False)
+    assert seeder._view_exists(cur, "f3ttown_test", "attendance_view") is False
+    assert seeder._try_ddl(cur, "CREATE VIEW v AS SELECT 1", "v") is False
+    assert len(cur.ddl_attempts) == 1

@@ -675,6 +675,43 @@ CREATE TABLE IF NOT EXISTS `{schema}`.`achievements_awarded` (
 """
 
 
+def _view_exists(cur, schema: str, view: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1 FROM information_schema.views
+        WHERE table_schema = %s AND table_name = %s
+        LIMIT 1
+        """,
+        (schema, view),
+    )
+    return cur.fetchone() is not None
+
+
+def _is_permission_denied(exc: Exception) -> bool:
+    args = getattr(exc, "args", ())
+    if args and args[0] in (1044, 1045, 1142, 1227):
+        return True
+    return "command denied" in str(exc).lower()
+
+
+def _try_ddl(cur, sql: str, what: str) -> bool:
+    """Run DDL, tolerating the app DB user's missing privileges."""
+    try:
+        cur.execute(sql)
+    except Exception as exc:
+        if _is_permission_denied(exc):
+            LOG.warning(
+                "Cannot create %s as this DB user (%s). Run the migration with "
+                "privileged credentials if it is actually missing.",
+                what,
+                exc,
+            )
+            return False
+        raise
+    LOG.info("Created %s", what)
+    return True
+
+
 def ensure_achievement_tables(cur, schema: str) -> None:
     from achievements.achievement_rules import (
         ACHIEVEMENTS_LIST_DDL,
@@ -683,14 +720,32 @@ def ensure_achievement_tables(cur, schema: str) -> None:
     )
 
     if not _table_exists(cur, schema, "achievements_list"):
-        cur.execute(ACHIEVEMENTS_LIST_DDL.format(schema=schema))
-        LOG.info("Created %s.achievements_list", schema)
+        if not _try_ddl(
+            cur, ACHIEVEMENTS_LIST_DDL.format(schema=schema), f"{schema}.achievements_list"
+        ):
+            raise SystemExit(
+                f"{schema}.achievements_list is missing and this DB user cannot "
+                "create it. Run the PAXMiner migration first."
+            )
     if not _table_exists(cur, schema, "achievements_awarded"):
-        # Avoid FOREIGN KEY — slack_test user gets 1142 REFERENCES denied.
-        cur.execute(_ACHIEVEMENTS_AWARDED_DDL_NO_FK.format(schema=schema))
-        LOG.info("Created %s.achievements_awarded (no FK)", schema)
-    cur.execute(ACHIEVEMENTS_VIEW_DDL.format(schema=schema))
-    cur.execute(ATTENDANCE_VIEW_DDL.format(schema=schema))
+        # Omit the FOREIGN KEY — app users typically lack REFERENCES.
+        if not _try_ddl(
+            cur,
+            _ACHIEVEMENTS_AWARDED_DDL_NO_FK.format(schema=schema),
+            f"{schema}.achievements_awarded",
+        ):
+            raise SystemExit(
+                f"{schema}.achievements_awarded is missing and this DB user cannot "
+                "create it. Run the PAXMiner migration first."
+            )
+    # Views usually already exist; creating them needs CREATE VIEW, which the
+    # app user lacks, so only attempt when actually missing.
+    for view, ddl in (
+        ("achievements_view", ACHIEVEMENTS_VIEW_DDL),
+        ("attendance_view", ATTENDANCE_VIEW_DDL),
+    ):
+        if not _view_exists(cur, schema, view):
+            _try_ddl(cur, ddl.format(schema=schema), f"{schema}.{view}")
     for seed in ACHIEVEMENT_SEEDS:
         cur.execute(
             f"SELECT id FROM `{schema}`.`achievements_list` WHERE code=%s",
