@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Interactive, test-only seeder for PAXMiner.
 
-Pulls real users and AO channels from the **test** Slack workspace, walks each
-user, and lets you assign one goal (Kotter case or one achievement) so the next
-PAXMiner run awards it. Always loads ``.env.deploy.test`` — there is no ``--env``
-switch, and the script hard-fails if the target does not look like test.
+Pulls real users from the **test** Slack workspace and the AO list from QSignups
+(``qsignups_aos``), walks each user, and lets you assign one goal (Kotter case or
+one achievement) so the next PAXMiner run awards it. Always loads
+``.env.deploy.test`` — there is no ``--env`` switch, and the script hard-fails if
+the target does not look like test.
 
 Usage (from repo root):
 
@@ -101,6 +102,16 @@ def resolve_schemas(schema_arg: str | None) -> tuple[str, str]:
     else:
         registry = f"{bare_pm}_test"
     return regional, registry
+
+
+def resolve_qsignups_schema() -> str:
+    """QSignups schema for the test stage (holds the curated AO list)."""
+    bare = (os.environ.get("QSIGNUPS_SCHEMA") or "qsignups").strip()
+    if bare.endswith("_test"):
+        return bare
+    if "prod" in bare.lower():
+        raise SystemExit(f"Refusing prod QSignups schema QSIGNUPS_SCHEMA={bare!r}")
+    return f"{bare}_test"
 
 
 def assert_test_only(regional_schema: str, registry_schema: str) -> None:
@@ -717,6 +728,56 @@ def _try_ddl(cur, sql: str, what: str) -> bool:
     return True
 
 
+def load_qsignups_aos(conn, qs_schema: str, team_id: str) -> list[tuple[str, str]]:
+    """Curated AO list from QSignups: [(ao_display_name, ao_channel_id), ...].
+
+    QSignups is the source of truth for what is actually an AO; PAXMiner's
+    `aos` table tracks every channel it has seen (including paxminer_logs,
+    social, etc.), which is too noisy to pick from.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT ao_display_name, ao_channel_id
+                FROM `{qs_schema}`.`qsignups_aos`
+                WHERE team_id = %s AND ao_channel_id IS NOT NULL
+                ORDER BY ao_display_name
+                """,
+                (team_id,),
+            )
+            rows = cur.fetchall() or []
+    except Exception as exc:
+        LOG.warning("Could not read %s.qsignups_aos: %s", qs_schema, exc)
+        return []
+    return [
+        (str(r["ao_display_name"] or r["ao_channel_id"]), str(r["ao_channel_id"]))
+        for r in rows
+    ]
+
+
+def select_ao_candidates(
+    qs_aos: list[tuple[str, str]],
+    db_aos: list[tuple[str, str]],
+    slack_channels: list[tuple[str, str]],
+) -> tuple[list[tuple[str, str]], str, list[tuple[str, str]]]:
+    """Pick the AO list to offer: QSignups first, then PAXMiner aos, then channels.
+
+    Returns (aos, source, skipped_not_in_slack).
+    """
+    live = {cid for _, cid in slack_channels}
+    if qs_aos:
+        picked = [(n, c) for n, c in qs_aos if c in live]
+        missing = [(n, c) for n, c in qs_aos if c not in live]
+        if picked:
+            return picked, "qsignups", missing
+    if db_aos:
+        picked = [(n, c) for n, c in db_aos if c in live]
+        if picked:
+            return picked, "paxminer_aos", []
+    return list(slack_channels), "slack_channels", []
+
+
 def ensure_achievement_tables(cur, schema: str) -> None:
     from achievements.achievement_rules import (
         ACHIEVEMENTS_LIST_DDL,
@@ -1216,7 +1277,6 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("No channels returned from conversations_list")
     print(f"  users: {len(users)}  channels: {len(channels)}")
 
-    # Prefer channels that look like AOs: already in DB, else all channels.
     conn = connect(regional_schema)
     try:
         # Reconnect-style: also need registry on same host — use database switch.
@@ -1230,31 +1290,35 @@ def main(argv: list[str] | None = None) -> int:
         print_region_context(region, regional_schema, registry_schema)
         _print_achievement_catalog(catalog)
 
-        # Use AO rows already in DB when present; else all Slack channels.
+        # QSignups owns the curated AO list; PAXMiner's aos table includes every
+        # channel it has seen (paxminer_logs, social, ...) so it is a fallback only.
+        qs_schema = resolve_qsignups_schema()
+        qs_aos = load_qsignups_aos(conn, qs_schema, expected_team)
         with conn.cursor() as cur:
             cur.execute(
                 f"SELECT ao, channel_id FROM `{regional_schema}`.`aos` "
                 f"WHERE COALESCE(archived,0)=0 ORDER BY ao"
             )
             db_aos = [(r["ao"], r["channel_id"]) for r in (cur.fetchall() or [])]
-        # Intersect with live Slack channels when possible so IDs are real.
-        channel_by_id = {cid: name for name, cid in channels}
-        if db_aos:
-            aos = [
-                (channel_by_id.get(cid, name), cid)
-                for name, cid in db_aos
-                if cid in channel_by_id
-            ]
-            if not aos:
-                LOG.warning(
-                    "DB aos not found in Slack channel list; using all Slack channels"
-                )
-                aos = channels
-            else:
-                print(f"\nUsing {len(aos)} AO(s) from DB that exist in Slack.")
-        else:
-            aos = channels
-            print("\nNo aos rows yet; using all Slack channels as AO candidates.")
+
+        aos, ao_source, ao_missing = select_ao_candidates(qs_aos, db_aos, channels)
+        source_label = {
+            "qsignups": f"{qs_schema}.qsignups_aos",
+            "paxminer_aos": f"{regional_schema}.aos",
+            "slack_channels": "all Slack channels (no AO list found)",
+        }[ao_source]
+        print(f"\nAO source: {source_label} — {len(aos)} AO(s)")
+        if ao_missing:
+            LOG.warning(
+                "%s QSignups AO(s) skipped (channel not visible to the bot): %s",
+                len(ao_missing),
+                ", ".join(f"{n} ({c})" for n, c in ao_missing),
+            )
+        if ao_source == "slack_channels":
+            LOG.warning(
+                "Falling back to every Slack channel; non-AO channels like "
+                "paxminer_logs will appear in the list."
+            )
 
         actions = interactive_user_pass(users, aos, catalog, region)
         receipts: list[dict] = []

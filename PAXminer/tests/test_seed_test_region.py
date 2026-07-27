@@ -316,6 +316,67 @@ class _DenyingCursor:
         return getattr(self, "_row", None)
 
 
+# ---- AO source selection ----------------------------------------------------
+
+QS_AOS = [("The Goose", "CGOOSE"), ("COPA", "CCOPA")]
+DB_AOS = [("paxminer_logs", "CLOGS"), ("the-goose", "CGOOSE")]
+CHANNELS = [("paxminer_logs", "CLOGS"), ("ao-the-goose", "CGOOSE"), ("social", "CSOC")]
+
+
+def test_ao_source_prefers_qsignups_display_names():
+    aos, source, missing = seeder.select_ao_candidates(QS_AOS, DB_AOS, CHANNELS)
+    assert source == "qsignups"
+    assert aos == [("The Goose", "CGOOSE")]
+    assert missing == [("COPA", "CCOPA")]
+
+
+def test_ao_source_excludes_non_ao_channels():
+    aos, _, _ = seeder.select_ao_candidates(QS_AOS, DB_AOS, CHANNELS)
+    picked = {cid for _, cid in aos}
+    assert "CLOGS" not in picked
+    assert "CSOC" not in picked
+
+
+def test_ao_source_falls_back_to_paxminer_aos():
+    aos, source, missing = seeder.select_ao_candidates([], DB_AOS, CHANNELS)
+    assert source == "paxminer_aos"
+    assert aos == [("paxminer_logs", "CLOGS"), ("the-goose", "CGOOSE")]
+    assert missing == []
+
+
+def test_ao_source_falls_back_to_channels_when_no_ao_lists():
+    aos, source, _ = seeder.select_ao_candidates([], [], CHANNELS)
+    assert source == "slack_channels"
+    assert aos == CHANNELS
+
+
+def test_ao_source_falls_back_when_no_qsignups_ao_is_live():
+    aos, source, _ = seeder.select_ao_candidates(
+        [("Ghost", "CGONE")], DB_AOS, CHANNELS
+    )
+    assert source == "paxminer_aos"
+    assert all(cid != "CGONE" for _, cid in aos)
+
+
+def test_resolve_qsignups_schema_appends_test(monkeypatch):
+    monkeypatch.setenv("QSIGNUPS_SCHEMA", "qsignups")
+    assert seeder.resolve_qsignups_schema() == "qsignups_test"
+
+
+def test_resolve_qsignups_schema_rejects_prod(monkeypatch):
+    monkeypatch.setenv("QSIGNUPS_SCHEMA", "qsignups_prod")
+    with pytest.raises(SystemExit, match="prod QSignups"):
+        seeder.resolve_qsignups_schema()
+
+
+def test_load_qsignups_aos_returns_empty_on_error():
+    class Boom:
+        def cursor(self):
+            raise RuntimeError("no access")
+
+    assert seeder.load_qsignups_aos(Boom(), "qsignups_test", "T1") == []
+
+
 def test_attendance_view_ddl_matches_migrated_shape():
     """Consumers do SELECT * (PAXcharter), so columns/joins must match prod."""
     ddl = seeder.ATTENDANCE_VIEW_DDL.format(schema="f3ttown_test")

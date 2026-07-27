@@ -44,7 +44,7 @@ python PAXminer/scripts/seed_test_region.py
 # optional: python PAXminer/scripts/seed_test_region.py --schema f3ttown_test
 ```
 
-Pulls real test-workspace users and AO channels via `PM_SLACK_TOKEN`, walks each user (Kotter / one Achievement / clear `[SEED]` data / skip), auto pre-selects the required AO(s), and writes attendance sized to live Kotter thresholds / achievement rules. Requires `F3_REGION_SLACK_TEAM_ID` to match Slack `auth.test`. Dev-only — not part of CI or deploy.
+Pulls real test-workspace users via `PM_SLACK_TOKEN` and the AO list from QSignups (`qsignups_aos`, falling back to the regional `aos` table then all channels), walks each user (Kotter / one Achievement / clear `[SEED]` data / skip), auto pre-selects the required AO(s), and writes attendance sized to live Kotter thresholds / achievement rules. Requires `F3_REGION_SLACK_TEAM_ID` to match Slack `auth.test`. Dev-only — not part of CI or deploy.
 
 Prod-derived attendance is not useful in test (different Slack user IDs), so start from a clean slate:
 
