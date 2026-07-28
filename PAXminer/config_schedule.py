@@ -63,6 +63,7 @@ CODE_RENDERED_REPORT_TYPES = frozenset(
         "region_leaderboard",
         "ao_leaderboard",
         "achievement_leaderboard",
+        "award_achievements",
         "kotter",
     }
 )
@@ -73,8 +74,11 @@ def is_code_rendered(report_type: str | None) -> bool:
 
 
 def supports_time_window(report_type: str | None) -> bool:
-    """Kotter uses threshold config, not a report time window."""
-    return is_code_rendered(report_type) and report_type != "kotter"
+    """Kotter and Award Achievements use their own engine windows, not a report window."""
+    return is_code_rendered(report_type) and report_type not in (
+        "kotter",
+        "award_achievements",
+    )
 
 TIMEZONE_OPTIONS = [
     "America/New_York",
@@ -1147,6 +1151,21 @@ def _report_edit_modal(
                 ],
             }
         )
+    elif report_type == "award_achievements":
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": (
+                            "Award rules are configured under *PAX Achievements*. "
+                            "This schedule only controls when and where awards are posted."
+                        ),
+                    }
+                ],
+            }
+        )
 
     return {
         "type": "modal",
@@ -1221,7 +1240,7 @@ def parse_report_form(payload: dict) -> dict:
         "top_n": top_n,
         "time_window_type": (
             None
-            if report_type == "kotter"
+            if report_type in ("kotter", "award_achievements")
             else (draft.get("time_window_type") or "last_month")
         ),
         "window_days": window_days,
@@ -1250,7 +1269,7 @@ def validate_report_form(values: dict) -> dict[str, str]:
             errors["kind"] = "Invalid output"
         if values.get("source") not in ALLOWED_SOURCES:
             errors["source"] = "Invalid source"
-    if values.get("report_type") == "kotter":
+    if values.get("report_type") in ("kotter", "award_achievements"):
         return errors
     if values.get("time_window_type") == "custom":
         if not values.get("window_start"):

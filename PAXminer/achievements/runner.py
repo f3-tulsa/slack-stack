@@ -121,14 +121,20 @@ def run_achievements_for_region(
     post_to_ao: bool = False,
     ao_channel_id: str | None = None,
     dry_run: bool = False,
+    channel_override: str | None = None,
 ) -> dict:
     del pm_schema  # retained for call-site compatibility; attendance is single-region now
     year = date.today().year
     # Label logs with schema_name (e.g. f3ttown_test), not display region.
     region_name = regional_schema
-    if not region_row.get("send_achievements"):
-        return {"skipped": "send_achievements off"}
-    channel = region_row.get("achievement_channel")
+    # Schedule path passes channel_override and uses schedule.enabled as the gate.
+    # Webhook / legacy daily path still honors send_achievements.
+    if channel_override:
+        channel = channel_override
+    else:
+        if not region_row.get("send_achievements"):
+            return {"skipped": "send_achievements off"}
+        channel = region_row.get("achievement_channel")
     token_enc = region_row.get("slack_token")
     if not channel or not token_enc:
         return {"skipped": "missing channel or token"}
