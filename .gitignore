@@ -22,6 +22,7 @@ wheels/
 venv/
 .venv/
 .ven*
+.pytest_plugins/
 env/
 .env/
 ENV/

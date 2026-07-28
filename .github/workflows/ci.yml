@@ -119,8 +119,8 @@ jobs:
           python -m venv .venv-paxminer
           . .venv-paxminer/bin/activate
           # Heavy image deps + light Slack Bolt deps (boto3 is on Lambda runtime; needed locally for adapter import)
-          pip install pytest boto3 -r PAXminer/requirements-lambda.txt -r PAXminer/requirements-slack.txt
-          cd PAXminer && pytest -q tests/test_achievements.py tests/test_handlers.py tests/test_slack_app.py tests/test_scheduling.py tests/test_manifest.py tests/test_seed_test_region.py tests/test_reset_test_region.py tests/test_paxminer_db.py
+          pip install pytest pytest-timeout boto3 -r PAXminer/requirements-lambda.txt -r PAXminer/requirements-slack.txt
+          cd PAXminer && pytest -q tests/test_achievements.py tests/test_handlers.py tests/test_slack_app.py tests/test_scheduling.py tests/test_manifest.py tests/test_seed_test_region.py tests/test_reset_test_region.py tests/test_paxminer_db.py tests/test_slack_util_mention.py
       - name: pytest migration
         run: |
           set -euo pipefail
