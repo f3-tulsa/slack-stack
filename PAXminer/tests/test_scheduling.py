@@ -68,6 +68,90 @@ def test_is_due_now_at_or_after_and_idempotency():
     assert is_due_now(schedule, timezone_name="America/Chicago", utc_now=utc)
 
 
+def test_hourly_is_due_today_and_minute_gate():
+    from scheduling import FREQUENCY_TYPES, already_ran_this_hour, format_schedule_summary
+
+    assert "hourly" in FREQUENCY_TYPES
+    assert is_due_today({"frequency_type": "hourly"}, date(2026, 7, 19))
+
+    # 13:20 CDT = 18:20 UTC
+    utc = datetime(2026, 7, 19, 18, 20, tzinfo=ZoneInfo("UTC"))
+    schedule = {
+        "frequency_type": "hourly",
+        "time_of_day": "00:15:00",
+        "last_run_at": None,
+        "last_run_status": None,
+    }
+    assert is_due_now(schedule, timezone_name="America/Chicago", utc_now=utc)
+
+    early = datetime(2026, 7, 19, 18, 5, tzinfo=ZoneInfo("UTC"))  # 13:05 CDT
+    assert not is_due_now(schedule, timezone_name="America/Chicago", utc_now=early)
+
+    schedule["last_run_at"] = datetime(2026, 7, 19, 13, 15)
+    schedule["last_run_status"] = "success"
+    assert already_ran_this_hour(schedule, datetime(2026, 7, 19, 13, 45))
+    assert not is_due_now(schedule, timezone_name="America/Chicago", utc_now=utc)
+
+    # Next hour clears the guard
+    next_hour = datetime(2026, 7, 19, 19, 20, tzinfo=ZoneInfo("UTC"))  # 14:20 CDT
+    assert is_due_now(schedule, timezone_name="America/Chicago", utc_now=next_hour)
+
+    summary = format_schedule_summary(
+        {
+            "id": 1,
+            "name": "Award Achievements",
+            "destination_type": "specific_channels",
+            "frequency_type": "hourly",
+            "time_of_day": "00:15:00",
+            "enabled": 1,
+        },
+        {"name": "Award Achievements"},
+    )
+    assert "hourly @ :15" in summary
+
+
+def test_award_achievements_destination_and_dispatch():
+    from unittest.mock import MagicMock, patch
+
+    from schedule_runner import _dispatch_report
+    from scheduling import destination_valid_for_report
+
+    assert destination_valid_for_report("award_achievements", "specific_channels")
+    assert not destination_valid_for_report("award_achievements", "dm_all_pax")
+
+    region = {
+        "schema_name": "f3test",
+        "slack_token": "enc",
+        "send_achievements": 0,
+        "achievement_channel": None,
+    }
+    schedule = {
+        "destination_type": "specific_channels",
+        "destination_channels": '["C_AWARD"]',
+    }
+    definition = {"report_type": "award_achievements", "code": "award_achievements"}
+
+    with patch("schedule_runner.decrypt_field", return_value="xoxb-test"):
+        with patch("schedule_runner.connect_from_env") as mock_conn:
+            mock_conn.return_value = MagicMock()
+            with patch(
+                "schedule_runner.resolve_destinations",
+                return_value=[{"kind": "channel", "id": "C_AWARD"}],
+            ):
+                with patch(
+                    "achievements.runner.run_achievements_for_region",
+                    return_value={"grants": 1, "revokes": 0},
+                ) as mock_run:
+                    result = _dispatch_report(
+                        MagicMock(), "paxminer_test", region, schedule, definition
+                    )
+
+    mock_run.assert_called_once()
+    assert mock_run.call_args.kwargs["channel_override"] == "C_AWARD"
+    assert mock_run.call_args.kwargs["regional_schema"] == "f3test"
+    assert result.get("channel_count") == 1 or result.get("posted_channels")
+
+
 def test_already_ran_successfully():
     assert already_ran_successfully(
         {"last_run_on": date(2026, 7, 19), "last_run_status": "success"},
@@ -455,13 +539,55 @@ def test_report_defaults_json_consistency():
     from scheduling import BUILTIN_DEFINITIONS, DEFAULT_SCHEDULES, VALID_DESTINATIONS
 
     codes = {d["code"] for d in BUILTIN_DEFINITIONS}
-    assert len(BUILTIN_DEFINITIONS) == 6
-    assert len(DEFAULT_SCHEDULES) == 6
+    assert len(BUILTIN_DEFINITIONS) == 7
+    assert len(DEFAULT_SCHEDULES) == 7
+    assert "award_achievements" in codes
     assert {s["code"] for s in DEFAULT_SCHEDULES} == codes
     for s in DEFAULT_SCHEDULES:
         assert s.get("enabled") is True
         defn = next(d for d in BUILTIN_DEFINITIONS if d["code"] == s["code"])
         assert s["destination_type"] in VALID_DESTINATIONS[defn["report_type"]]
+
+
+def test_backfill_award_achievements_schedules_idempotent():
+    from unittest.mock import MagicMock, patch
+
+    from schedule_schema import backfill_award_achievements_schedules
+
+    cur = MagicMock()
+    region = {
+        "schema_name": "f3ttown_test",
+        "achievement_channel": "C_ACH",
+        "send_achievements": 1,
+    }
+    cur.fetchall.return_value = [region]
+
+    with patch("schedule_schema._table_exists", return_value=True):
+        with patch(
+            "schedule_schema.upsert_builtin_definitions",
+            return_value={"award_achievements": 42},
+        ):
+            cur.fetchone.return_value = {"c": 0}
+            first = backfill_award_achievements_schedules(cur, "paxminer_test")
+            assert first["schedules_inserted"] == 1
+            insert_calls = [
+                c for c in cur.execute.call_args_list if "INSERT INTO" in str(c.args[0])
+            ]
+            assert len(insert_calls) == 1
+            args = insert_calls[0].args[1]
+            assert args[2] == "specific_channels"
+            assert "C_ACH" in args[3]
+            assert args[4] == "daily"
+
+            cur.reset_mock()
+            cur.fetchall.return_value = [region]
+            cur.fetchone.return_value = {"c": 1}
+            second = backfill_award_achievements_schedules(cur, "paxminer_test")
+            assert second["schedules_inserted"] == 0
+            assert second["skipped"] == 1
+            assert not any(
+                "INSERT INTO" in str(c.args[0]) for c in cur.execute.call_args_list
+            )
 
 
 def test_seed_default_schedules_uses_defaults_json():

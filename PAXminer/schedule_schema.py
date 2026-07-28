@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS `{schema}`.`region_schedules` (
   `custom_spec` json DEFAULT NULL,
   `enabled` tinyint NOT NULL DEFAULT 1,
   `last_run_on` date DEFAULT NULL,
+  `last_run_at` datetime DEFAULT NULL,
   `last_run_status` varchar(20) DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -143,6 +144,31 @@ def ensure_is_customized_column(cur, pm_schema: str) -> bool:
         """
     )
     LOG.info("Added %s.region_report_definitions.is_customized", pm_schema)
+    return True
+
+
+def ensure_last_run_at_column(cur, pm_schema: str) -> bool:
+    """Add region_schedules.last_run_at if missing. Returns True when added."""
+    if not _table_exists(cur, pm_schema, "region_schedules"):
+        return False
+    cur.execute(
+        """
+        SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA=%s AND TABLE_NAME='region_schedules'
+          AND COLUMN_NAME='last_run_at'
+        """,
+        (pm_schema,),
+    )
+    if int(cur.fetchone()["c"]) > 0:
+        return False
+    cur.execute(
+        f"""
+        ALTER TABLE `{pm_schema}`.`region_schedules`
+        ADD COLUMN `last_run_at` datetime DEFAULT NULL
+          AFTER `last_run_on`
+        """
+    )
+    LOG.info("Added %s.region_schedules.last_run_at", pm_schema)
     return True
 
 
@@ -316,6 +342,85 @@ def seed_default_schedules(
             dest_type,
         )
     return inserted
+
+
+def backfill_award_achievements_schedules(cur, pm_schema: str) -> dict[str, int]:
+    """Create Award Achievements schedules for regions that used the daily EventBridge path.
+
+    For each active region with send_achievements=1 and a non-empty
+    achievement_channel that has no award_achievements schedule yet, ensure the
+    builtin definition exists and insert a daily 07:00 specific_channels schedule
+    targeting that channel. Idempotent on re-run.
+    """
+    import json
+
+    if not _table_exists(cur, pm_schema, "region_schedules"):
+        return {"definitions_ensured": 0, "schedules_inserted": 0, "skipped": 0}
+
+    cur.execute(
+        f"""
+        SELECT schema_name, achievement_channel, send_achievements
+        FROM `{pm_schema}`.`regions`
+        WHERE active = 1
+          AND COALESCE(send_achievements, 0) = 1
+          AND achievement_channel IS NOT NULL
+          AND achievement_channel != ''
+        """
+    )
+    regions = list(cur.fetchall() or [])
+    definitions_ensured = 0
+    schedules_inserted = 0
+    skipped = 0
+    for region in regions:
+        regional = region.get("schema_name") or ""
+        channel = (region.get("achievement_channel") or "").strip()
+        if not regional or not channel:
+            skipped += 1
+            continue
+        code_to_id = upsert_builtin_definitions(cur, pm_schema, regional)
+        def_id = code_to_id.get("award_achievements")
+        if not def_id:
+            # Insert only the award_achievements definition if missing from builtins.
+            skipped += 1
+            continue
+        definitions_ensured += 1
+        cur.execute(
+            f"""
+            SELECT COUNT(*) AS c FROM `{pm_schema}`.`region_schedules`
+            WHERE schema_name=%s AND report_definition_id=%s
+            """,
+            (regional, def_id),
+        )
+        if int(cur.fetchone()["c"]) > 0:
+            skipped += 1
+            continue
+        cur.execute(
+            f"""
+            INSERT INTO `{pm_schema}`.`region_schedules`
+              (schema_name, report_definition_id, destination_type, destination_channels,
+               frequency_type, time_of_day, enabled)
+            VALUES (%s, %s, %s, %s, %s, %s, 1)
+            """,
+            (
+                regional,
+                def_id,
+                "specific_channels",
+                json.dumps([channel]),
+                "daily",
+                "07:00:00",
+            ),
+        )
+        schedules_inserted += 1
+        LOG.info(
+            "Backfilled award_achievements schedule schema=%s channel=%s",
+            regional,
+            channel,
+        )
+    return {
+        "definitions_ensured": definitions_ensured,
+        "schedules_inserted": schedules_inserted,
+        "skipped": skipped,
+    }
 
 
 def seed_all_regions(cur, pm_schema: str) -> dict[str, int]:

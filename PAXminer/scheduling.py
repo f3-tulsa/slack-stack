@@ -21,6 +21,7 @@ REPORT_TYPES = (
     "region_leaderboard",
     "ao_leaderboard",
     "achievement_leaderboard",
+    "award_achievements",
     "kotter",
     "custom_report",
 )
@@ -32,7 +33,7 @@ DESTINATION_TYPES = (
     "dm_specific_pax",
 )
 
-FREQUENCY_TYPES = ("daily", "weekly", "monthly", "custom")
+FREQUENCY_TYPES = ("hourly", "daily", "weekly", "monthly", "custom")
 MONTH_DAY_MODES = ("first", "last", "specific")
 TIME_WINDOW_TYPES = ("relative_days", "last_month", "ytd", "custom")
 REPORT_KINDS = ("chart", "table")
@@ -45,6 +46,7 @@ VALID_DESTINATIONS: dict[str, tuple[str, ...]] = {
     "region_leaderboard": ("specific_channels", "all_ao_channels"),
     "ao_leaderboard": ("all_ao_channels", "specific_channels"),
     "achievement_leaderboard": ("specific_channels", "all_ao_channels"),
+    "award_achievements": ("specific_channels",),
     "kotter": ("specific_channels",),
     "custom_report": DESTINATION_TYPES,
 }
@@ -144,6 +146,8 @@ def _last_day_of_month(d: date) -> int:
 def is_due_today(schedule: dict[str, Any], local_date: date) -> bool:
     """True when the schedule's calendar rule matches local_date."""
     freq = (schedule.get("frequency_type") or "monthly").strip()
+    if freq == "hourly":
+        return True
     if freq == "daily":
         return True
     if freq == "weekly":
@@ -209,20 +213,56 @@ def already_ran_successfully(schedule: dict[str, Any], local_date: date) -> bool
     return status == "success"
 
 
+def already_ran_this_hour(schedule: dict[str, Any], local_dt: datetime) -> bool:
+    """Skip when last_run_at falls in the same local hour and status is success."""
+    last_at = schedule.get("last_run_at")
+    if last_at is None:
+        return False
+    if isinstance(last_at, str):
+        last_at = datetime.fromisoformat(last_at.replace("Z", "+00:00"))
+        if last_at.tzinfo is not None:
+            # Compare as naive local wall time when timezone unknown; callers
+            # should store UTC and pass timezone-aware local_dt when possible.
+            last_at = last_at.replace(tzinfo=None)
+    elif isinstance(last_at, datetime) and last_at.tzinfo is not None:
+        last_at = last_at.replace(tzinfo=None)
+    local_naive = local_dt.replace(tzinfo=None) if local_dt.tzinfo else local_dt
+    if (last_at.year, last_at.month, last_at.day, last_at.hour) != (
+        local_naive.year,
+        local_naive.month,
+        local_naive.day,
+        local_naive.hour,
+    ):
+        return False
+    status = (schedule.get("last_run_status") or "").strip().lower()
+    return status == "success"
+
+
 def is_due_now(
     schedule: dict[str, Any],
     *,
     timezone_name: str | None,
     utc_now: datetime | None = None,
 ) -> bool:
-    """Due today + region-local now >= time_of_day + not already run successfully today."""
+    """Due today + region-local now >= time_of_day + not already run successfully.
+
+    Hourly schedules use ``last_run_at`` for intra-day idempotency and fire when
+    the local minute is past the configured minute-of-hour from ``time_of_day``.
+    """
     local = region_local_now(timezone_name, utc_now=utc_now)
     local_date = local.date()
+    freq = (schedule.get("frequency_type") or "monthly").strip()
+    tod = parse_time_of_day(schedule.get("time_of_day"))
+
+    if freq == "hourly":
+        if already_ran_this_hour(schedule, local):
+            return False
+        return local.minute >= tod.minute
+
     if already_ran_successfully(schedule, local_date):
         return False
     if not is_due_today(schedule, local_date):
         return False
-    tod = parse_time_of_day(schedule.get("time_of_day"))
     return local.time().replace(tzinfo=None) >= tod
 
 
@@ -310,7 +350,11 @@ def format_schedule_summary(schedule: dict[str, Any], definition: dict[str, Any]
     freq = schedule.get("frequency_type") or "?"
     tod = parse_time_of_day(schedule.get("time_of_day"))
     enabled = "on" if schedule.get("enabled") else "off"
-    line = f"*{name}* — {dest} / {freq} @ {tod.strftime('%H:%M')} ({enabled})"
+    if freq == "hourly":
+        time_label = f":{tod.minute:02d}"
+    else:
+        time_label = tod.strftime("%H:%M")
+    line = f"*{name}* — {dest} / {freq} @ {time_label} ({enabled})"
     status = (schedule.get("last_run_status") or "").strip()
     last_on = schedule.get("last_run_on")
     if status or last_on:

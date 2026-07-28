@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -88,16 +88,36 @@ def resolve_destinations(
     return []
 
 
-def mark_schedule_status(conn, pm_schema: str, schedule_id: int, local_date: date, status: str) -> None:
+def mark_schedule_status(
+    conn,
+    pm_schema: str,
+    schedule_id: int,
+    local_date: date,
+    status: str,
+    *,
+    local_dt: datetime | None = None,
+) -> None:
+    """Record run outcome. ``local_dt`` (region wall time) populates last_run_at for hourly."""
+    run_at = local_dt.replace(tzinfo=None) if local_dt is not None else None
     with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            UPDATE `{pm_schema}`.`region_schedules`
-            SET last_run_on=%s, last_run_status=%s
-            WHERE id=%s
-            """,
-            (local_date.isoformat(), status, schedule_id),
-        )
+        if run_at is not None:
+            cur.execute(
+                f"""
+                UPDATE `{pm_schema}`.`region_schedules`
+                SET last_run_on=%s, last_run_at=%s, last_run_status=%s
+                WHERE id=%s
+                """,
+                (local_date.isoformat(), run_at.strftime("%Y-%m-%d %H:%M:%S"), status, schedule_id),
+            )
+        else:
+            cur.execute(
+                f"""
+                UPDATE `{pm_schema}`.`region_schedules`
+                SET last_run_on=%s, last_run_status=%s
+                WHERE id=%s
+                """,
+                (local_date.isoformat(), status, schedule_id),
+            )
     conn.commit()
 
 
@@ -380,8 +400,14 @@ def run_one_schedule_item(
     if not region:
         try:
             tz_guess = "America/Chicago"
+            local_guess = region_local_now(tz_guess)
             mark_schedule_status(
-                registry_conn, pm_schema, schedule_id, region_local_now(tz_guess).date(), "error"
+                registry_conn,
+                pm_schema,
+                schedule_id,
+                local_guess.date(),
+                "error",
+                local_dt=local_guess,
             )
         except Exception:
             LOG.exception("mark error status failed schedule_id=%s", schedule_id)
@@ -399,7 +425,9 @@ def run_one_schedule_item(
 
     definition = _load_definition(registry_conn, pm_schema, int(schedule["report_definition_id"]))
     if not definition:
-        mark_schedule_status(registry_conn, pm_schema, schedule_id, local_date, "error")
+        mark_schedule_status(
+            registry_conn, pm_schema, schedule_id, local_date, "error", local_dt=local
+        )
         out = {
             "schedule_id": schedule_id,
             "ok": False,
@@ -427,7 +455,9 @@ def run_one_schedule_item(
             "schema": schema_name,
         }
 
-    mark_schedule_status(registry_conn, pm_schema, schedule_id, local_date, "running")
+    mark_schedule_status(
+        registry_conn, pm_schema, schedule_id, local_date, "running", local_dt=local
+    )
     try:
         result = _dispatch_report(
             registry_conn,
@@ -437,7 +467,9 @@ def run_one_schedule_item(
             definition,
         )
         status = _result_status(result)
-        mark_schedule_status(registry_conn, pm_schema, schedule_id, local_date, status)
+        mark_schedule_status(
+            registry_conn, pm_schema, schedule_id, local_date, status, local_dt=local
+        )
         out = {
             "schedule_id": schedule_id,
             "ok": status != "error",
@@ -461,7 +493,9 @@ def run_one_schedule_item(
             schedule_id,
             report_type,
         )
-        mark_schedule_status(registry_conn, pm_schema, schedule_id, local_date, "error")
+        mark_schedule_status(
+            registry_conn, pm_schema, schedule_id, local_date, "error", local_dt=local
+        )
         out = {
             "schedule_id": schedule_id,
             "ok": False,
@@ -518,7 +552,7 @@ def _dispatch_report(
             }
 
         window = None
-        if report_type != "kotter":
+        if report_type not in ("kotter", "award_achievements"):
             window = resolve_time_window(
                 definition, timezone_name=region.get("timezone")
             )
@@ -618,6 +652,30 @@ def _dispatch_report(
                     result["posted_channels"] = posted_channels
                     result["failed_channels"] = failed_channels
                 return _apply_delivery_result(result, attempted_channels=len(channel_ids))
+            return result
+        if report_type == "award_achievements":
+            from achievements.runner import run_achievements_for_region
+
+            if not channel_ids:
+                return {
+                    "skipped": "no destinations configured",
+                    "channel_count": 0,
+                    "user_count": 0,
+                }
+            result = run_achievements_for_region(
+                registry_conn,
+                pm_schema=pm_schema,
+                regional_schema=schema_name,
+                region_row=region,
+                channel_override=channel_ids[0],
+            )
+            if isinstance(result, dict):
+                result = dict(result)
+                if result.get("skipped"):
+                    return _apply_delivery_result(result, attempted_channels=0)
+                posted = [{"ao": "awards", "channel_id": channel_ids[0]}]
+                result["posted_channels"] = posted
+                return _apply_delivery_result(result, attempted_channels=1)
             return result
         if report_type == "kotter":
             from kotter.kotter_report import run_kotter_for_region
