@@ -20,9 +20,9 @@ Posting cadence and destinations come from PAXMiner-owned schedule tables (alway
 | `paxminer.region_schedules` | When/where (destination, frequency, `time_of_day`, enabled) |
 | `paxminer.regions.timezone` | Region TZ (default `America/Chicago`) for due-now evaluation |
 
-`ScheduleFunction` ticks every **15 minutes**, evaluates region-local now, and runs due items (idempotent via `last_run_on` / `last_run_status`). Configure via `/config-paxminer` → **Schedule** / **PAX Reports**.
+`ScheduleFunction` ticks every **15 minutes**, evaluates region-local now, and runs due items (idempotent via `last_run_on` / `last_run_at` / `last_run_status`). Frequencies: **hourly**, daily, weekly, monthly, or custom interval. Configure via `/config-paxminer` → **Schedule** / **PAX Reports**.
 
-**Builtin reports** (from `report_defaults.json`) render from dedicated Python (charts, Kotter, achievement leaderboard). You can **rename**, set a **time window** (honored by the SQL), **duplicate**, **delete**, and **schedule** them. Kotter has no time window — it uses Kotter threshold config. **Custom reports** use the full builder (source, fields, metric, chart vs table).
+**Builtin reports** (from `report_defaults.json`) render from dedicated Python (charts, Kotter, award achievements, achievement leaderboard). You can **rename**, set a **time window** (honored by the SQL), **duplicate**, **delete**, and **schedule** them. Kotter and Award Achievements have no time window — they use their own engines. **Custom reports** use the full builder (source, fields, metric, chart vs table).
 
 **Defaults load on demand only** — migration creates tables/columns but does **not** seed `report_defaults.json`. Use **Load defaults** on an empty Reports/Schedule list, or **Restore Defaults** later. Restore merges missing builtins/schedules; rows with `is_customized=1` keep their edits. **Delete** removes the definition and any schedules that reference it (FK stays `RESTRICT` with app-level cascade). **Duplicate** copies a definition with a uniquified `*_copy` code and no schedules.
 
@@ -38,13 +38,13 @@ Migration: `python migration/paxminer_migrate.py --env test|prod --all` (phases:
 
 | Message | When | Enabled by | Destination(s) |
 |---------|------|------------|----------------|
-| Achievement **granted** (+ emoji reaction) | Daily achievements run | `send_achievements` | Achievement channel **and** a DM to the PAX (+ the AO channel if `post_to_ao`) |
-| Achievement **revoked** | Daily achievements run | `send_achievements` | Achievement channel (+ AO channel if `post_to_ao`) |
+| Achievement **granted** (+ emoji reaction) | Schedule (**Award Achievements**, default: daily) | Schedule row `enabled` | Schedule channel **and** a DM to the PAX (+ the AO channel if `post_to_ao`) |
+| Achievement **revoked** | Same Award Achievements run | Schedule row `enabled` | Schedule channel (+ AO channel if `post_to_ao`) |
 | **Achievement leaderboard (YTD)** | Schedule (default: monthly) | Schedule row `enabled` | Schedule destinations |
 | **"Almost there"** progress list | With leaderboard | Schedule row `enabled` | Same as leaderboard |
 | **Kotter / AOQ report** | Schedule + **Run Now** | Schedule row `enabled` | Schedule destinations |
 
-Daily achievement **grant/revoke** uses `achievement_channel` from `/config-paxminer` (not the schedule). Leaderboards, Kotter, and charts are schedule-driven.
+Award grant/revoke, leaderboards, Kotter, and charts are all schedule-driven. Award rules still live under **PAX Achievements**; the schedule only controls when/where awards post.
 
 ### Chart images (`files_upload_v2`)
 
@@ -61,7 +61,7 @@ Daily achievement **grant/revoke** uses `achievement_channel` from `/config-paxm
 
 | Surface | Trigger | Notes |
 |---------|---------|-------|
-| `/config-paxminer` hub | slash | admin-only; timezone + Achievements on Save; hub buttons for Reports / Kotter thresholds / Schedule |
+| `/config-paxminer` hub | slash | admin-only; timezone on Save; hub buttons for Achievements rules / Reports / Kotter thresholds / Schedule |
 | Schedule / Reports modals | hub buttons | editable builtins + custom builder; Duplicate; Load/Restore defaults; Delete All; Run Now (DMs result) |
 | App Home | `app_home_opened` | minimal stub; full dashboard later |
 
@@ -71,8 +71,8 @@ Daily achievement **grant/revoke** uses `achievement_channel` from `/config-paxm
 |----------|---------|------|
 | **slack** | Function URL + keep-warm every 5 min | Bolt front door; async-invokes ScheduleFunction for Run Now |
 | **sync** | Daily | User/channel sync |
-| **achievements** | Daily + webhook | Grant/revoke |
-| **schedule** | `rate(15 minutes)` + async fan-out / Run Now | Unified dispatcher for charts, leaderboards, Kotter, and custom reports |
+| **achievements** | Webhook (+ smoke) | Grant/revoke (also via ScheduleFunction for Award Achievements) |
+| **schedule** | `rate(15 minutes)` + async fan-out / Run Now | Unified dispatcher for awards, charts, leaderboards, Kotter, and custom reports |
 
 Function URL outputs: **`SlackFunctionUrl`**, **`AchievementsFunctionUrl`**.
 
