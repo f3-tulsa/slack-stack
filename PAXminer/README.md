@@ -96,19 +96,20 @@ Empty attendance for Achievements/Kotter returns a clear skip/error (and Achieve
 
 **Test-only** seeder. Always loads [`.env.deploy.test`](../.env.deploy.example) (no `--env` switch) and hard-fails unless the regional/registry schemas end in `_test` and Slack `auth.test` matches `F3_REGION_SLACK_TEAM_ID`.
 
-**Default (one-shot):** clears prior `[SEED]` / `json.seed` rows, then rebuilds a realistic ~180-day calendar — weekly multi-PAX beatdowns at every QSignups AO, Q from a pool of real humans plus synthetic `[SEED] PAX nn` users (`--synthetic-pax`, default 12). Synthetic PAX make leaderboards meaningful but are not in Slack, so Kotter mentions them literally and `dm_all_pax` may log DM failures for them — use `dm_specific_pax` (yourself) when testing PAX charts, or `--synthetic-pax 0`.
+**Default (one-shot):** purges any leftover legacy synthetic users (`USEEDPAX*` / `USEEDFILLER*`) and off-roster humans, clears prior `[SEED]` / `json.seed` rows, then rebuilds a realistic ~180-day calendar — weekly multi-PAX (2–4) beatdowns at QSignups AOs using **real Slack users only** (no synthetic PAX). Use `--purge-synthetic` alone to clean without reseeding. `--verify` / `--verify-only` report any remaining synthetic or off-roster users.
 
 ```bash
 # From repo root, with .env.deploy.test filled in
 python PAXminer/scripts/seed_test_region.py --yes --verify
-python PAXminer/scripts/seed_test_region.py --yes --days 180 --synthetic-pax 12 --kotter mia,lowq,noq
+python PAXminer/scripts/seed_test_region.py --yes --days 180 --kotter mia,lowq,noq
+python PAXminer/scripts/seed_test_region.py --purge-synthetic --yes
 # Interactive overlays on top of whatever is already in the DB
 python PAXminer/scripts/seed_test_region.py --interactive
 # Destination / row-count preflight only (no writes)
 python PAXminer/scripts/seed_test_region.py --verify-only
 ```
 
-AO list comes from QSignups (`qsignups_test.qsignups_aos`), falling back to regional `aos` then all Slack channels. Interactive mode walks each user (Kotter / one Achievement / clear / skip); overlays **join** existing beatdowns when possible (bump `pax_count`) instead of inventing one-man events, and spread multi-AO goals across distinct dates. Seeded rows are tagged `[SEED]` in backblast and `{"seed": true}` in `json` so clear only removes synthetic data. After seeding, run the achievements job (or Schedule → Run Now) to grant awards from attendance — the seeder shapes data rather than inserting fake awards. Not wired into CI or deploy.
+AO list comes from QSignups (`qsignups_test.qsignups_aos`), falling back to regional `aos` then all Slack channels. Interactive mode walks each user (Kotter / one Achievement / clear / skip); overlays **join** existing beatdowns when possible (bump `pax_count`) instead of inventing one-man events, and spread multi-AO goals across distinct dates. Seeded rows are tagged `[SEED]` in backblast and `{"seed": true}` in `json` so clear only removes seed-tagged data. After seeding, run the achievements job (or Schedule → Run Now) to grant awards from attendance — the seeder shapes data rather than inserting fake awards. Not wired into CI or deploy.
 
 To wipe prod-derived attendance first (same test-only guards, typed confirmation):
 

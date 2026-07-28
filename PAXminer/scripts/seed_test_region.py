@@ -5,8 +5,10 @@ Always loads ``.env.deploy.test`` and hard-fails if the target does not look
 like test. Pulls real Slack users and the AO list from QSignups (``qsignups_aos``).
 
 **One-shot (default):** clear prior seed data, write ~180 days of multi-PAX
-weekly beatdowns, optional Kotter overlays, and threshold-minus-one shapes for
-a few users. Run the achievements job (Schedule → Run Now) afterward.
+weekly beatdowns (real Slack users only), optional Kotter overlays, and
+threshold-minus-one shapes for a few users. Legacy synthetic users
+(``USEEDPAX*`` / ``USEEDFILLER*``) are purged at the start of every seed run.
+Run the achievements job (Schedule → Run Now) afterward.
 
 **Interactive (``--interactive``):** walk each user and assign Kotter or one
 achievement; overlays join onto the existing calendar when possible.
@@ -16,6 +18,7 @@ Usage (from repo root):
   python PAXminer/scripts/seed_test_region.py
   python PAXminer/scripts/seed_test_region.py --yes --days 180 --verify
   python PAXminer/scripts/seed_test_region.py --interactive --schema f3ttown_test
+  python PAXminer/scripts/seed_test_region.py --purge-synthetic --yes
   python PAXminer/scripts/seed_test_region.py --verify-only
 
 Not wired into CI or deploy.
@@ -44,9 +47,9 @@ LOG = logging.getLogger("seed_test_region")
 
 SEED_SENTINEL = "[SEED]"
 SEED_JSON = '{"seed": true}'
-FILLER_Q_USER_ID = "USEEDFILLER0XX"
-FILLER_Q_NAME = f"{SEED_SENTINEL} Q"
-SYNTHETIC_USER_PREFIX = "USEEDPAX"
+# Legacy synthetic IDs from older seeder runs — purge-only; never create new ones.
+LEGACY_SYNTHETIC_USER_PREFIX = "USEEDPAX"
+LEGACY_FILLER_Q_USER_ID = "USEEDFILLER0XX"
 DEPLOY_ENV_FILE = _REPO_ROOT / ".env.deploy.test"
 
 # Mirrors the national PAXMiner attendance_view that migration copies, including
@@ -164,11 +167,14 @@ def assert_slack_team(client: Any, expected_team_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def fetch_workspace_users(client: Any) -> list[tuple[str, str]]:
-    """Return [(display_name, user_id), ...] excluding bots/deleted/Slackbot."""
-    users: list[tuple[str, str]] = []
-    cursor = None
-    while True:
+def fetch_workspace_profiles(client: Any) -> list[dict[str, str]]:
+    """Return Slack human profiles: user_id, display_name, real_name."""
+    from slack_util import MAX_SLACK_PAGES, next_slack_cursor
+
+    profiles: list[dict[str, str]] = []
+    cursor = ""
+    seen: set[str] = set()
+    for _ in range(MAX_SLACK_PAGES):
         kwargs: dict[str, Any] = {"limit": 200}
         if cursor:
             kwargs["cursor"] = cursor
@@ -179,26 +185,45 @@ def fetch_workspace_users(client: Any) -> list[tuple[str, str]]:
             if u.get("is_app_user"):
                 continue
             profile = u.get("profile") or {}
-            name = (
+            real_name = str(
+                profile.get("real_name") or u.get("real_name") or u.get("name") or u.get("id")
+            )
+            display_name = str(
                 profile.get("display_name")
                 or profile.get("real_name")
                 or u.get("real_name")
                 or u.get("name")
                 or u.get("id")
             )
-            users.append((str(name), str(u["id"])))
-        cursor = (resp.get("response_metadata") or {}).get("next_cursor") or ""
+            profiles.append(
+                {
+                    "user_id": str(u["id"]),
+                    "display_name": display_name,
+                    "real_name": real_name,
+                }
+            )
+        cursor = next_slack_cursor(resp, seen)
         if not cursor:
             break
-    users.sort(key=lambda x: x[0].lower())
-    return users
+    profiles.sort(key=lambda p: p["display_name"].lower())
+    return profiles
+
+
+def fetch_workspace_users(client: Any) -> list[tuple[str, str]]:
+    """Return [(display_name, user_id), ...] excluding bots/deleted/Slackbot."""
+    return [
+        (p["display_name"], p["user_id"]) for p in fetch_workspace_profiles(client)
+    ]
 
 
 def fetch_workspace_channels(client: Any) -> list[tuple[str, str]]:
     """Return [(channel_name, channel_id), ...] for public + member private."""
+    from slack_util import MAX_SLACK_PAGES, next_slack_cursor
+
     channels: list[tuple[str, str]] = []
-    cursor = None
-    while True:
+    cursor = ""
+    seen: set[str] = set()
+    for _ in range(MAX_SLACK_PAGES):
         kwargs: dict[str, Any] = {
             "types": "public_channel,private_channel",
             "exclude_archived": True,
@@ -215,7 +240,7 @@ def fetch_workspace_channels(client: Any) -> list[tuple[str, str]]:
                 continue
             name = c.get("name") or c.get("id")
             channels.append((str(name), str(c["id"])))
-        cursor = (resp.get("response_metadata") or {}).get("next_cursor") or ""
+        cursor = next_slack_cursor(resp, seen)
         if not cursor:
             break
     channels.sort(key=lambda x: x[0].lower())
@@ -365,16 +390,29 @@ def co_triggered_achievements(achievement: dict, catalog: Iterable[dict]) -> lis
     return out
 
 
+def pick_filler_q(pool: list[tuple[str, str]], exclude: str | set[str]) -> str:
+    """Pick a deterministic real user from ``pool`` excluding ``exclude``.
+
+    Returns the first other user by sorted user_id.
+    """
+    excluded = {exclude} if isinstance(exclude, str) else set(exclude)
+    candidates = sorted(uid for _, uid in pool if uid not in excluded)
+    if not candidates:
+        raise ValueError(
+            "No filler Q available in pool (need at least one other real user)"
+        )
+    return candidates[0]
+
+
 def _pick_q_from_pool(
     pool: list[tuple[str, str]],
     exclude: set[str],
     *,
     index: int = 0,
-    fallback: str = FILLER_Q_USER_ID,
 ) -> str:
     candidates = [uid for _, uid in pool if uid not in exclude]
     if not candidates:
-        return fallback
+        return pick_filler_q(pool, exclude)
     return candidates[index % len(candidates)]
 
 
@@ -384,9 +422,10 @@ def _sample_pool_attendees(
     q_user_id: str,
     rng: random.Random,
     *,
-    min_extra: int = 2,
-    max_extra: int = 5,
+    min_extra: int = 1,
+    max_extra: int = 3,
 ) -> list[str]:
+    """Sample 1–3 extra PAX so beatdowns typically carry 2–4 attendees."""
     others = [uid for _, uid in pool if uid not in (target_user_id, q_user_id)]
     if not others:
         return []
@@ -400,13 +439,9 @@ def _ensure_q_in_attendees(q_user_id: str, attendee_ids: list[str]) -> list[str]
     return list(dict.fromkeys(attendee_ids))
 
 
-def build_pax_pool(
-    real_users: list[tuple[str, str]], n_synthetic: int
-) -> list[tuple[str, str]]:
-    pool = list(real_users)
-    for i in range(1, n_synthetic + 1):
-        pool.append((f"{SEED_SENTINEL} PAX {i:02d}", f"{SYNTHETIC_USER_PREFIX}{i:02d}XXXX"))
-    return pool
+def build_pax_pool(real_users: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Return real Slack users only (no synthetic PAX)."""
+    return list(real_users)
 
 
 def build_seed_plan(
@@ -419,7 +454,7 @@ def build_seed_plan(
     kotter_kind: str | None = None,
     catalog: list[dict] | None = None,
     today: date | None = None,
-    filler_q_id: str = FILLER_Q_USER_ID,
+    filler_q_id: str | None = None,
     pool: list[tuple[str, str]] | None = None,
 ) -> SeedPlan:
     """Pure planner: return beatdown/attendance specs for one user goal."""
@@ -471,7 +506,7 @@ def _plan_achievement(
     target_user_id: str,
     aos: list[tuple[str, str]],
     today: date,
-    filler_q_id: str,
+    filler_q_id: str | None,
     catalog: list[dict],
     pool: list[tuple[str, str]],
 ) -> SeedPlan:
@@ -497,7 +532,9 @@ def _plan_achievement(
     def _q_for_posts() -> str:
         if pool:
             return _pick_q_from_pool(pool, {target_user_id})
-        return filler_q_id
+        if filler_q_id:
+            return filler_q_id
+        raise ValueError("pool or filler_q_id required for posts metrics (no synthetic Q)")
 
     if metric == "distinct_aos":
         dates = _dates_in_period(today, period, threshold)
@@ -533,7 +570,7 @@ def _plan_achievement(
                     backblast=_bb(activity, ao_name, bd_date),
                 )
             )
-        note_q = q_id if pool else f"filler Q={filler_q_id}"
+        note_q = q_id if pool else f"Q={filler_q_id}"
         plan.notes.append(f"{threshold} posts as attendee (Q={note_q}) at {ao_name}")
         return plan
 
@@ -562,7 +599,7 @@ def _plan_kotter(
     aos: list[tuple[str, str]],
     thresholds: dict,
     today: date,
-    filler_q_id: str,
+    filler_q_id: str | None,
     pool: list[tuple[str, str]],
 ) -> SeedPlan:
     rng = random.Random(42)
@@ -578,7 +615,9 @@ def _plan_kotter(
     def _q_id() -> str:
         if pool:
             return _pick_q_from_pool(pool, {target_user_id})
-        return filler_q_id
+        if filler_q_id:
+            return filler_q_id
+        raise ValueError("pool or filler_q_id required for kotter (no synthetic Q)")
 
     def _attendees(q_id: str) -> list[str]:
         base = [target_user_id]
@@ -737,7 +776,9 @@ def build_baseline_plan(
             q_uid = pool[q_index % len(pool)][1]
             q_index += 1
             others = [uid for _, uid in pool if uid != q_uid]
-            n_attendees = rng.randint(3, min(12, len(pool)))
+            hi = min(4, len(pool))
+            lo = min(2, hi)
+            n_attendees = rng.randint(lo, hi) if hi >= 1 else 1
             n_extra = min(n_attendees - 1, len(others))
             extras = rng.sample(others, n_extra) if n_extra > 0 else []
             attendees = _ensure_q_in_attendees(q_uid, [q_uid, *extras])
@@ -1171,41 +1212,65 @@ def load_achievement_catalog(cur, schema: str) -> list[dict]:
 
 
 def upsert_user(
-    cur, schema: str, user_id: str, name: str, *, synthetic: bool = False
+    cur,
+    schema: str,
+    user_id: str,
+    name: str | None = None,
+    *,
+    allowed_ids: set[str] | None = None,
 ) -> None:
-    if synthetic:
-        email = f"{user_id.lower()}@seed.example"
-        json_val = SEED_JSON
-    else:
-        email = f"{user_id.lower()}@seed.example"
-        json_val = "{}"
+    """Insert user if missing. ``name=None`` preserves existing names on update."""
+    if allowed_ids is not None and user_id not in allowed_ids:
+        raise ValueError(f"Refusing off-roster user_id={user_id!r}")
+    display = name if name is not None else user_id
+    email = f"{user_id.lower()}@seed.example"
+    set_name = 1 if name is not None else 0
     cur.execute(
         f"""
         INSERT INTO `{schema}`.`users`
         (user_id, user_name, real_name, phone, email, start_date, app, json)
         VALUES (%s, %s, %s, %s, %s, %s, 0, %s)
         ON DUPLICATE KEY UPDATE
-          user_name=VALUES(user_name),
-          real_name=VALUES(real_name),
+          user_name=IF(%s, VALUES(user_name), user_name),
+          real_name=IF(%s, VALUES(real_name), real_name),
           app=0,
           email=IF(
             email IS NULL OR email='' OR LOWER(email) IN ('none', 'null'),
             VALUES(email),
             email
-          ),
-          json=IF(%s, VALUES(json), json)
+          )
         """,
         (
             user_id,
-            name,
-            name,
+            display,
+            display,
             "",
             email,
             (date.today() - timedelta(days=365)).isoformat(),
-            json_val,
-            1 if synthetic else 0,
+            "{}",
+            set_name,
+            set_name,
         ),
     )
+
+
+def repair_user_names(cur, schema: str, profiles: list[dict[str, str]]) -> int:
+    """UPDATE user_name/real_name from live Slack profiles for roster users."""
+    updated = 0
+    for p in profiles:
+        uid = p["user_id"]
+        display = p.get("display_name") or p.get("real_name") or uid
+        real = p.get("real_name") or p.get("display_name") or uid
+        cur.execute(
+            f"""
+            UPDATE `{schema}`.`users`
+            SET user_name=%s, real_name=%s
+            WHERE user_id=%s
+            """,
+            (display, real, uid),
+        )
+        updated += cur.rowcount
+    return updated
 
 
 def upsert_ao(cur, schema: str, ao_name: str, channel_id: str) -> None:
@@ -1275,10 +1340,11 @@ def _is_seed_beatdown_clause(alias: str = "b") -> str:
 
 
 def clear_all_seed(cur, schema: str) -> dict[str, int]:
-    """Remove all seed-tagged beatdowns, attendance, and synthetic awards."""
+    """Remove all seed-tagged beatdowns, attendance, and legacy synthetic awards."""
     counts: dict[str, int] = {}
     seed_like = f"%{SEED_SENTINEL}%"
     seed_json_like = '%"seed": true%'
+    synth_like = f"{LEGACY_SYNTHETIC_USER_PREFIX}%"
 
     cur.execute(
         f"""
@@ -1288,8 +1354,15 @@ def clear_all_seed(cur, schema: str) -> dict[str, int]:
         WHERE {_is_seed_beatdown_clause("b")}
            OR a.json LIKE %s
            OR a.user_id LIKE %s
+           OR a.user_id = %s
         """,
-        (seed_like, seed_json_like, seed_json_like, f"{SYNTHETIC_USER_PREFIX}%"),
+        (
+            seed_like,
+            seed_json_like,
+            seed_json_like,
+            synth_like,
+            LEGACY_FILLER_Q_USER_ID,
+        ),
     )
     counts["bd_attendance"] = cur.rowcount
 
@@ -1299,17 +1372,19 @@ def clear_all_seed(cur, schema: str) -> dict[str, int]:
         WHERE backblast LIKE %s
            OR JSON_EXTRACT(json, '$.seed') = true
            OR json LIKE %s
+           OR q_user_id LIKE %s
+           OR q_user_id = %s
         """,
-        (seed_like, seed_json_like),
+        (seed_like, seed_json_like, synth_like, LEGACY_FILLER_Q_USER_ID),
     )
     counts["beatdowns"] = cur.rowcount
 
     cur.execute(
         f"""
         DELETE FROM `{schema}`.`achievements_awarded`
-        WHERE pax_id LIKE %s
+        WHERE pax_id LIKE %s OR pax_id = %s
         """,
-        (f"{SYNTHETIC_USER_PREFIX}%",),
+        (synth_like, LEGACY_FILLER_Q_USER_ID),
     )
     counts["achievements_awarded"] = cur.rowcount
 
@@ -1318,10 +1393,134 @@ def clear_all_seed(cur, schema: str) -> dict[str, int]:
         DELETE FROM `{schema}`.`users`
         WHERE user_id LIKE %s OR user_id = %s
         """,
-        (f"{SYNTHETIC_USER_PREFIX}%", FILLER_Q_USER_ID),
+        (synth_like, LEGACY_FILLER_Q_USER_ID),
     )
     counts["users"] = cur.rowcount
     return counts
+
+
+def purge_synthetic(
+    cur, schema: str, slack_roster: set[str]
+) -> dict[str, Any]:
+    """Delete legacy USEEDPAX/USEEDFILLER rows and off-roster humans (app=0).
+
+    FK-safe order: bd_attendance → beatdowns → achievements_awarded → users.
+    Prints nothing; caller prints before/after receipt.
+    """
+    before = count_region_rows(cur, schema)
+    synth_like = f"{LEGACY_SYNTHETIC_USER_PREFIX}%"
+    filler = LEGACY_FILLER_Q_USER_ID
+    deleted: dict[str, int] = {}
+
+    cur.execute(
+        f"""
+        DELETE FROM `{schema}`.`bd_attendance`
+        WHERE user_id LIKE %s OR user_id = %s
+           OR q_user_id LIKE %s OR q_user_id = %s
+        """,
+        (synth_like, filler, synth_like, filler),
+    )
+    deleted["bd_attendance_synthetic"] = cur.rowcount
+
+    cur.execute(
+        f"""
+        DELETE FROM `{schema}`.`beatdowns`
+        WHERE q_user_id LIKE %s OR q_user_id = %s
+           OR coq_user_id LIKE %s OR coq_user_id = %s
+        """,
+        (synth_like, filler, synth_like, filler),
+    )
+    deleted["beatdowns_synthetic"] = cur.rowcount
+
+    cur.execute(
+        f"""
+        DELETE FROM `{schema}`.`achievements_awarded`
+        WHERE pax_id LIKE %s OR pax_id = %s
+        """,
+        (synth_like, filler),
+    )
+    deleted["achievements_awarded_synthetic"] = cur.rowcount
+
+    cur.execute(
+        f"""
+        DELETE FROM `{schema}`.`users`
+        WHERE user_id LIKE %s OR user_id = %s
+        """,
+        (synth_like, filler),
+    )
+    deleted["users_synthetic"] = cur.rowcount
+
+    cur.execute(
+        f"""
+        SELECT user_id, user_name FROM `{schema}`.`users`
+        WHERE COALESCE(app, 0) = 0
+        """
+    )
+    off_roster: list[dict[str, str]] = []
+    for r in cur.fetchall() or []:
+        uid = str(r["user_id"])
+        if uid not in slack_roster:
+            off_roster.append(
+                {"user_id": uid, "user_name": str(r.get("user_name") or "")}
+            )
+
+    off_att = 0
+    off_bd = 0
+    off_aw = 0
+    for row in off_roster:
+        uid = row["user_id"]
+        cur.execute(
+            f"""
+            DELETE FROM `{schema}`.`bd_attendance`
+            WHERE user_id = %s OR q_user_id = %s
+            """,
+            (uid, uid),
+        )
+        off_att += cur.rowcount
+        cur.execute(
+            f"""
+            DELETE FROM `{schema}`.`beatdowns`
+            WHERE q_user_id = %s OR coq_user_id = %s
+            """,
+            (uid, uid),
+        )
+        off_bd += cur.rowcount
+        cur.execute(
+            f"DELETE FROM `{schema}`.`achievements_awarded` WHERE pax_id = %s",
+            (uid,),
+        )
+        off_aw += cur.rowcount
+        cur.execute(f"DELETE FROM `{schema}`.`users` WHERE user_id = %s", (uid,))
+    deleted["bd_attendance_off_roster"] = off_att
+    deleted["beatdowns_off_roster"] = off_bd
+    deleted["achievements_awarded_off_roster"] = off_aw
+    deleted["users_off_roster"] = len(off_roster)
+
+    after = count_region_rows(cur, schema)
+    return {
+        "before": before,
+        "after": after,
+        "deleted": deleted,
+        "off_roster": off_roster,
+    }
+
+
+def find_synthetic_and_off_roster(
+    cur, schema: str, slack_roster: set[str]
+) -> dict[str, list[str]]:
+    """Report remaining legacy synthetic and off-roster human user_ids."""
+    cur.execute(
+        f"SELECT user_id, user_name, app FROM `{schema}`.`users`"
+    )
+    synthetic: list[str] = []
+    off_roster: list[str] = []
+    for r in cur.fetchall() or []:
+        uid = str(r["user_id"])
+        if uid.startswith(LEGACY_SYNTHETIC_USER_PREFIX) or uid == LEGACY_FILLER_Q_USER_ID:
+            synthetic.append(uid)
+        elif int(r.get("app") or 0) == 0 and uid not in slack_roster:
+            off_roster.append(uid)
+    return {"synthetic": synthetic, "off_roster": off_roster}
 
 
 def clear_seed_for_user(cur, schema: str, user_id: str) -> dict[str, int]:
@@ -1456,8 +1655,12 @@ def write_beatdowns(
     beatdowns: list[BeatdownSpec],
     *,
     user_names: dict[str, str] | None = None,
+    allowed_ids: set[str] | None = None,
 ) -> dict[str, int]:
-    """Insert/update seed-tagged beatdowns and attendance."""
+    """Insert/update seed-tagged beatdowns and attendance.
+
+    Refuses any user_id not in ``allowed_ids`` when that set is provided.
+    """
     user_names = user_names or {}
     beatdowns_n = 0
     attendance_n = 0
@@ -1466,18 +1669,24 @@ def write_beatdowns(
 
     for i, spec in enumerate(beatdowns):
         attendees = _ensure_q_in_attendees(spec.q_user_id, spec.attendee_ids)
+        all_ids = {spec.q_user_id, *attendees}
+        if spec.coq_user_id:
+            all_ids.add(spec.coq_user_id)
+        if allowed_ids is not None:
+            bad = sorted(uid for uid in all_ids if uid not in allowed_ids)
+            if bad:
+                raise ValueError(f"Refusing off-roster user_id(s): {bad}")
         ts = str(base_ts + i)
-        for uid in {spec.q_user_id, *attendees}:
+        for uid in all_ids:
             if uid in seen_users:
                 continue
             seen_users.add(uid)
-            synthetic = uid.startswith(SYNTHETIC_USER_PREFIX) or uid == FILLER_Q_USER_ID
             upsert_user(
                 cur,
                 schema,
                 uid,
-                user_names.get(uid, uid),
-                synthetic=synthetic,
+                user_names.get(uid),
+                allowed_ids=allowed_ids,
             )
 
         cur.execute(
@@ -1532,7 +1741,14 @@ def write_beatdowns(
     return {"beatdowns": beatdowns_n, "bd_attendance": attendance_n}
 
 
-def apply_overlay_writes(cur, schema: str, overlay: OverlayResult) -> dict[str, int]:
+def apply_overlay_writes(
+    cur,
+    schema: str,
+    overlay: OverlayResult,
+    *,
+    user_names: dict[str, str] | None = None,
+    allowed_ids: set[str] | None = None,
+) -> dict[str, int]:
     counts: dict[str, int] = {"beatdowns": 0, "bd_attendance": 0, "deletes": 0, "reassigns": 0}
 
     for ao_id, bd_date, old_q, new_q in overlay.q_reassigns:
@@ -1589,7 +1805,13 @@ def apply_overlay_writes(cur, schema: str, overlay: OverlayResult) -> dict[str, 
                 (pax_count, ao_id, d, q_user_id),
             )
 
-    inserted = write_beatdowns(cur, schema, overlay.beatdowns_to_upsert)
+    inserted = write_beatdowns(
+        cur,
+        schema,
+        overlay.beatdowns_to_upsert,
+        user_names=user_names,
+        allowed_ids=allowed_ids,
+    )
     counts["beatdowns"] += inserted["beatdowns"]
     counts["bd_attendance"] += inserted["bd_attendance"]
     return counts
@@ -1605,16 +1827,17 @@ def write_seed_plan(
     aos: list[tuple[str, str]],
     pool: list[tuple[str, str]] | None = None,
 ) -> dict[str, int]:
-    upsert_user(cur, schema, target_user_id, target_name, synthetic=False)
-    if pool is None:
-        upsert_user(cur, schema, FILLER_Q_USER_ID, FILLER_Q_NAME, synthetic=True)
+    allowed = {target_user_id}
+    names = {target_user_id: target_name}
+    if pool:
+        allowed.update(uid for _, uid in pool)
+        names.update({uid: name for name, uid in pool})
+    upsert_user(cur, schema, target_user_id, target_name, allowed_ids=allowed)
     for ao_name, ao_id in aos:
         upsert_ao(cur, schema, ao_name, ao_id)
-
-    names = {target_user_id: target_name, FILLER_Q_USER_ID: FILLER_Q_NAME}
-    if pool:
-        names.update({uid: name for name, uid in pool})
-    return write_beatdowns(cur, schema, plan.beatdowns, user_names=names)
+    return write_beatdowns(
+        cur, schema, plan.beatdowns, user_names=names, allowed_ids=allowed
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1971,12 +2194,15 @@ def write_baseline(
     pool: list[tuple[str, str]],
     aos: list[tuple[str, str]],
 ) -> dict[str, int]:
+    allowed = {uid for _, uid in pool}
+    names = {uid: name for name, uid in pool}
     for name, uid in pool:
-        upsert_user(cur, schema, uid, name, synthetic=uid.startswith(SYNTHETIC_USER_PREFIX))
+        upsert_user(cur, schema, uid, name, allowed_ids=allowed)
     for ao_name, ao_id in aos:
         upsert_ao(cur, schema, ao_name, ao_id)
-    names = {uid: name for name, uid in pool}
-    return write_beatdowns(cur, schema, plan.beatdowns, user_names=names)
+    return write_beatdowns(
+        cur, schema, plan.beatdowns, user_names=names, allowed_ids=allowed
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2009,15 +2235,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Days of baseline history (default: 180)",
     )
     parser.add_argument(
-        "--synthetic-pax",
-        type=int,
-        default=12,
-        help="Synthetic PAX in the pool (default: 12)",
-    )
-    parser.add_argument(
         "--kotter",
         default="",
         help="Comma-separated Kotter kinds for first N real users: mia,lowq,noq",
+    )
+    parser.add_argument(
+        "--purge-synthetic",
+        action="store_true",
+        help="Only purge legacy USEEDPAX/USEEDFILLER and off-roster humans; no seed",
     )
     parser.add_argument(
         "--dry-run",
@@ -2048,9 +2273,6 @@ def main(argv: list[str] | None = None) -> int:
     conn = connect(regional_schema)
     try:
         region = load_region_row(conn, registry_schema, regional_schema)
-        if args.verify_only:
-            verify_region(conn, regional_schema, registry_schema, region)
-            return 0
 
         token = (os.environ.get("PM_SLACK_TOKEN") or "").strip()
         if not token:
@@ -2063,13 +2285,59 @@ def main(argv: list[str] | None = None) -> int:
         assert_slack_team(client, expected_team)
 
         print("Fetching workspace users and channels…")
-        users = fetch_workspace_users(client)
+        profiles = fetch_workspace_profiles(client)
+        users = [(p["display_name"], p["user_id"]) for p in profiles]
         channels = fetch_workspace_channels(client)
+        slack_roster = {uid for _, uid in users}
         if not users:
             raise SystemExit("No human users returned from users_list")
-        if not channels:
+        if not channels and not args.purge_synthetic and not args.verify_only:
             raise SystemExit("No channels returned from conversations_list")
         print(f"  users: {len(users)}  channels: {len(channels)}")
+
+        if args.verify_only:
+            verify_region(conn, regional_schema, registry_schema, region)
+            with conn.cursor() as cur:
+                health = find_synthetic_and_off_roster(
+                    cur, regional_schema, slack_roster
+                )
+            print(
+                f"\nRoster health: synthetic={len(health['synthetic'])} "
+                f"off_roster={len(health['off_roster'])}"
+            )
+            if health["synthetic"]:
+                print(f"  synthetic: {health['synthetic'][:20]}")
+            if health["off_roster"]:
+                print(f"  off_roster: {health['off_roster'][:20]}")
+            return 0
+
+        with conn.cursor() as cur:
+            repaired = repair_user_names(cur, regional_schema, profiles)
+            if repaired:
+                LOG.info("Repaired user_name/real_name for %s roster user(s)", repaired)
+        conn.commit()
+
+        if args.purge_synthetic:
+            if not _confirm_yes(
+                args.yes, "Purge legacy synthetic + off-roster users? [y/N]: "
+            ):
+                print("Aborted.")
+                return 1
+            with conn.cursor() as cur:
+                result = purge_synthetic(cur, regional_schema, slack_roster)
+            conn.commit()
+            print("\n" + "=" * 60)
+            print("purge_synthetic receipt")
+            print("=" * 60)
+            print(f"  before: {result['before']}")
+            print(f"  after:  {result['after']}")
+            print(f"  deleted: {result['deleted']}")
+            if result["off_roster"]:
+                print(f"  off_roster removed: {len(result['off_roster'])}")
+                for row in result["off_roster"][:20]:
+                    print(f"    {row['user_id']} ({row['user_name']})")
+            print("=" * 60)
+            return 0
 
         with conn.cursor() as cur:
             ensure_achievement_tables(cur, regional_schema)
@@ -2103,7 +2371,9 @@ def main(argv: list[str] | None = None) -> int:
                 ", ".join(f"{n} ({c})" for n, c in ao_missing),
             )
 
-        pool = build_pax_pool(users, args.synthetic_pax)
+        pool = build_pax_pool(users)
+        allowed_ids = {uid for _, uid in pool}
+        user_names = {uid: name for name, uid in pool}
         receipts: list[dict] = []
 
         with conn.cursor() as cur:
@@ -2113,6 +2383,22 @@ def main(argv: list[str] | None = None) -> int:
         if not _confirm_yes(args.yes, "Write seed data to test region? [y/N]: "):
             print("Aborted.")
             return 1
+
+        # Always purge legacy synthetics / off-roster before seeding.
+        if not args.dry_run:
+            with conn.cursor() as cur:
+                purge_result = purge_synthetic(cur, regional_schema, slack_roster)
+            receipts.append(
+                {
+                    "action": "purge_synthetic",
+                    "cleared": purge_result["deleted"],
+                    "notes": [
+                        f"before={purge_result['before']}",
+                        f"after={purge_result['after']}",
+                        f"off_roster_removed={len(purge_result['off_roster'])}",
+                    ],
+                }
+            )
 
         if args.interactive:
             actions = interactive_user_pass(users, aos, catalog, region)
@@ -2172,10 +2458,18 @@ def main(argv: list[str] | None = None) -> int:
                     inserted = {"beatdowns": 0, "bd_attendance": 0}
                     if not args.dry_run:
                         clear_seed_for_user(cur, regional_schema, uid)
-                        upsert_user(cur, regional_schema, uid, name, synthetic=False)
+                        upsert_user(
+                            cur, regional_schema, uid, name, allowed_ids=allowed_ids
+                        )
                         for ao_name, ao_id in act["aos"]:
                             upsert_ao(cur, regional_schema, ao_name, ao_id)
-                        inserted = apply_overlay_writes(cur, regional_schema, overlay)
+                        inserted = apply_overlay_writes(
+                            cur,
+                            regional_schema,
+                            overlay,
+                            user_names=user_names,
+                            allowed_ids=allowed_ids,
+                        )
                     receipts.append(
                         {
                             "user_id": uid,
@@ -2236,7 +2530,13 @@ def main(argv: list[str] | None = None) -> int:
                             thresholds=region,
                             kotter_kind=kind,
                         )
-                        stats = apply_overlay_writes(cur, regional_schema, overlay)
+                        stats = apply_overlay_writes(
+                            cur,
+                            regional_schema,
+                            overlay,
+                            user_names=user_names,
+                            allowed_ids=allowed_ids,
+                        )
                         calendar = load_calendar(cur, regional_schema)
                         receipts.append(
                             {
@@ -2265,7 +2565,13 @@ def main(argv: list[str] | None = None) -> int:
                             achievement=ach,
                             catalog=catalog,
                         )
-                        stats = apply_overlay_writes(cur, regional_schema, overlay)
+                        stats = apply_overlay_writes(
+                            cur,
+                            regional_schema,
+                            overlay,
+                            user_names=user_names,
+                            allowed_ids=allowed_ids,
+                        )
                         receipts.append(
                             {
                                 "user_id": uid,
@@ -2296,6 +2602,18 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.verify:
             verify_region(conn, regional_schema, registry_schema, region)
+            with conn.cursor() as cur:
+                health = find_synthetic_and_off_roster(
+                    cur, regional_schema, slack_roster
+                )
+            print(
+                f"\nRoster health: synthetic={len(health['synthetic'])} "
+                f"off_roster={len(health['off_roster'])}"
+            )
+            if health["synthetic"]:
+                print(f"  synthetic: {health['synthetic'][:20]}")
+            if health["off_roster"]:
+                print(f"  off_roster: {health['off_roster'][:20]}")
 
         print_receipt(receipts)
     finally:

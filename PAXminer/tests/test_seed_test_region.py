@@ -115,7 +115,7 @@ def test_co_triggered_golden_boy_includes_el_quatro():
 # ---- achievement plans ------------------------------------------------------
 
 
-def test_plan_posts_year_uses_filler_q():
+def test_plan_posts_year_uses_explicit_q():
     plan = seeder.build_seed_plan(
         goal_type="achievement",
         achievement=_seed("el_quatro"),
@@ -124,9 +124,10 @@ def test_plan_posts_year_uses_filler_q():
         thresholds=THRESHOLDS,
         catalog=ACHIEVEMENT_SEEDS,
         today=TODAY,
+        filler_q_id="UQ",
     )
     assert len(plan.beatdowns) == 25
-    assert all(b.q_user_id == seeder.FILLER_Q_USER_ID for b in plan.beatdowns)
+    assert all(b.q_user_id == "UQ" for b in plan.beatdowns)
     assert all(b.attendee_ids == ["U1"] for b in plan.beatdowns)
     assert all(seeder.SEED_SENTINEL in b.backblast for b in plan.beatdowns)
     assert all(b.bd_date.year == TODAY.year for b in plan.beatdowns)
@@ -155,6 +156,7 @@ def test_plan_posts_week_six_pack():
         aos=AOS[:1],
         thresholds=THRESHOLDS,
         today=TODAY,
+        filler_q_id="UQ",
     )
     assert len(plan.beatdowns) == 6
     weeks = {b.bd_date.isocalendar().week for b in plan.beatdowns}
@@ -169,6 +171,7 @@ def test_plan_qsource_backblast_tagged():
         aos=AOS[:1],
         thresholds=THRESHOLDS,
         today=TODAY,
+        filler_q_id="UQ",
     )
     assert len(plan.beatdowns) == 4
     assert all("qsource" in b.backblast.lower() for b in plan.beatdowns)
@@ -209,6 +212,7 @@ def test_plan_posts_at_single_ao():
         aos=AOS[:1],
         thresholds=THRESHOLDS,
         today=TODAY,
+        filler_q_id="UQ",
     )
     assert len(plan.beatdowns) == 50
     assert len({b.ao_id for b in plan.beatdowns}) == 1
@@ -225,13 +229,14 @@ def test_plan_kotter_mia_in_window():
         aos=AOS[:1],
         thresholds=THRESHOLDS,
         today=TODAY,
+        filler_q_id="UQ",
     )
     assert len(plan.beatdowns) == 1
     bd = plan.beatdowns[0].bd_date
     lo = TODAY - timedelta(weeks=THRESHOLDS["REMINDER_WEEKS"])
     hi = TODAY - timedelta(weeks=THRESHOLDS["NO_POST_THRESHOLD"])
     assert lo <= bd <= hi
-    assert plan.beatdowns[0].q_user_id == seeder.FILLER_Q_USER_ID
+    assert plan.beatdowns[0].q_user_id == "UQ"
     assert "MIA" in plan.expected_outcome
 
 
@@ -243,6 +248,7 @@ def test_plan_kotter_low_q():
         aos=AOS[:1],
         thresholds=THRESHOLDS,
         today=TODAY,
+        filler_q_id="UQ",
     )
     assert len(plan.beatdowns) >= 1
     q_rows = [b for b in plan.beatdowns if b.q_user_id == "U1"]
@@ -263,9 +269,10 @@ def test_plan_kotter_never_q():
         aos=AOS[:1],
         thresholds=THRESHOLDS,
         today=TODAY,
+        filler_q_id="UQ",
     )
     assert plan.beatdowns
-    assert all(b.q_user_id == seeder.FILLER_Q_USER_ID for b in plan.beatdowns)
+    assert all(b.q_user_id == "UQ" for b in plan.beatdowns)
     assert all(b.attendee_ids == ["U1"] for b in plan.beatdowns)
     assert "never-Q" in plan.expected_outcome
 
@@ -480,13 +487,18 @@ def test_missing_view_attempt_is_tolerated():
 POOL = [(f"P{i}", f"U{i}") for i in range(1, 15)]
 
 
-def test_build_pax_pool_adds_synthetic():
+def test_build_pax_pool_real_users_only():
     real = [("Alice", "UA"), ("Bob", "UB")]
-    pool = seeder.build_pax_pool(real, 3)
-    assert pool[:2] == real
-    assert len(pool) == 5
-    assert pool[2][1].startswith(seeder.SYNTHETIC_USER_PREFIX)
-    assert seeder.SEED_SENTINEL in pool[2][0]
+    pool = seeder.build_pax_pool(real)
+    assert pool == real
+    assert all(not uid.startswith(seeder.LEGACY_SYNTHETIC_USER_PREFIX) for _, uid in pool)
+
+
+def test_pick_filler_q_never_returns_target():
+    assert seeder.pick_filler_q(POOL, "U1") == "U10"  # sorted: U10 before U2…
+    assert seeder.pick_filler_q(POOL, {"U1", "U10"}) != "U1"
+    with pytest.raises(ValueError, match="No filler Q"):
+        seeder.pick_filler_q([("Solo", "U1")], "U1")
 
 
 def test_build_baseline_plan_multi_attendees_and_q_in_attendees():
@@ -499,7 +511,7 @@ def test_build_baseline_plan_multi_attendees_and_q_in_attendees():
     assert plan.beatdowns
     for spec in plan.beatdowns:
         assert spec.q_user_id in spec.attendee_ids
-        assert 3 <= len(spec.attendee_ids) <= 12
+        assert 2 <= len(spec.attendee_ids) <= 4
         assert len(spec.attendee_ids) == len(set(spec.attendee_ids))
 
 
@@ -514,9 +526,138 @@ def test_build_seed_plan_with_pool_adds_multi_attendees():
         pool=POOL,
     )
     assert len(plan.beatdowns) == 25
-    assert all(len(b.attendee_ids) >= 3 for b in plan.beatdowns)
-    assert all(b.q_user_id != seeder.FILLER_Q_USER_ID for b in plan.beatdowns)
+    assert all(len(b.attendee_ids) >= 2 for b in plan.beatdowns)
+    assert all(b.q_user_id != seeder.LEGACY_FILLER_Q_USER_ID for b in plan.beatdowns)
+    assert all(b.q_user_id in {uid for _, uid in POOL} for b in plan.beatdowns)
     assert all("U1" in b.attendee_ids for b in plan.beatdowns)
+
+
+def test_write_beatdowns_rejects_off_roster_id():
+    class RecordingCursor:
+        def execute(self, sql, params=None):
+            pass
+
+    spec = seeder.BeatdownSpec(
+        ao_id="C1",
+        ao_name="AO1",
+        bd_date=TODAY,
+        q_user_id="U1",
+        attendee_ids=["U1", "USEEDPAX01XXXX"],
+        backblast=f"{seeder.SEED_SENTINEL} x",
+    )
+    with pytest.raises(ValueError, match="off-roster"):
+        seeder.write_beatdowns(
+            RecordingCursor(),
+            "f3ttown_test",
+            [spec],
+            allowed_ids={"U1", "U2"},
+        )
+
+
+def test_upsert_user_name_none_preserves_existing():
+    class MockCursor:
+        def __init__(self):
+            self.last_sql = ""
+            self.last_params = None
+
+        def execute(self, sql, params=None):
+            self.last_sql = sql
+            self.last_params = params
+
+    cur = MockCursor()
+    seeder.upsert_user(cur, "f3ttown_test", "U1", name=None, allowed_ids={"U1"})
+    assert "user_name=IF(%s, VALUES(user_name), user_name)" in cur.last_sql
+    # set_name flags are 0,0 at end of params
+    assert cur.last_params[-2:] == (0, 0)
+
+    cur2 = MockCursor()
+    seeder.upsert_user(cur2, "f3ttown_test", "U1", name="Alice", allowed_ids={"U1"})
+    assert cur2.last_params[-2:] == (1, 1)
+
+
+def test_upsert_user_rejects_off_roster():
+    class MockCursor:
+        def execute(self, sql, params=None):
+            raise AssertionError("should not execute")
+
+    with pytest.raises(ValueError, match="off-roster"):
+        seeder.upsert_user(MockCursor(), "f3ttown_test", "UBAD", "X", allowed_ids={"U1"})
+
+
+def test_apply_overlay_writes_passes_user_names():
+    """Regression: overlay writes must forward user_names (no name clobber)."""
+    recorded: dict = {}
+
+    def fake_write(cur, schema, beatdowns, *, user_names=None, allowed_ids=None):
+        recorded["user_names"] = user_names
+        recorded["allowed_ids"] = allowed_ids
+        return {"beatdowns": 0, "bd_attendance": 0}
+
+    overlay = seeder.OverlayResult(
+        beatdowns_to_upsert=[
+            seeder.BeatdownSpec(
+                ao_id="C1",
+                ao_name="AO1",
+                bd_date=TODAY,
+                q_user_id="U1",
+                attendee_ids=["U1"],
+                backblast="x",
+            )
+        ]
+    )
+    names = {"U1": "Alice"}
+    allowed = {"U1"}
+    orig = seeder.write_beatdowns
+    seeder.write_beatdowns = fake_write  # type: ignore[assignment]
+    try:
+        seeder.apply_overlay_writes(
+            object(),
+            "f3ttown_test",
+            overlay,
+            user_names=names,
+            allowed_ids=allowed,
+        )
+    finally:
+        seeder.write_beatdowns = orig  # type: ignore[assignment]
+    assert recorded["user_names"] == names
+    assert recorded["allowed_ids"] == allowed
+
+
+def test_purge_targets_legacy_prefixes():
+    class MockCursor:
+        def __init__(self):
+            self.statements: list[tuple[str, tuple | None]] = []
+            self.rowcount = 0
+            self._fetch: list = []
+
+        def execute(self, sql, params=None):
+            self.statements.append((sql, params))
+            # count_region_rows SELECTs
+            if "COUNT(*)" in sql:
+                self._fetch = [{"c": 0}]
+            elif "SELECT user_id" in sql:
+                self._fetch = []
+            else:
+                self._fetch = []
+
+        def fetchone(self):
+            return self._fetch[0] if self._fetch else {"c": 0}
+
+        def fetchall(self):
+            return list(self._fetch)
+
+    cur = MockCursor()
+    result = seeder.purge_synthetic(cur, "f3ttown_test", slack_roster={"U1", "U2"})
+    joined = " ".join(sql for sql, _ in cur.statements)
+    assert seeder.LEGACY_SYNTHETIC_USER_PREFIX in str(cur.statements)
+    assert seeder.LEGACY_FILLER_Q_USER_ID in str(cur.statements)
+    assert "bd_attendance" in joined
+    assert "beatdowns" in joined
+    assert "achievements_awarded" in joined
+    assert "users" in joined
+    assert "deleted" in result
+    assert result["before"] is not None
+    assert result["after"] is not None
 
 
 def test_plan_realistic_overlay_joins_existing_calendar():
