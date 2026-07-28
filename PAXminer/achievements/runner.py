@@ -12,7 +12,16 @@ from achievements.engine import awarded_period_bucket, evaluate_rule, period_buc
 from achievements.attendance import attach_home_regions, load_nation_attendance
 from common.encryption import decrypt_field
 from slack_blocks import section
-from slack_util import open_dm_channel, ordinal_suffix, post_log, post_message, slack_client
+from slack_util import (
+    is_slack_user_id,
+    mention,
+    open_dm_channel,
+    ordinal_suffix,
+    post_log,
+    post_message,
+    slack_client,
+    workspace_user_ids,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -53,22 +62,53 @@ def _existing_keys(awarded: pd.DataFrame, rules_by_id: dict[int, dict]) -> set[t
 
 
 def _format_grant_message(
-    pax_id: str, name: str, verb: str, awarded_on: date, total: int, idx_count: int
+    pax_id: str,
+    name: str,
+    verb: str,
+    awarded_on: date,
+    total: int,
+    idx_count: int,
+    *,
+    display_name: str | None = None,
+    known_ids: set[str] | None = None,
 ) -> tuple[str, list[dict]]:
     ending = ordinal_suffix(idx_count)
+    tag = mention(pax_id, display_name, known_ids=known_ids)
     text = (
-        f"Congrats to our man <@{pax_id}>! "
+        f"Congrats to our man {tag}! "
         f"He just unlocked the achievement *{name}* for {verb} "
         f"which he earned on {awarded_on.strftime('%B %d, %Y')}. "
-        f"This is achievement #{total} for <@{pax_id}> and the {idx_count}{ending} "
+        f"This is achievement #{total} for {tag} and the {idx_count}{ending} "
         f"time this year he's earned this award. Keep up the good work!"
     )
     return text, [section(text)]
 
 
-def _format_revoke_message(pax_id: str, name: str) -> tuple[str, list[dict]]:
-    text = f"Correction: <@{pax_id}>'s achievement *{name}* was revoked after attendance was updated."
+def _format_revoke_message(
+    pax_id: str,
+    name: str,
+    *,
+    display_name: str | None = None,
+    known_ids: set[str] | None = None,
+) -> tuple[str, list[dict]]:
+    tag = mention(pax_id, display_name, known_ids=known_ids)
+    text = f"Correction: {tag}'s achievement *{name}* was revoked after attendance was updated."
     return text, [section(text)]
+
+
+def _name_map_from_nation(nation: pd.DataFrame) -> dict[str, str]:
+    if nation.empty or "user_id" not in nation.columns:
+        return {}
+    cols = ["user_id"]
+    if "user_name" in nation.columns:
+        cols.append("user_name")
+    subset = nation[cols].drop_duplicates(subset=["user_id"])
+    if "user_name" not in subset.columns:
+        return {str(r.user_id): str(r.user_id) for r in subset.itertuples(index=False)}
+    return {
+        str(r.user_id): (str(r.user_name) if pd.notna(r.user_name) else str(r.user_id))
+        for r in subset.itertuples(index=False)
+    }
 
 
 def run_achievements_for_region(
@@ -157,17 +197,26 @@ def run_achievements_for_region(
     if dry_run:
         return {"grants": len(grants), "revokes": len(revokes), "dry_run": True}
 
+    names = _name_map_from_nation(nation)
+    known_ids = workspace_user_ids(client)
+
     with conn.cursor() as cur:
         for g in revokes:
             rule = g["rule"]
             cur.execute(f"DELETE FROM `{regional_schema}`.`achievements_awarded` WHERE id=%s", (g["id"],))
-            text, blocks = _format_revoke_message(g["pax_id"], rule["name"])
+            text, blocks = _format_revoke_message(
+                g["pax_id"],
+                rule["name"],
+                display_name=names.get(g["pax_id"]),
+                known_ids=known_ids,
+            )
             post_message(client, channel, text, blocks=blocks)
             if post_to_ao and ao_channel_id:
                 post_message(client, ao_channel_id, text, blocks=blocks)
+            tag = mention(g["pax_id"], names.get(g["pax_id"]), known_ids=known_ids)
             post_log(
                 client,
-                f"- Achievement ({region_name}): revoked '{rule['name']}' from <@{g['pax_id']}>",
+                f"- Achievement ({region_name}): revoked '{rule['name']}' from {tag}",
             )
 
         for g in grants:
@@ -183,19 +232,32 @@ def run_achievements_for_region(
             total = sum(counts[g["pax_id"]].values())
             idx_count = counts[g["pax_id"]][g["achievement_id"]]
             text, blocks = _format_grant_message(
-                g["pax_id"], rule["name"], rule["verb"], g["date_awarded"], total, idx_count
+                g["pax_id"],
+                rule["name"],
+                rule["verb"],
+                g["date_awarded"],
+                total,
+                idx_count,
+                display_name=names.get(g["pax_id"]),
+                known_ids=known_ids,
             )
             post_message(client, channel, text, blocks=blocks, add_reaction=True)
-            try:
-                dm = open_dm_channel(client, g["pax_id"])
-                post_message(client, dm, text, blocks=blocks)
-            except Exception:
-                LOG.exception("DM failed pax=%s", g["pax_id"])
+            if is_slack_user_id(g["pax_id"]) and (
+                known_ids is None or g["pax_id"] in known_ids
+            ):
+                try:
+                    dm = open_dm_channel(client, g["pax_id"])
+                    post_message(client, dm, text, blocks=blocks)
+                except Exception:
+                    LOG.exception("DM failed pax=%s", g["pax_id"])
+            else:
+                LOG.info("Skip achievement DM for non-Slack user_id=%s", g["pax_id"])
             if post_to_ao and ao_channel_id:
                 post_message(client, ao_channel_id, text, blocks=blocks, add_reaction=True)
+            tag = mention(g["pax_id"], names.get(g["pax_id"]), known_ids=known_ids)
             post_log(
                 client,
-                f"- Achievement ({region_name}): granted '{rule['name']}' to <@{g['pax_id']}>",
+                f"- Achievement ({region_name}): granted '{rule['name']}' to {tag}",
             )
 
         conn.commit()
