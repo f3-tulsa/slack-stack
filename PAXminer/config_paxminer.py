@@ -83,12 +83,6 @@ def _achievement_summary(row: dict) -> str:
     )
 
 
-ACHIEVEMENTS_ENABLE_OPTION = {
-    "text": {"type": "plain_text", "text": "Send daily achievement awards"},
-    "value": "achievements",
-}
-
-
 def _looks_like_channel_id(value: str | None) -> bool:
     """True for public Slack channel IDs (channels_select is public-only)."""
     if not value:
@@ -122,14 +116,6 @@ def _config_modal(region: dict) -> dict:
         tz_opts = [{"text": {"type": "plain_text", "text": tz}, "value": tz}] + tz_opts
     tz_initial = next((o for o in tz_opts if o["value"] == tz), tz_opts[0])
 
-    achievements_element: dict = {
-        "type": "checkboxes",
-        "action_id": "val",
-        "options": [ACHIEVEMENTS_ENABLE_OPTION],
-    }
-    if region.get("send_achievements"):
-        achievements_element["initial_options"] = [ACHIEVEMENTS_ENABLE_OPTION]
-
     return {
         "type": "modal",
         "callback_id": CALLBACK_ID,
@@ -157,7 +143,8 @@ def _config_modal(region: dict) -> dict:
                         "• *PAX Achievements* — award rules\n"
                         "• *PAX Reports* — builtin + custom report definitions\n"
                         "• *Kotter Reports* — thresholds\n"
-                        "• *Schedule* — when/where each report posts"
+                        "• *Schedule* — when/where awards, charts, Kotter, and "
+                        "leaderboards post"
                     ),
                 },
             },
@@ -187,34 +174,6 @@ def _config_modal(region: dict) -> dict:
                         "style": "primary",
                     },
                 ],
-            },
-            {
-                "type": "divider",
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": (
-                        "*Achievements*\n"
-                        "Daily award/revoke path (not scheduled). Charts, Kotter, and "
-                        "leaderboards are configured under *Schedule*."
-                    ),
-                },
-            },
-            {
-                "type": "input",
-                "block_id": "send_achievements",
-                "optional": True,
-                "label": {"type": "plain_text", "text": "Daily achievements"},
-                "element": achievements_element,
-            },
-            {
-                "type": "input",
-                "block_id": "achievement_channel",
-                "optional": True,
-                "label": {"type": "plain_text", "text": "Achievement awards channel"},
-                "element": _channels_select_element(region.get("achievement_channel")),
             },
         ],
     }
@@ -445,16 +404,10 @@ def _to_int(value, default):
 
 def _parse_modal_values(payload: dict) -> dict:
     state = payload.get("view", {}).get("state", {}).get("values", {})
-    achievements = [
-        o["value"]
-        for o in state.get("send_achievements", {}).get("val", {}).get("selected_options", [])
-    ]
     tz_sel = state.get("timezone", {}).get("val", {}).get("selected_option") or {}
     timezone = (tz_sel.get("value") or "America/Chicago").strip()
     return {
         "timezone": timezone,
-        "send_achievements": 1 if "achievements" in achievements else 0,
-        "achievement_channel": _selected_channel(state, "achievement_channel"),
     }
 
 

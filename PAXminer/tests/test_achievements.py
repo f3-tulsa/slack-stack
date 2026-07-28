@@ -384,6 +384,46 @@ def test_run_achievements_skips_when_no_attendance_data():
     assert delete_calls == []
 
 
+def test_channel_override_bypasses_send_achievements_gate():
+    """Schedule path uses channel_override; send_achievements may be off."""
+    from achievements.runner import run_achievements_for_region
+
+    region_row = {
+        "send_achievements": 0,
+        "achievement_channel": None,
+        "slack_token": "enc",
+        "region": "test",
+    }
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[], []]  # no rules
+
+    with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
+        with patch("achievements.runner.slack_client"):
+            result = run_achievements_for_region(
+                mock_conn,
+                pm_schema="paxminer_test",
+                regional_schema="f3test",
+                region_row=region_row,
+                channel_override="C_SCHEDULE",
+                dry_run=True,
+            )
+
+    assert result == {"skipped": "no rules"}
+
+    # Without override, the legacy gate still applies.
+    result2 = run_achievements_for_region(
+        mock_conn,
+        pm_schema="paxminer_test",
+        regional_schema="f3test",
+        region_row=region_row,
+        dry_run=True,
+    )
+    assert result2 == {"skipped": "send_achievements off"}
+
+
 def test_run_achievements_revokes_on_daily_when_unqualified():
     from achievements.runner import run_achievements_for_region
 
@@ -675,15 +715,20 @@ def test_config_modal_hub_has_timezone_and_section_buttons():
     assert OPEN_REPORTS_ACTION_ID in action_ids
     assert OPEN_KOTTER_CONFIG_ACTION_ID in action_ids
 
-    assert "send_achievements" in by_id
-    assert by_id["send_achievements"]["element"]["type"] == "checkboxes"
+    # Achievements enable/channel moved to Schedule (Award Achievements).
+    assert "send_achievements" not in by_id
+    assert "achievement_channel" not in by_id
     assert "kotter_channel" not in by_id
     assert "firstf_channel" not in by_id
     assert "features" not in by_id
-    ach_ch = by_id["achievement_channel"]
-    assert ach_ch.get("optional") is True
-    assert ach_ch["element"]["type"] == "channels_select"
-    assert ach_ch["element"].get("initial_channel", "").startswith("C")
+    schedule_btn = next(
+        e for e in by_id["hub_actions"]["elements"] if e["action_id"] == OPEN_SCHEDULE_ACTION_ID
+    )
+    assert schedule_btn.get("style") == "primary"
+    configure = next(
+        b for b in modal["blocks"] if b.get("type") == "section" and "Configure" in str(b)
+    )
+    assert "awards" in configure["text"]["text"].lower()
 
     parsed = _parse_modal_values(
         {
@@ -693,20 +738,12 @@ def test_config_modal_hub_has_timezone_and_section_buttons():
                         "timezone": {
                             "val": {"selected_option": {"value": "America/Chicago"}}
                         },
-                        "send_achievements": {
-                            "val": {"selected_options": [{"value": "achievements"}]}
-                        },
-                        "achievement_channel": {"val": {"selected_channel": "C11111111"}},
                     }
                 }
             }
         }
     )
-    assert parsed == {
-        "timezone": "America/Chicago",
-        "send_achievements": 1,
-        "achievement_channel": "C11111111",
-    }
+    assert parsed == {"timezone": "America/Chicago"}
 
 
 def test_achievements_handler_webhook_unauthorized():
