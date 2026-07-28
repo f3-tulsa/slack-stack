@@ -15,7 +15,7 @@ import pandas as pd
 
 from scheduling import ALLOWED_SOURCES, resolve_time_window
 from slack_blocks import chunk_messages, chunk_sections, fallback_text, header, section
-from slack_util import open_dm_channel, post_message, slack_client, upload_file
+from slack_util import is_slack_user_id, open_dm_channel, post_message, slack_client, upload_file
 
 LOG = logging.getLogger(__name__)
 
@@ -167,6 +167,9 @@ def run_custom_report(
 
     delivery_channels: list[str] = list(channel_ids or [])
     for uid in user_ids or []:
+        if not is_slack_user_id(uid):
+            LOG.info("Skip custom report DM for non-Slack user_id=%s", uid)
+            continue
         try:
             delivery_channels.append(open_dm_channel(client, uid))
         except Exception:

@@ -13,7 +13,7 @@ from typing import Any
 from common.encryption import decrypt_field
 from paxminer_db import connect_from_env
 from scheduling import is_due_now, region_local_now, resolve_time_window
-from slack_util import open_dm_channel, post_log, post_message, slack_client, upload_file
+from slack_util import is_slack_user_id, open_dm_channel, post_log, post_message, slack_client, upload_file
 
 LOG = logging.getLogger(__name__)
 
@@ -49,7 +49,13 @@ def resolve_destinations(
     if dest_type == "specific_channels":
         return [{"kind": "channel", "id": cid} for cid in _parse_json_list(schedule.get("destination_channels"))]
     if dest_type == "dm_specific_pax":
-        return [{"kind": "user", "id": uid} for uid in _parse_json_list(schedule.get("destination_users"))]
+        out: list[dict[str, str]] = []
+        for uid in _parse_json_list(schedule.get("destination_users")):
+            if not is_slack_user_id(uid):
+                LOG.info("Skip dm_specific_pax non-Slack user_id=%s", uid)
+                continue
+            out.append({"kind": "user", "id": uid})
+        return out
     if dest_type == "all_ao_channels":
         with regional_conn.cursor() as cur:
             cur.execute(
@@ -69,7 +75,16 @@ def resolve_destinations(
                 """
             )
             rows = cur.fetchall() or []
-        return [{"kind": "user", "id": r["user_id"]} for r in rows if r.get("user_id")]
+        out: list[dict[str, str]] = []
+        for r in rows:
+            uid = r.get("user_id")
+            if not uid:
+                continue
+            if not is_slack_user_id(uid):
+                LOG.info("Skip dm_all_pax target non-Slack user_id=%s", uid)
+                continue
+            out.append({"kind": "user", "id": uid})
+        return out
     return []
 
 
