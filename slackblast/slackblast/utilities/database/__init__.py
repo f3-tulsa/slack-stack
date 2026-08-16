@@ -1,6 +1,7 @@
 import logging
 import os
 import ssl
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import List, TypeVar
 from urllib.parse import quote_plus
@@ -175,4 +176,24 @@ class DbManager:
             records = session.execute(sql_query)
             return records
         finally:
+            close_session(session)
+
+    @staticmethod
+    @contextmanager
+    def transaction(schema=None):
+        """One commit on success, rollback on error, always close the session.
+
+        Slack I/O must stay outside this block: the pool is ``pool_size=1``.
+        ``expire_on_commit=False`` so ORM objects remain usable after commit.
+        """
+        session = get_session(schema=schema)
+        session.expire_on_commit = False
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
             close_session(session)

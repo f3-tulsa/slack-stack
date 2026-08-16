@@ -177,7 +177,8 @@ def ensure_users_in_db(
                         "VALUES (:uid, :uname, :rname, :phone, :email, NULL, :app, :js) "
                         "ON DUPLICATE KEY UPDATE "
                         "user_name = VALUES(user_name), real_name = VALUES(real_name), "
-                        "phone = VALUES(phone), email = VALUES(email)"
+                        "phone = COALESCE(NULLIF(VALUES(phone), ''), phone), "
+                        "email = COALESCE(VALUES(email), email)"
                     ),
                     {
                         "uid": uid,

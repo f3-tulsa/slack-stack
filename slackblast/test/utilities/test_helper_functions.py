@@ -214,7 +214,9 @@ def test_ensure_users_in_db_no_merge_needed(mock_ge):
 
     assert len(calls) == 2
     assert "INSERT INTO users" in calls[1][0]
+    assert "COALESCE(VALUES(email), email)" in calls[1][0]
     assert calls[1][1]["uid"] == "U_NEW"
+    assert calls[1][1]["email"] == "a@b.com"
     logger.warning.assert_not_called()
 
 
@@ -384,8 +386,38 @@ def test_ensure_users_in_db_no_email_logs_warning(mock_ge):
     ensure_users_in_db(["U1"], client, logger, "region_schema")
 
     assert len(calls) == 1
+    insert_sql, params = calls[0]
+    assert "COALESCE(VALUES(email), email)" in insert_sql
+    assert "COALESCE(NULLIF(VALUES(phone), ''), phone)" in insert_sql
+    assert params["email"] is None
     logger.warning.assert_called_once()
     assert "users:read.email" in logger.warning.call_args[0][0]
+
+
+@patch("utilities.helper_functions.get_engine")
+def test_ensure_users_in_db_empty_phone_does_not_overwrite(mock_ge):
+    calls = []
+
+    def execute(stmt, params=None):
+        calls.append((str(stmt), params))
+        sql = str(stmt)
+        if "FROM users WHERE email" in sql and "user_id !=" in sql:
+            return _ExecResult([])
+        if "INSERT INTO users" in sql:
+            return _ExecResult()
+        raise AssertionError(f"Unexpected SQL in empty-phone test: {sql[:120]}")
+
+    mock_ge.return_value, _ = _mock_engine_with_execute(execute)
+
+    client = MagicMock()
+    client.users_info.return_value = _slack_user(phone="")
+    logger = MagicMock()
+
+    ensure_users_in_db(["U_PHONE"], client, logger, "region_schema")
+
+    insert_sql, params = [c for c in calls if "INSERT INTO users" in c[0]][0]
+    assert "COALESCE(NULLIF(VALUES(phone), ''), phone)" in insert_sql
+    assert params["phone"] == ""
 
 
 def _region_with_schema(schema="f3testregion"):
