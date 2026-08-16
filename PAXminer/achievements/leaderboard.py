@@ -20,7 +20,10 @@ GAP_SIZES = (1, 2)
 
 
 def _progress_for_rule(nation_df: pd.DataFrame, rule: dict, schema: str) -> pd.DataFrame:
-    df = filter_activity(nation_df[nation_df["region"] == schema], rule.get("activity", "beatdown"))
+    df = filter_activity(
+        nation_df[nation_df["region"] == schema].copy(),
+        rule.get("activity", "beatdown"),
+    )
     metric = rule.get("metric", "posts")
     period = rule.get("period", "year")
     threshold = int(rule.get("threshold", 1))
