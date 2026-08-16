@@ -214,8 +214,37 @@ def test_award_achievements_destination_and_dispatch():
 
     mock_run.assert_called_once()
     assert mock_run.call_args.kwargs["channel_override"] == "C_AWARD"
+    assert mock_run.call_args.kwargs["post_channels"] == ["C_AWARD"]
     assert mock_run.call_args.kwargs["regional_schema"] == "f3test"
-    assert result.get("channel_count") == 1 or result.get("posted_channels")
+    assert result.get("posted_channels") == [{"ao": "awards", "channel_id": "C_AWARD"}]
+
+
+def test_award_dispatch_omits_posted_channels_when_nothing_posted():
+    from unittest.mock import MagicMock, patch
+
+    from schedule_runner import _dispatch_report
+
+    region = {"schema_name": "f3test", "slack_token": "enc"}
+    schedule = {
+        "destination_type": "specific_channels",
+        "destination_channels": '["C_AWARD"]',
+    }
+    definition = {"report_type": "award_achievements", "code": "award_achievements"}
+    with patch("schedule_runner.decrypt_field", return_value="xoxb-test"):
+        with patch("schedule_runner.connect_from_env", return_value=MagicMock()):
+            with patch(
+                "schedule_runner.resolve_destinations",
+                return_value=[{"kind": "channel", "id": "C_AWARD"}],
+            ):
+                with patch(
+                    "achievements.runner.run_achievements_for_region",
+                    return_value={"grants": 0, "revokes": 0},
+                ):
+                    result = _dispatch_report(
+                        MagicMock(), "paxminer_test", region, schedule, definition
+                    )
+    assert "posted_channels" not in result
+    assert result.get("channel_count") == 0
 
 
 def test_already_ran_successfully():
@@ -304,6 +333,31 @@ def test_schedule_edit_modal_has_submit_and_tod_options():
     assert view.get("submit")
     tod = next(b for b in view["blocks"] if b.get("block_id") == "time_of_day")
     assert len(tod["element"]["options"]) == 96
+
+
+def test_hourly_schedule_edit_uses_minute_of_hour_picker():
+    from config_schedule import _schedule_edit_modal
+
+    view = _schedule_edit_modal(
+        "T1",
+        "f3test",
+        [{"id": 1, "name": "Awards", "report_type": "award_achievements", "code": "award_achievements"}],
+        schedule={
+            "id": 3,
+            "report_definition_id": 1,
+            "destination_type": "specific_channels",
+            "destination_channels": '["C1"]',
+            "frequency_type": "hourly",
+            "time_of_day": "00:50:00",
+            "enabled": 1,
+        },
+        timezone_name="America/Chicago",
+    )
+    tod = next(b for b in view["blocks"] if b.get("block_id") == "time_of_day")
+    assert tod["label"]["text"] == "Minute of hour"
+    values = [o["value"] for o in tod["element"]["options"]]
+    assert values == ["00:00", "00:15", "00:30", "00:45"]
+    assert tod["element"]["initial_option"]["value"] == "00:45"
 
 
 def test_reports_list_and_edit_modals_have_submit():
@@ -629,32 +683,29 @@ def test_backfill_award_achievements_schedules_idempotent():
     cur.fetchall.return_value = [region]
 
     with patch("schedule_schema._table_exists", return_value=True):
-        with patch(
-            "schedule_schema.upsert_builtin_definitions",
-            return_value={"award_achievements": 42},
-        ):
-            cur.fetchone.return_value = {"c": 0}
-            first = backfill_award_achievements_schedules(cur, "paxminer_test")
-            assert first["schedules_inserted"] == 1
-            insert_calls = [
-                c for c in cur.execute.call_args_list if "INSERT INTO" in str(c.args[0])
-            ]
-            assert len(insert_calls) == 1
-            args = insert_calls[0].args[1]
-            assert args[2] == "specific_channels"
-            assert "C_ACH" in args[3]
-            assert args[4] == "daily"
-            assert ", 0)" in insert_calls[0].args[0]
+        cur.fetchone.side_effect = [{"id": 42}, {"c": 0}]
+        first = backfill_award_achievements_schedules(cur, "paxminer_test")
+        assert first["schedules_inserted"] == 1
+        assert first["definitions_ensured"] == 0
+        insert_calls = [
+            c for c in cur.execute.call_args_list if "INSERT INTO" in str(c.args[0])
+        ]
+        assert len(insert_calls) == 1
+        args = insert_calls[0].args[1]
+        assert args[2] == "specific_channels"
+        assert "C_ACH" in args[3]
+        assert args[4] == "daily"
+        assert ", 0)" in insert_calls[0].args[0]
 
-            cur.reset_mock()
-            cur.fetchall.return_value = [region]
-            cur.fetchone.return_value = {"c": 1}
-            second = backfill_award_achievements_schedules(cur, "paxminer_test")
-            assert second["schedules_inserted"] == 0
-            assert second["skipped"] == 1
-            assert not any(
-                "INSERT INTO" in str(c.args[0]) for c in cur.execute.call_args_list
-            )
+        cur.reset_mock()
+        cur.fetchall.return_value = [region]
+        cur.fetchone.side_effect = [{"id": 42}, {"c": 1}]
+        second = backfill_award_achievements_schedules(cur, "paxminer_test")
+        assert second["schedules_inserted"] == 0
+        assert second["skipped"] == 1
+        assert not any(
+            "INSERT INTO" in str(c.args[0]) for c in cur.execute.call_args_list
+        )
 
 
 def test_seed_default_schedules_uses_defaults_json():

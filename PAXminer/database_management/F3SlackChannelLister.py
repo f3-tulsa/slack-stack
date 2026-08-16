@@ -20,7 +20,14 @@ def database_slack_channel_update(region_db, key, mydb):
     slack = WebClient(token=key)
     slack.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=5))
 
-    from slack_util import MAX_SLACK_PAGES, next_slack_cursor
+    try:
+        from slack_util import MAX_SLACK_PAGES, next_slack_cursor
+    except ImportError:
+        import sys
+        from pathlib import Path
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from slack_util import MAX_SLACK_PAGES, next_slack_cursor
 
     cursor_slack = ""
     seen_cursors: set[str] = set()

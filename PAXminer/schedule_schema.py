@@ -344,6 +344,47 @@ def seed_default_schedules(
     return inserted
 
 
+def _ensure_award_achievements_definition(cur, pm_schema: str, regional_schema: str) -> tuple[int | None, bool]:
+    """Look up or insert only the award_achievements builtin. Returns (id, inserted)."""
+    cur.execute(
+        f"""
+        SELECT id FROM `{pm_schema}`.`region_report_definitions`
+        WHERE schema_name=%s AND code=%s
+        """,
+        (regional_schema, "award_achievements"),
+    )
+    row = cur.fetchone()
+    if row:
+        return int(row["id"]), False
+    d = next(x for x in BUILTIN_DEFINITIONS if x["code"] == "award_achievements")
+    cur.execute(
+        f"""
+        INSERT INTO `{pm_schema}`.`region_report_definitions`
+          (schema_name, code, name, report_type, is_builtin, is_customized,
+           time_window_type)
+        VALUES (%s, %s, %s, %s, 1, 0, %s)
+        """,
+        (
+            regional_schema,
+            d["code"],
+            d["name"],
+            d["report_type"],
+            d.get("time_window_type"),
+        ),
+    )
+    cur.execute(
+        f"""
+        SELECT id FROM `{pm_schema}`.`region_report_definitions`
+        WHERE schema_name=%s AND code=%s
+        """,
+        (regional_schema, "award_achievements"),
+    )
+    created = cur.fetchone()
+    if not created:
+        return None, False
+    return int(created["id"]), True
+
+
 def backfill_award_achievements_schedules(cur, pm_schema: str) -> dict[str, int]:
     """Create Award Achievements schedules for regions that used the daily EventBridge path.
 
@@ -377,13 +418,14 @@ def backfill_award_achievements_schedules(cur, pm_schema: str) -> dict[str, int]
         if not regional or not channel:
             skipped += 1
             continue
-        code_to_id = upsert_builtin_definitions(cur, pm_schema, regional)
-        def_id = code_to_id.get("award_achievements")
+        def_id, inserted_def = _ensure_award_achievements_definition(
+            cur, pm_schema, regional
+        )
         if not def_id:
-            # Insert only the award_achievements definition if missing from builtins.
             skipped += 1
             continue
-        definitions_ensured += 1
+        if inserted_def:
+            definitions_ensured += 1
         cur.execute(
             f"""
             SELECT COUNT(*) AS c FROM `{pm_schema}`.`region_schedules`

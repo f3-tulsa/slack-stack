@@ -712,14 +712,21 @@ def _dispatch_report(
                 regional_schema=schema_name,
                 region_row=region,
                 channel_override=channel_ids[0],
+                post_channels=channel_ids,
             )
             if isinstance(result, dict):
                 result = dict(result)
                 if result.get("skipped"):
                     return _apply_delivery_result(result, attempted_channels=0)
-                posted = [{"ao": "awards", "channel_id": channel_ids[0]}]
-                result["posted_channels"] = posted
-                return _apply_delivery_result(result, attempted_channels=1)
+                posted_any = bool(result.get("grants") or result.get("revokes"))
+                if posted_any:
+                    result["posted_channels"] = [
+                        {"ao": "awards", "channel_id": cid} for cid in channel_ids
+                    ]
+                    return _apply_delivery_result(
+                        result, attempted_channels=len(channel_ids)
+                    )
+                return _apply_delivery_result(result, attempted_channels=0)
             return result
         if report_type == "kotter":
             from kotter.kotter_report import run_kotter_for_region

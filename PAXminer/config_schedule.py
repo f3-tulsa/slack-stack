@@ -17,6 +17,7 @@ from scheduling import (
     destination_valid_for_report,
     format_schedule_summary,
     parse_time_of_day,
+    snap_time_to_tick,
     time_of_day_options,
 )
 
@@ -473,7 +474,6 @@ def _schedule_edit_modal(
         draft["destination_type"] = dest_type
 
     freq_opts = _select_options(FREQUENCY_TYPES)
-    tod_opts = time_of_day_options()
     tod = draft.get("time_of_day") or "07:00"
 
     blocks: list[dict] = [
@@ -635,11 +635,25 @@ def _schedule_edit_modal(
             }
         )
 
+    if freq == "hourly":
+        tod_opts = [
+            {
+                "text": {"type": "plain_text", "text": f":{minute:02d}"},
+                "value": f"00:{minute:02d}",
+            }
+            for minute in (0, 15, 30, 45)
+        ]
+        snapped = snap_time_to_tick(parse_time_of_day(tod))
+        tod = f"00:{snapped.minute:02d}"
+        tod_label = "Minute of hour"
+    else:
+        tod_opts = time_of_day_options()
+        tod_label = f"Time of day ({timezone_name})"
     blocks.append(
         {
             "type": "input",
             "block_id": "time_of_day",
-            "label": {"type": "plain_text", "text": f"Time of day ({timezone_name})"},
+            "label": {"type": "plain_text", "text": tod_label},
             "element": {
                 "type": "static_select",
                 "action_id": "val",

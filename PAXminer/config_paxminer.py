@@ -83,21 +83,6 @@ def _achievement_summary(row: dict) -> str:
     )
 
 
-def _looks_like_channel_id(value: str | None) -> bool:
-    """True for public Slack channel IDs (channels_select is public-only)."""
-    if not value:
-        return False
-    v = str(value).strip()
-    return v.startswith("C") and len(v) >= 9
-
-
-def _channels_select_element(initial: str | None) -> dict:
-    element: dict = {"type": "channels_select", "action_id": "val"}
-    if _looks_like_channel_id(initial):
-        element["initial_channel"] = str(initial).strip()
-    return element
-
-
 def _config_modal(region: dict) -> dict:
     """Hub modal: timezone + entry points for Achievements / Reports / Kotter / Schedule."""
     from config_schedule import (
@@ -385,11 +370,6 @@ def _achievement_edit_modal(
             },
         ],
     }
-
-
-def _selected_channel(state: dict, block_id: str) -> str:
-    block = state.get(block_id, {}).get("val", {})
-    return (block.get("selected_channel") or "").strip()
 
 
 def _to_int(value, default):
