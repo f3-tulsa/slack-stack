@@ -644,6 +644,7 @@ def test_backfill_award_achievements_schedules_idempotent():
             assert args[2] == "specific_channels"
             assert "C_ACH" in args[3]
             assert args[4] == "daily"
+            assert ", 0)" in insert_calls[0].args[0]
 
             cur.reset_mock()
             cur.fetchall.return_value = [region]

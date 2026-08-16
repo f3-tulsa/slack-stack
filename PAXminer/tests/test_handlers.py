@@ -6,6 +6,23 @@ import os
 os.environ.setdefault("DB_ENCRYPTION_KEY", "test-encryption-key-32chars!!")
 
 
+def test_achievements_reconcile_mode_is_silent():
+    import json
+    from unittest.mock import MagicMock, patch
+
+    from handlers import achievements_handler
+
+    with patch("handlers.connect_from_env") as mock_conn:
+        mock_conn.return_value.close = MagicMock()
+        with patch("achievements.runner.run_daily", return_value=[{"grants": 3}]) as mock_run:
+            resp = achievements_handler({"mode": "reconcile"}, None)
+    body = json.loads(resp["body"])
+    assert body["ok"] is True
+    assert body["mode"] == "reconcile"
+    assert mock_run.call_args.kwargs.get("announce") is False
+    assert mock_run.call_args.kwargs.get("dry_run") is not True
+
+
 def test_achievements_daily_smoke_dry_run():
     with patch("handlers.connect_from_env") as mock_conn:
         mock_conn.return_value.close = MagicMock()

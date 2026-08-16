@@ -399,7 +399,7 @@ def backfill_award_achievements_schedules(cur, pm_schema: str) -> dict[str, int]
             INSERT INTO `{pm_schema}`.`region_schedules`
               (schema_name, report_definition_id, destination_type, destination_channels,
                frequency_type, time_of_day, enabled)
-            VALUES (%s, %s, %s, %s, %s, %s, 1)
+            VALUES (%s, %s, %s, %s, %s, %s, 0)
             """,
             (
                 regional,

@@ -424,7 +424,7 @@ def test_channel_override_bypasses_send_achievements_gate():
     assert result2 == {"skipped": "send_achievements off"}
 
 
-def test_run_achievements_revokes_on_daily_when_unqualified():
+def test_run_achievements_skips_revokes_on_unscoped_run():
     from achievements.runner import run_achievements_for_region
 
     rule = {
@@ -477,7 +477,7 @@ def test_run_achievements_revokes_on_daily_when_unqualified():
                         )
 
     assert result["grants"] == 0
-    assert result["revokes"] == 1
+    assert result["revokes"] == 0
 
 
 def test_run_achievements_scoped_revoke_only_for_webhook_pax():
@@ -620,6 +620,107 @@ def test_run_achievements_grants_and_posts():
     # Per-grant commit so a timeout mid-loop cannot re-announce uncommitted rows.
     assert mock_conn.commit.call_count >= 1
     mock_conn.commit.assert_called_once()
+
+
+def test_announce_false_inserts_without_slack():
+    from achievements.runner import run_achievements_for_region
+
+    rule = {
+        "id": 1,
+        "name": "Test",
+        "verb": "testing",
+        "metric": "posts",
+        "activity": "beatdown",
+        "period": "year",
+        "threshold": 1,
+    }
+    region_row = {
+        "send_achievements": 0,
+        "achievement_channel": None,
+        "slack_token": None,
+        "region": "test",
+    }
+    qual = pd.DataFrame(
+        {
+            "pax_id": ["U1"],
+            "achievement_id": [1],
+            "date_awarded": [date(2026, 7, 1)],
+            "period_bucket": [2026],
+        }
+    )
+    awarded_row = {
+        "id": 99,
+        "achievement_id": 1,
+        "pax_id": "U2",
+        "date_awarded": date(2026, 7, 1),
+        "period": "year",
+    }
+    nation = pd.DataFrame(
+        {"email": ["a@b.c"], "user_id": ["U1"], "date": [date(2026, 7, 1)], "region": ["f3test"]}
+    )
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[rule], [awarded_row]]
+    mock_cur.fetchone.return_value = None
+
+    with patch("achievements.runner.decrypt_field") as mock_dec:
+        with patch("achievements.runner.slack_client") as mock_client:
+            with patch("achievements.runner.load_nation_attendance", return_value=nation):
+                with patch(
+                    "achievements.runner.attach_home_regions", side_effect=lambda _c, n, _s: n
+                ):
+                    with patch("achievements.runner.evaluate_rule", return_value=qual):
+                        with patch("achievements.runner.post_message") as mock_post:
+                            result = run_achievements_for_region(
+                                mock_conn,
+                                pm_schema="paxminer_test",
+                                regional_schema="f3test",
+                                region_row=region_row,
+                                announce=False,
+                            )
+
+    assert result["grants"] == 1
+    assert result["revokes"] == 0
+    insert_calls = [c for c in mock_cur.execute.call_args_list if "INSERT INTO" in str(c)]
+    assert insert_calls
+    delete_calls = [c for c in mock_cur.execute.call_args_list if "DELETE FROM" in str(c)]
+    assert delete_calls == []
+    mock_dec.assert_not_called()
+    mock_client.assert_not_called()
+    mock_post.assert_not_called()
+
+
+def test_resolve_achievement_channel_prefers_schedule():
+    from achievements.runner import resolve_achievement_channel
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchone.return_value = {"destination_channels": '["C_SCHED"]'}
+    region_row = {"achievement_channel": "C_FALLBACK", "send_achievements": 1}
+
+    assert (
+        resolve_achievement_channel(mock_conn, "paxminer_test", "f3test", region_row)
+        == "C_SCHED"
+    )
+    mock_cur.fetchone.return_value = None
+    assert (
+        resolve_achievement_channel(mock_conn, "paxminer_test", "f3test", region_row)
+        == "C_FALLBACK"
+    )
+    assert (
+        resolve_achievement_channel(
+            mock_conn,
+            "paxminer_test",
+            "f3test",
+            region_row,
+            channel_override="C_OVR",
+        )
+        == "C_OVR"
+    )
 
 
 def test_validate_achievement_code():
@@ -1063,6 +1164,7 @@ def test_achievements_emit_per_event_paxminer_logs():
                                                 pm_schema="paxminer",
                                                 regional_schema="f3test",
                                                 region_row=region_row,
+                                                pax_user_ids={"U0GRANTXXXX", "U0REVOKEXXX"},
                                             )
 
     assert result == {"grants": 1, "revokes": 1}

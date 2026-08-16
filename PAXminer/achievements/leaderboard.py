@@ -9,6 +9,7 @@ import pandas as pd
 
 from achievements.attendance import attach_home_regions, filter_activity, load_nation_attendance, period_key
 from achievements.engine import awarded_period_bucket, evaluate_rule
+from achievements.runner import resolve_achievement_channel
 from common.encryption import decrypt_field
 from slack_blocks import chunk_messages, chunk_sections, fallback_text, header, section
 from slack_util import mention, post_message, slack_client, workspace_user_ids
@@ -144,9 +145,8 @@ def run_leaderboard_for_region(
     dry_run: bool = False,
     window: tuple[date, date] | None = None,
 ) -> dict:
-    del pm_schema  # retained for call-site compatibility; attendance is single-region now
     schema = region_row.get("schema_name")
-    channel = region_row.get("achievement_channel")
+    channel = resolve_achievement_channel(conn, pm_schema, schema or "", region_row)
     token_enc = region_row.get("slack_token")
     if not schema or not channel or not token_enc:
         return {"skipped": "missing schema, channel, or token"}

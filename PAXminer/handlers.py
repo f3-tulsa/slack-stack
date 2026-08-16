@@ -142,6 +142,23 @@ def achievements_handler(event, context):
         finally:
             conn.close()
 
+    if event.get("mode") == "reconcile":
+        conn = connect_from_env(registry_db)
+        try:
+            results = run_daily(conn, pm, announce=False)
+            return {
+                "statusCode": 200,
+                "body": json.dumps({"ok": True, "mode": "reconcile", "results": results}),
+            }
+        except Exception:
+            logging.exception("achievements reconcile failed")
+            return {
+                "statusCode": 500,
+                "body": json.dumps({"ok": False, "error": traceback.format_exc()}),
+            }
+        finally:
+            conn.close()
+
     dry_run = event.get("source") == "smoke"
     conn = connect_from_env(registry_db)
     try:

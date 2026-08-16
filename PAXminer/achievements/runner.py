@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import Counter, defaultdict
 from datetime import date
 
 import pandas as pd
 
-from achievements.engine import awarded_period_bucket, evaluate_rule, period_bucket_for_date
+from achievements.engine import awarded_period_bucket, evaluate_rule
 from achievements.attendance import attach_home_regions, load_nation_attendance
 from common.encryption import decrypt_field
 from slack_blocks import section
@@ -111,6 +112,60 @@ def _name_map_from_nation(nation: pd.DataFrame) -> dict[str, str]:
     }
 
 
+def _first_channel(raw) -> str | None:
+    if raw is None:
+        return None
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", errors="replace")
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        if text.startswith("["):
+            try:
+                raw = json.loads(text)
+            except json.JSONDecodeError:
+                return text
+        else:
+            return text
+    if isinstance(raw, list) and raw:
+        return str(raw[0]).strip() or None
+    return None
+
+
+def resolve_achievement_channel(
+    conn,
+    pm_schema: str,
+    regional_schema: str,
+    region_row: dict,
+    *,
+    channel_override: str | None = None,
+) -> str | None:
+    """Prefer the enabled award_achievements schedule, then achievement_channel."""
+    if channel_override:
+        return channel_override
+    if pm_schema:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT s.destination_channels
+                FROM `{pm_schema}`.`region_schedules` s
+                JOIN `{pm_schema}`.`region_report_definitions` d
+                  ON d.id = s.report_definition_id
+                WHERE s.schema_name=%s
+                  AND d.code='award_achievements'
+                  AND COALESCE(s.enabled, 0) = 1
+                LIMIT 1
+                """,
+                (regional_schema,),
+            )
+            row = cur.fetchone()
+        scheduled = _first_channel((row or {}).get("destination_channels"))
+        if scheduled:
+            return scheduled
+    return (region_row.get("achievement_channel") or "").strip() or None
+
+
 def run_achievements_for_region(
     conn,
     *,
@@ -122,25 +177,43 @@ def run_achievements_for_region(
     ao_channel_id: str | None = None,
     dry_run: bool = False,
     channel_override: str | None = None,
+    post_channels: list[str] | None = None,
+    announce: bool = True,
 ) -> dict:
-    del pm_schema  # retained for call-site compatibility; attendance is single-region now
     year = date.today().year
     # Label logs with schema_name (e.g. f3ttown_test), not display region.
     region_name = regional_schema
+    allow_revoke = pax_user_ids is not None
+    channels = [c for c in (post_channels or []) if c]
+    if channel_override and channel_override not in channels:
+        channels.insert(0, channel_override)
+    if not channels:
+        resolved = resolve_achievement_channel(
+            conn,
+            pm_schema,
+            regional_schema,
+            region_row,
+            channel_override=channel_override,
+        )
+        if resolved:
+            channels = [resolved]
+    channel = channels[0] if channels else None
     # Schedule path passes channel_override and uses schedule.enabled as the gate.
-    # Webhook / legacy daily path still honors send_achievements.
-    if channel_override:
-        channel = channel_override
-    else:
+    # Webhook / legacy daily path still honors send_achievements when no schedule channel.
+    if announce and not channel_override and not channel:
         if not region_row.get("send_achievements"):
             return {"skipped": "send_achievements off"}
         channel = region_row.get("achievement_channel")
+        if channel:
+            channels = [channel]
     token_enc = region_row.get("slack_token")
-    if not channel or not token_enc:
+    if announce and (not channel or not token_enc):
         return {"skipped": "missing channel or token"}
 
-    token = decrypt_field(token_enc)
-    client = slack_client(token)
+    client = None
+    if announce:
+        token = decrypt_field(token_enc)
+        client = slack_client(token)
 
     with conn.cursor() as cur:
         rules = _load_rules(cur, regional_schema)
@@ -189,12 +262,13 @@ def run_achievements_for_region(
             )
             existing.add(key)
 
-        for _, row in awarded[awarded["achievement_id"] == aid].iterrows():
-            if scope is not None and row["pax_id"] not in scope:
-                continue
-            bucket = awarded_period_bucket(row["date_awarded"], period)
-            if (row["pax_id"], aid, bucket) not in qual_keys:
-                revokes.append({"id": row["id"], "pax_id": row["pax_id"], "rule": rule})
+        if allow_revoke and announce:
+            for _, row in awarded[awarded["achievement_id"] == aid].iterrows():
+                if scope is not None and row["pax_id"] not in scope:
+                    continue
+                bucket = awarded_period_bucket(row["date_awarded"], period)
+                if (row["pax_id"], aid, bucket) not in qual_keys:
+                    revokes.append({"id": row["id"], "pax_id": row["pax_id"], "rule": rule})
 
     counts: dict[str, Counter] = defaultdict(Counter)
     for _, row in awarded.iterrows():
@@ -203,27 +277,29 @@ def run_achievements_for_region(
     if dry_run:
         return {"grants": len(grants), "revokes": len(revokes), "dry_run": True}
 
-    names = _name_map_from_nation(nation)
-    known_ids = workspace_user_ids(client)
+    names = _name_map_from_nation(nation) if announce else {}
+    known_ids = workspace_user_ids(client) if announce and client is not None else None
 
     with conn.cursor() as cur:
         for g in revokes:
             rule = g["rule"]
             cur.execute(f"DELETE FROM `{regional_schema}`.`achievements_awarded` WHERE id=%s", (g["id"],))
-            text, blocks = _format_revoke_message(
-                g["pax_id"],
-                rule["name"],
-                display_name=names.get(g["pax_id"]),
-                known_ids=known_ids,
-            )
-            post_message(client, channel, text, blocks=blocks)
-            if post_to_ao and ao_channel_id:
-                post_message(client, ao_channel_id, text, blocks=blocks)
-            tag = mention(g["pax_id"], names.get(g["pax_id"]), known_ids=known_ids)
-            post_log(
-                client,
-                f"- Achievement ({region_name}): revoked '{rule['name']}' from {tag}",
-            )
+            if announce and client is not None:
+                text, blocks = _format_revoke_message(
+                    g["pax_id"],
+                    rule["name"],
+                    display_name=names.get(g["pax_id"]),
+                    known_ids=known_ids,
+                )
+                for cid in channels:
+                    post_message(client, cid, text, blocks=blocks)
+                if post_to_ao and ao_channel_id:
+                    post_message(client, ao_channel_id, text, blocks=blocks)
+                tag = mention(g["pax_id"], names.get(g["pax_id"]), known_ids=known_ids)
+                post_log(
+                    client,
+                    f"- Achievement ({region_name}): revoked '{rule['name']}' from {tag}",
+                )
             conn.commit()
 
         for g in grants:
@@ -236,42 +312,44 @@ def run_achievements_for_region(
                 (g["achievement_id"], g["pax_id"], g["date_awarded"]),
             )
             counts[g["pax_id"]][g["achievement_id"]] += 1
-            total = sum(counts[g["pax_id"]].values())
-            idx_count = counts[g["pax_id"]][g["achievement_id"]]
-            text, blocks = _format_grant_message(
-                g["pax_id"],
-                rule["name"],
-                rule["verb"],
-                g["date_awarded"],
-                total,
-                idx_count,
-                display_name=names.get(g["pax_id"]),
-                known_ids=known_ids,
-            )
-            post_message(client, channel, text, blocks=blocks, add_reaction=True)
-            if is_slack_user_id(g["pax_id"]) and (
-                known_ids is None or g["pax_id"] in known_ids
-            ):
-                try:
-                    dm = open_dm_channel(client, g["pax_id"])
-                    post_message(client, dm, text, blocks=blocks)
-                except Exception:
-                    LOG.exception("DM failed pax=%s", g["pax_id"])
-            else:
-                LOG.info("Skip achievement DM for non-Slack user_id=%s", g["pax_id"])
-            if post_to_ao and ao_channel_id:
-                post_message(client, ao_channel_id, text, blocks=blocks, add_reaction=True)
-            tag = mention(g["pax_id"], names.get(g["pax_id"]), known_ids=known_ids)
-            post_log(
-                client,
-                f"- Achievement ({region_name}): granted '{rule['name']}' to {tag}",
-            )
+            if announce and client is not None:
+                total = sum(counts[g["pax_id"]].values())
+                idx_count = counts[g["pax_id"]][g["achievement_id"]]
+                text, blocks = _format_grant_message(
+                    g["pax_id"],
+                    rule["name"],
+                    rule["verb"],
+                    g["date_awarded"],
+                    total,
+                    idx_count,
+                    display_name=names.get(g["pax_id"]),
+                    known_ids=known_ids,
+                )
+                for cid in channels:
+                    post_message(client, cid, text, blocks=blocks, add_reaction=True)
+                if is_slack_user_id(g["pax_id"]) and (
+                    known_ids is None or g["pax_id"] in known_ids
+                ):
+                    try:
+                        dm = open_dm_channel(client, g["pax_id"])
+                        post_message(client, dm, text, blocks=blocks)
+                    except Exception:
+                        LOG.exception("DM failed pax=%s", g["pax_id"])
+                else:
+                    LOG.info("Skip achievement DM for non-Slack user_id=%s", g["pax_id"])
+                if post_to_ao and ao_channel_id:
+                    post_message(client, ao_channel_id, text, blocks=blocks, add_reaction=True)
+                tag = mention(g["pax_id"], names.get(g["pax_id"]), known_ids=known_ids)
+                post_log(
+                    client,
+                    f"- Achievement ({region_name}): granted '{rule['name']}' to {tag}",
+                )
             conn.commit()
 
     return {"grants": len(grants), "revokes": len(revokes)}
 
 
-def run_daily(conn, pm_schema: str, *, dry_run: bool = False) -> list[dict]:
+def run_daily(conn, pm_schema: str, *, dry_run: bool = False, announce: bool = True) -> list[dict]:
     results = []
     with conn.cursor() as cur:
         cur.execute(f"SELECT * FROM `{pm_schema}`.`regions` WHERE active=1")
@@ -287,6 +365,7 @@ def run_daily(conn, pm_schema: str, *, dry_run: bool = False) -> list[dict]:
                 regional_schema=schema,
                 region_row=row,
                 dry_run=dry_run,
+                announce=announce,
             )
             results.append({"region": row["region"], **r})
         except Exception as e:
