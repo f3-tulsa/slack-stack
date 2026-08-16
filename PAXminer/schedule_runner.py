@@ -17,6 +17,20 @@ from slack_util import is_slack_user_id, open_dm_channel, post_log, post_message
 
 LOG = logging.getLogger(__name__)
 
+# Cached per-process: None = unknown, True/False after the first write attempt.
+_HAS_LAST_RUN_AT: bool | None = None
+
+
+def reset_last_run_at_probe() -> None:
+    """Clear the last_run_at column cache (tests)."""
+    global _HAS_LAST_RUN_AT
+    _HAS_LAST_RUN_AT = None
+
+
+def _is_unknown_last_run_at(exc: BaseException) -> bool:
+    code = exc.args[0] if exc.args else None
+    return code == 1054 or "unknown column" in str(exc).lower()
+
 
 def _parse_json_list(value: Any) -> list[str]:
     if value is None:
@@ -97,18 +111,48 @@ def mark_schedule_status(
     *,
     local_dt: datetime | None = None,
 ) -> None:
-    """Record run outcome. ``local_dt`` (region wall time) populates last_run_at for hourly."""
+    """Record run outcome. ``local_dt`` (region wall time) populates last_run_at for hourly.
+
+    Tolerates a missing ``last_run_at`` column (MySQL 1054) so a deploy-before-migration
+    tick still records ``last_run_on`` / ``last_run_status`` instead of 500ing the region.
+    """
+    global _HAS_LAST_RUN_AT
     run_at = local_dt.replace(tzinfo=None) if local_dt is not None else None
+    write_at = run_at is not None and _HAS_LAST_RUN_AT is not False
     with conn.cursor() as cur:
-        if run_at is not None:
-            cur.execute(
-                f"""
-                UPDATE `{pm_schema}`.`region_schedules`
-                SET last_run_on=%s, last_run_at=%s, last_run_status=%s
-                WHERE id=%s
-                """,
-                (local_date.isoformat(), run_at.strftime("%Y-%m-%d %H:%M:%S"), status, schedule_id),
-            )
+        if write_at:
+            try:
+                cur.execute(
+                    f"""
+                    UPDATE `{pm_schema}`.`region_schedules`
+                    SET last_run_on=%s, last_run_at=%s, last_run_status=%s
+                    WHERE id=%s
+                    """,
+                    (
+                        local_date.isoformat(),
+                        run_at.strftime("%Y-%m-%d %H:%M:%S"),
+                        status,
+                        schedule_id,
+                    ),
+                )
+                _HAS_LAST_RUN_AT = True
+            except Exception as exc:
+                if not _is_unknown_last_run_at(exc):
+                    raise
+                _HAS_LAST_RUN_AT = False
+                LOG.warning("region_schedules.last_run_at missing; writing without it")
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                cur.execute(
+                    f"""
+                    UPDATE `{pm_schema}`.`region_schedules`
+                    SET last_run_on=%s, last_run_status=%s
+                    WHERE id=%s
+                    """,
+                    (local_date.isoformat(), status, schedule_id),
+                )
         else:
             cur.execute(
                 f"""

@@ -214,15 +214,18 @@ def already_ran_successfully(schedule: dict[str, Any], local_date: date) -> bool
 
 
 def already_ran_this_hour(schedule: dict[str, Any], local_dt: datetime) -> bool:
-    """Skip when last_run_at falls in the same local hour and status is success."""
+    """Skip when last_run_at falls in the same local hour and status is terminal.
+
+    ``success`` and ``skipped`` are both terminal for the hour so a no-op run
+    (no rules / no attendance / no destinations) does not re-fire every tick.
+    ``last_run_at`` is region-local wall time, matching ``mark_schedule_status``.
+    """
     last_at = schedule.get("last_run_at")
     if last_at is None:
         return False
     if isinstance(last_at, str):
         last_at = datetime.fromisoformat(last_at.replace("Z", "+00:00"))
         if last_at.tzinfo is not None:
-            # Compare as naive local wall time when timezone unknown; callers
-            # should store UTC and pass timezone-aware local_dt when possible.
             last_at = last_at.replace(tzinfo=None)
     elif isinstance(last_at, datetime) and last_at.tzinfo is not None:
         last_at = last_at.replace(tzinfo=None)
@@ -235,7 +238,7 @@ def already_ran_this_hour(schedule: dict[str, Any], local_dt: datetime) -> bool:
     ):
         return False
     status = (schedule.get("last_run_status") or "").strip().lower()
-    return status == "success"
+    return status in ("success", "skipped")
 
 
 def is_due_now(
@@ -247,7 +250,8 @@ def is_due_now(
     """Due today + region-local now >= time_of_day + not already run successfully.
 
     Hourly schedules use ``last_run_at`` for intra-day idempotency and fire when
-    the local minute is past the configured minute-of-hour from ``time_of_day``.
+    the local minute is past the configured minute-of-hour from ``time_of_day``
+    (snapped to the 15-minute tick so a stored ``:50`` still fires at ``:45``).
     """
     local = region_local_now(timezone_name, utc_now=utc_now)
     local_date = local.date()
@@ -257,6 +261,7 @@ def is_due_now(
     if freq == "hourly":
         if already_ran_this_hour(schedule, local):
             return False
+        tod = snap_time_to_tick(tod)
         return local.minute >= tod.minute
 
     if already_ran_successfully(schedule, local_date):

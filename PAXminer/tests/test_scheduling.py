@@ -96,6 +96,24 @@ def test_hourly_is_due_today_and_minute_gate():
     next_hour = datetime(2026, 7, 19, 19, 20, tzinfo=ZoneInfo("UTC"))  # 14:20 CDT
     assert is_due_now(schedule, timezone_name="America/Chicago", utc_now=next_hour)
 
+    # Minute > 45 (e.g. :50) snaps to :45 so the :45 tick still fires.
+    late = datetime(2026, 7, 19, 18, 50, tzinfo=ZoneInfo("UTC"))  # 13:50 CDT
+    late_sched = {
+        "frequency_type": "hourly",
+        "time_of_day": "00:50:00",
+        "last_run_at": None,
+        "last_run_status": None,
+    }
+    assert is_due_now(late_sched, timezone_name="America/Chicago", utc_now=late)
+    at_tick = datetime(2026, 7, 19, 18, 45, tzinfo=ZoneInfo("UTC"))  # 13:45 CDT
+    assert is_due_now(late_sched, timezone_name="America/Chicago", utc_now=at_tick)
+
+    # skipped is terminal for the hour (no re-fire every tick)
+    schedule["last_run_status"] = "skipped"
+    schedule["last_run_at"] = datetime(2026, 7, 19, 13, 15)
+    assert already_ran_this_hour(schedule, datetime(2026, 7, 19, 13, 45))
+    assert not is_due_now(schedule, timezone_name="America/Chicago", utc_now=utc)
+
     summary = format_schedule_summary(
         {
             "id": 1,
@@ -108,6 +126,54 @@ def test_hourly_is_due_today_and_minute_gate():
         {"name": "Award Achievements"},
     )
     assert "hourly @ :15" in summary
+
+
+def test_mark_schedule_status_tolerates_missing_last_run_at():
+    from datetime import date, datetime
+    from unittest.mock import MagicMock
+
+    from schedule_runner import mark_schedule_status, reset_last_run_at_probe
+
+    reset_last_run_at_probe()
+    conn = MagicMock()
+    cur = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cur
+    conn.cursor.return_value.__exit__.return_value = False
+
+    class UnknownColumn(Exception):
+        def __init__(self):
+            super().__init__(1054, "Unknown column 'last_run_at' in 'field list'")
+            self.args = (1054, "Unknown column 'last_run_at' in 'field list'")
+
+    cur.execute.side_effect = [UnknownColumn(), None]
+    mark_schedule_status(
+        conn,
+        "paxminer_test",
+        7,
+        date(2026, 7, 19),
+        "running",
+        local_dt=datetime(2026, 7, 19, 13, 15),
+    )
+    assert cur.execute.call_count == 2
+    second_sql = cur.execute.call_args_list[1].args[0]
+    assert "last_run_at" not in second_sql
+    assert "last_run_on" in second_sql
+    conn.commit.assert_called()
+
+    # Cached miss skips the last_run_at write on the next call
+    cur.reset_mock()
+    cur.execute.side_effect = None
+    mark_schedule_status(
+        conn,
+        "paxminer_test",
+        8,
+        date(2026, 7, 19),
+        "success",
+        local_dt=datetime(2026, 7, 19, 13, 16),
+    )
+    assert cur.execute.call_count == 1
+    assert "last_run_at" not in cur.execute.call_args.args[0]
+    reset_last_run_at_probe()
 
 
 def test_award_achievements_destination_and_dispatch():

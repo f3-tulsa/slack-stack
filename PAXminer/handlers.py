@@ -247,20 +247,33 @@ def schedule_handler(event, context):
                 )
                 d = cur.fetchone()
                 report_type = (d or {}).get("report_type")
-            heavy = report_type in ("pax_charts", "q_charts", "ao_leaderboard")
-            if dry_run:
+            heavy = report_type in (
+                "pax_charts",
+                "q_charts",
+                "ao_leaderboard",
+                "award_achievements",
+            )
+            try:
+                if dry_run:
+                    results.append(
+                        run_one_schedule_item(conn, pm, row, dry_run=True, force=True)
+                    )
+                elif heavy and os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+                    try:
+                        async_invoke_schedule_item(int(row["id"]), force=False)
+                        results.append({"schedule_id": row["id"], "ok": True, "queued": True})
+                    except Exception as e:
+                        logging.exception("fanout failed schedule_id=%s", row["id"])
+                        results.append({"schedule_id": row["id"], "ok": False, "error": str(e)})
+                else:
+                    results.append(
+                        run_one_schedule_item(conn, pm, row, dry_run=False, force=False)
+                    )
+            except Exception as e:
+                logging.exception("schedule tick item failed schedule_id=%s", row.get("id"))
                 results.append(
-                    run_one_schedule_item(conn, pm, row, dry_run=True, force=True)
+                    {"schedule_id": row.get("id"), "ok": False, "error": str(e)}
                 )
-            elif heavy and os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
-                try:
-                    async_invoke_schedule_item(int(row["id"]), force=False)
-                    results.append({"schedule_id": row["id"], "ok": True, "queued": True})
-                except Exception as e:
-                    logging.exception("fanout failed schedule_id=%s", row["id"])
-                    results.append({"schedule_id": row["id"], "ok": False, "error": str(e)})
-            else:
-                results.append(run_one_schedule_item(conn, pm, row, dry_run=False, force=False))
         return {
             "statusCode": 200,
             "body": json.dumps({"ok": True, "due": len(due), "results": results}),

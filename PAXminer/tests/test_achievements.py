@@ -617,6 +617,8 @@ def test_run_achievements_grants_and_posts():
     insert_calls = [c for c in mock_cur.execute.call_args_list if "INSERT INTO" in str(c)]
     assert insert_calls
     assert mock_post.call_count >= 2  # channel + DM
+    # Per-grant commit so a timeout mid-loop cannot re-announce uncommitted rows.
+    assert mock_conn.commit.call_count >= 1
     mock_conn.commit.assert_called_once()
 
 

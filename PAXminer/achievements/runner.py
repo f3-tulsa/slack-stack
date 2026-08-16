@@ -224,6 +224,7 @@ def run_achievements_for_region(
                 client,
                 f"- Achievement ({region_name}): revoked '{rule['name']}' from {tag}",
             )
+            conn.commit()
 
         for g in grants:
             rule = g["rule"]
@@ -265,8 +266,7 @@ def run_achievements_for_region(
                 client,
                 f"- Achievement ({region_name}): granted '{rule['name']}' to {tag}",
             )
-
-        conn.commit()
+            conn.commit()
 
     return {"grants": len(grants), "revokes": len(revokes)}
 
