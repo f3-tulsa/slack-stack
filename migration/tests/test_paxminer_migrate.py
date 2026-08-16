@@ -48,7 +48,12 @@ def test_all_runs_phases_in_order(mock_connect):
 
     def _scheduler(cur, stage):
         call_order.append("scheduler")
-        return {"timezone_added": False, "tables_created": []}
+        return {
+            "timezone_added": False,
+            "tables_created": [],
+            "is_customized_added": False,
+            "defaults_seeded": False,
+        }
 
     def _drop_legacy(cur, stage):
         call_order.append("drop-legacy-columns")
@@ -69,6 +74,32 @@ def test_all_runs_phases_in_order(mock_connect):
     assert call_order == ["weaselbot", "scheduler", "drop-legacy-columns"]
     assert conn.commit.call_count == 3
     conn.close.assert_called_once()
+
+
+def test_scheduler_phase_does_not_seed_defaults(mock_connect):
+    """Migration DDL only — report_defaults.json loads via Slack Load/Restore."""
+    _conn, cursor = mock_connect
+    cursor.fetchone.return_value = {"c": 1}  # columns/tables already exist
+
+    with (
+        patch("schedule_schema.seed_all_regions") as seed,
+        patch(
+            "paxminer_phases.scheduler.backfill_award_achievements_schedules",
+            return_value={"definitions_ensured": 0, "schedules_inserted": 0, "skipped": 0},
+        ) as backfill,
+        patch("paxminer_phases.scheduler.ensure_last_run_at_column", return_value=False),
+    ):
+        from paxminer_phases.scheduler import run_scheduler
+
+        result = run_scheduler(cursor, "test")
+
+    seed.assert_not_called()
+    backfill.assert_called_once()
+    assert result["defaults_seeded"] is False
+    assert "Load/Restore" in result["note"] or "defaults" in result["note"].lower()
+    assert "is_customized_added" in result
+    assert "last_run_at_added" in result
+    assert "award_achievements_backfill" in result
 
 
 def test_all_stops_on_first_failure(mock_connect):

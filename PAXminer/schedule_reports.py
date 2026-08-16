@@ -15,7 +15,7 @@ import pandas as pd
 
 from scheduling import ALLOWED_SOURCES, resolve_time_window
 from slack_blocks import chunk_messages, chunk_sections, fallback_text, header, section
-from slack_util import open_dm_channel, post_message, slack_client, upload_file
+from slack_util import is_slack_user_id, open_dm_channel, post_message, slack_client, upload_file
 
 LOG = logging.getLogger(__name__)
 
@@ -150,7 +150,9 @@ def run_custom_report(
         raise ValueError(f"source not allowed: {source}")
     sql = _SOURCE_SQL[source]
     start, end = resolve_time_window(definition, timezone_name=timezone_name)
-    df = pd.read_sql(sql, regional_conn, params=(start.isoformat(), end.isoformat()))
+    from paxminer_db import read_sql_df
+
+    df = read_sql_df(regional_conn, sql, params=(start.isoformat(), end.isoformat()))
     fields = _parse_fields(definition.get("fields"))
     if fields:
         keep = [c for c in fields if c in df.columns]
@@ -165,6 +167,9 @@ def run_custom_report(
 
     delivery_channels: list[str] = list(channel_ids or [])
     for uid in user_ids or []:
+        if not is_slack_user_id(uid):
+            LOG.info("Skip custom report DM for non-Slack user_id=%s", uid)
+            continue
         try:
             delivery_channels.append(open_dm_channel(client, uid))
         except Exception:

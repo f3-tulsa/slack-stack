@@ -134,8 +134,6 @@ def test_config_submit_clear_on_success():
     region = {"region": "tulsa", "schema_name": "f3tulsa_test"}
     values = {
         "timezone": "America/Chicago",
-        "send_achievements": 1,
-        "achievement_channel": "C1",
     }
 
     with patch("slack_app.is_slack_admin", return_value=True):

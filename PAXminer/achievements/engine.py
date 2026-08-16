@@ -30,7 +30,7 @@ def evaluate_rule(
     achievement_id = int(rule["id"])
 
     if metric == "qs":
-        df = df[df["q_flag"] == 1]
+        df = df[df["q_flag"] == 1].copy()
     elif metric in ("posts", "distinct_aos", "posts_at_single_ao"):
         pass
     else:

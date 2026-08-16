@@ -6,10 +6,12 @@ import logging
 import os
 import ssl
 from pathlib import Path
+from typing import Any
 
 import pymysql
 
 _ROOT = Path(__file__).resolve().parent
+LOG = logging.getLogger(__name__)
 
 
 def credentials_path(relative: str = "config/credentials.ini") -> Path:
@@ -110,3 +112,24 @@ def connect_from_env(database: str):
 
 def paxminer_schema_from_env() -> str:
     return os.environ.get("PAXMINER_SCHEMA", "paxminer").strip() or "paxminer"
+
+
+def read_sql_df(conn, sql: str, params: Any = None):
+    """Load a SQL result into a DataFrame via an explicit *tuple* cursor.
+
+    Never pass a DictCursor connection to ``pd.read_sql``: under pandas 3.x,
+    ``lib.to_object_array_tuples`` iterates dicts by key, so every cell becomes
+    the column name string (e.g. date column filled with ``"date"``). That
+    silently empties Kotter / achievements / custom reports after
+    ``to_datetime(..., errors="coerce")``.
+
+    Pandas is imported lazily so lightweight Slack Lambda images (no pandas)
+    can still import this module for ``connect_from_env``.
+    """
+    import pandas as pd
+
+    with conn.cursor(pymysql.cursors.Cursor) as cur:
+        cur.execute(sql, params or ())
+        cols = [d[0] for d in (cur.description or [])]
+        rows = cur.fetchall()
+    return pd.DataFrame(rows, columns=cols)

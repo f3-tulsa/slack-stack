@@ -116,15 +116,19 @@ def achievements_handler(event, context):
                 region_row = cur.fetchone()
             if not region_row:
                 return http_response(404, {"ok": False, "error": "Region not found"})
-            result = run_achievements_for_region(
-                conn,
-                pm_schema=pm,
-                regional_schema=schema,
-                region_row=region_row,
-                pax_user_ids=pax_ids or None,
-                post_to_ao=post_to_ao,
-                ao_channel_id=ao_channel_id,
-            )
+            try:
+                result = run_achievements_for_region(
+                    conn,
+                    pm_schema=pm,
+                    regional_schema=schema,
+                    region_row=region_row,
+                    pax_user_ids=pax_ids or None,
+                    post_to_ao=post_to_ao,
+                    ao_channel_id=ao_channel_id,
+                )
+            except Exception as exc:
+                logging.exception("achievements webhook run failed schema=%s", schema)
+                return http_response(500, {"ok": False, "error": str(exc)[:500]})
             return http_response(200, {"ok": True, "result": result})
         finally:
             conn.close()
@@ -135,6 +139,23 @@ def achievements_handler(event, context):
         try:
             results = run_leaderboard(conn, pm, dry_run=True)
             return {"statusCode": 200, "body": json.dumps({"ok": True, "results": results})}
+        finally:
+            conn.close()
+
+    if event.get("mode") == "reconcile":
+        conn = connect_from_env(registry_db)
+        try:
+            results = run_daily(conn, pm, announce=False)
+            return {
+                "statusCode": 200,
+                "body": json.dumps({"ok": True, "mode": "reconcile", "results": results}),
+            }
+        except Exception:
+            logging.exception("achievements reconcile failed")
+            return {
+                "statusCode": 500,
+                "body": json.dumps({"ok": False, "error": traceback.format_exc()}),
+            }
         finally:
             conn.close()
 
@@ -243,20 +264,33 @@ def schedule_handler(event, context):
                 )
                 d = cur.fetchone()
                 report_type = (d or {}).get("report_type")
-            heavy = report_type in ("pax_charts", "q_charts", "ao_leaderboard")
-            if dry_run:
+            heavy = report_type in (
+                "pax_charts",
+                "q_charts",
+                "ao_leaderboard",
+                "award_achievements",
+            )
+            try:
+                if dry_run:
+                    results.append(
+                        run_one_schedule_item(conn, pm, row, dry_run=True, force=True)
+                    )
+                elif heavy and os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+                    try:
+                        async_invoke_schedule_item(int(row["id"]), force=False)
+                        results.append({"schedule_id": row["id"], "ok": True, "queued": True})
+                    except Exception as e:
+                        logging.exception("fanout failed schedule_id=%s", row["id"])
+                        results.append({"schedule_id": row["id"], "ok": False, "error": str(e)})
+                else:
+                    results.append(
+                        run_one_schedule_item(conn, pm, row, dry_run=False, force=False)
+                    )
+            except Exception as e:
+                logging.exception("schedule tick item failed schedule_id=%s", row.get("id"))
                 results.append(
-                    run_one_schedule_item(conn, pm, row, dry_run=True, force=True)
+                    {"schedule_id": row.get("id"), "ok": False, "error": str(e)}
                 )
-            elif heavy and os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
-                try:
-                    async_invoke_schedule_item(int(row["id"]), force=False)
-                    results.append({"schedule_id": row["id"], "ok": True, "queued": True})
-                except Exception as e:
-                    logging.exception("fanout failed schedule_id=%s", row["id"])
-                    results.append({"schedule_id": row["id"], "ok": False, "error": str(e)})
-            else:
-                results.append(run_one_schedule_item(conn, pm, row, dry_run=False, force=False))
         return {
             "statusCode": 200,
             "body": json.dumps({"ok": True, "due": len(due), "results": results}),

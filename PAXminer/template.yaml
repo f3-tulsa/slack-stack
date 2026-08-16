@@ -37,9 +37,6 @@ Parameters:
     Type: String
     NoEcho: true
     MinLength: 16
-  AchievementsSchedule:
-    Type: String
-    Default: rate(1 day)
   ScheduleTick:
     Type: String
     Default: rate(15 minutes)
@@ -138,11 +135,6 @@ Resources:
       Timeout: 300
       FunctionUrlConfig:
         AuthType: NONE
-      Events:
-        DailyAchievements:
-          Type: Schedule
-          Properties:
-            Schedule: !Ref AchievementsSchedule
       Environment:
         Variables:
           DATABASE_HOST: !Ref DatabaseHost
