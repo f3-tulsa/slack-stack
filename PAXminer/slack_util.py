@@ -3,13 +3,38 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
+import re
 import ssl
 import time
+from typing import Any
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
+
+# Slack user IDs are U/W + alphanumeric; length varies (classic ~9, Enterprise often longer).
+SLACK_USER_ID_RE = re.compile(r"^[UW][A-Z0-9]{7,}$")
+_MISSING_NAMES = frozenset({"", "nan", "none", "null", "nat"})
+
+# Cap Slack API pagination. MagicMock clients return a truthy non-str next_cursor;
+# without a type check + page cap the loop grows unbounded and exhausts memory.
+MAX_SLACK_PAGES = 50
+
+
+def next_slack_cursor(resp: Any, seen: set[str]) -> str:
+    """Extract the next pagination cursor, or "" to stop.
+
+    Stops when the cursor is missing, empty, non-str (e.g. MagicMock), or repeated.
+    """
+    meta = resp.get("response_metadata") if hasattr(resp, "get") else None
+    cursor = (meta or {}).get("next_cursor") if hasattr(meta, "get") else None
+    if not isinstance(cursor, str) or not cursor or cursor in seen:
+        return ""
+    seen.add(cursor)
+    return cursor
+
 
 
 def home_region_date_tiers() -> tuple[int, int, int, int]:
@@ -35,6 +60,87 @@ def ordinal_suffix(n: int) -> str:
     else:
         suffix = ["th", "st", "nd", "rd", "th"][min(n % 10, 4)]
     return suffix
+
+
+def _clean_str(value: Any) -> str | None:
+    """Normalize pandas / DB junk to a usable string, or None if missing."""
+    if value is None:
+        return None
+    try:
+        if isinstance(value, float) and math.isnan(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    # pandas NA / NaT without importing pandas at module level
+    type_name = type(value).__name__
+    if type_name in ("NAType", "NaTType"):
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in _MISSING_NAMES:
+        return None
+    return text
+
+
+def is_slack_user_id(value: Any) -> bool:
+    """True when value looks like a Slack user ID (U… / W…)."""
+    cleaned = _clean_str(value)
+    if not cleaned:
+        return False
+    return bool(SLACK_USER_ID_RE.match(cleaned))
+
+
+def workspace_user_ids(client: WebClient) -> set[str] | None:
+    """Return the set of human user IDs in the workspace, or None on failure.
+
+    None means "roster unavailable" — callers should fall back to format-only
+    validation rather than treating every ID as unknown.
+    """
+    ids: set[str] = set()
+    cursor = ""
+    seen: set[str] = set()
+    try:
+        for _ in range(MAX_SLACK_PAGES):
+            kwargs: dict[str, Any] = {"limit": 200}
+            if cursor:
+                kwargs["cursor"] = cursor
+            resp = client.users_list(**kwargs)
+            for member in resp.get("members") or []:
+                uid = member.get("id")
+                if uid and is_slack_user_id(uid):
+                    ids.add(str(uid))
+            cursor = next_slack_cursor(resp, seen)
+            if not cursor:
+                break
+        return ids
+    except Exception:
+        logging.debug("workspace_user_ids failed", exc_info=True)
+        return None
+
+
+def mention(
+    user_id: Any,
+    name: Any = None,
+    *,
+    known_ids: set[str] | None = None,
+) -> str:
+    """Format a PAX for Slack mrkdwn.
+
+    Preference order:
+    1. ``<@U…>`` when the ID is Slack-shaped and (if known_ids given) in-roster
+    2. Inline-code user ID when we cannot mention but have an ID
+    3. Inline-code display name when that is all we have
+    4. `` `unknown PAX` `` when neither is usable
+    """
+    uid = _clean_str(user_id)
+    display = _clean_str(name)
+    if uid and is_slack_user_id(uid):
+        if known_ids is None or uid in known_ids:
+            return f"<@{uid}>"
+    if uid:
+        return f"`{uid}`"
+    if display:
+        return f"`{display}`"
+    return "`unknown PAX`"
 
 
 def post_message(

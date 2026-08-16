@@ -6,16 +6,30 @@ import json
 import logging
 import os
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 from common.encryption import decrypt_field
 from paxminer_db import connect_from_env
-from scheduling import is_due_now, region_local_now
-from slack_util import open_dm_channel, post_log, post_message, slack_client, upload_file
+from scheduling import is_due_now, region_local_now, resolve_time_window
+from slack_util import is_slack_user_id, open_dm_channel, post_log, post_message, slack_client, upload_file
 
 LOG = logging.getLogger(__name__)
+
+# Cached per-process: None = unknown, True/False after the first write attempt.
+_HAS_LAST_RUN_AT: bool | None = None
+
+
+def reset_last_run_at_probe() -> None:
+    """Clear the last_run_at column cache (tests)."""
+    global _HAS_LAST_RUN_AT
+    _HAS_LAST_RUN_AT = None
+
+
+def _is_unknown_last_run_at(exc: BaseException) -> bool:
+    code = exc.args[0] if exc.args else None
+    return code == 1054 or "unknown column" in str(exc).lower()
 
 
 def _parse_json_list(value: Any) -> list[str]:
@@ -49,7 +63,13 @@ def resolve_destinations(
     if dest_type == "specific_channels":
         return [{"kind": "channel", "id": cid} for cid in _parse_json_list(schedule.get("destination_channels"))]
     if dest_type == "dm_specific_pax":
-        return [{"kind": "user", "id": uid} for uid in _parse_json_list(schedule.get("destination_users"))]
+        out: list[dict[str, str]] = []
+        for uid in _parse_json_list(schedule.get("destination_users")):
+            if not is_slack_user_id(uid):
+                LOG.info("Skip dm_specific_pax non-Slack user_id=%s", uid)
+                continue
+            out.append({"kind": "user", "id": uid})
+        return out
     if dest_type == "all_ao_channels":
         with regional_conn.cursor() as cur:
             cur.execute(
@@ -69,20 +89,79 @@ def resolve_destinations(
                 """
             )
             rows = cur.fetchall() or []
-        return [{"kind": "user", "id": r["user_id"]} for r in rows if r.get("user_id")]
+        out: list[dict[str, str]] = []
+        for r in rows:
+            uid = r.get("user_id")
+            if not uid:
+                continue
+            if not is_slack_user_id(uid):
+                LOG.info("Skip dm_all_pax target non-Slack user_id=%s", uid)
+                continue
+            out.append({"kind": "user", "id": uid})
+        return out
     return []
 
 
-def mark_schedule_status(conn, pm_schema: str, schedule_id: int, local_date: date, status: str) -> None:
+def mark_schedule_status(
+    conn,
+    pm_schema: str,
+    schedule_id: int,
+    local_date: date,
+    status: str,
+    *,
+    local_dt: datetime | None = None,
+) -> None:
+    """Record run outcome. ``local_dt`` (region wall time) populates last_run_at for hourly.
+
+    Tolerates a missing ``last_run_at`` column (MySQL 1054) so a deploy-before-migration
+    tick still records ``last_run_on`` / ``last_run_status`` instead of 500ing the region.
+    """
+    global _HAS_LAST_RUN_AT
+    run_at = local_dt.replace(tzinfo=None) if local_dt is not None else None
+    write_at = run_at is not None and _HAS_LAST_RUN_AT is not False
     with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            UPDATE `{pm_schema}`.`region_schedules`
-            SET last_run_on=%s, last_run_status=%s
-            WHERE id=%s
-            """,
-            (local_date.isoformat(), status, schedule_id),
-        )
+        if write_at:
+            try:
+                cur.execute(
+                    f"""
+                    UPDATE `{pm_schema}`.`region_schedules`
+                    SET last_run_on=%s, last_run_at=%s, last_run_status=%s
+                    WHERE id=%s
+                    """,
+                    (
+                        local_date.isoformat(),
+                        run_at.strftime("%Y-%m-%d %H:%M:%S"),
+                        status,
+                        schedule_id,
+                    ),
+                )
+                _HAS_LAST_RUN_AT = True
+            except Exception as exc:
+                if not _is_unknown_last_run_at(exc):
+                    raise
+                _HAS_LAST_RUN_AT = False
+                LOG.warning("region_schedules.last_run_at missing; writing without it")
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                cur.execute(
+                    f"""
+                    UPDATE `{pm_schema}`.`region_schedules`
+                    SET last_run_on=%s, last_run_status=%s
+                    WHERE id=%s
+                    """,
+                    (local_date.isoformat(), status, schedule_id),
+                )
+        else:
+            cur.execute(
+                f"""
+                UPDATE `{pm_schema}`.`region_schedules`
+                SET last_run_on=%s, last_run_status=%s
+                WHERE id=%s
+                """,
+                (local_date.isoformat(), status, schedule_id),
+            )
     conn.commit()
 
 
@@ -117,6 +196,85 @@ def _result_status(dispatch_result: dict | None) -> str:
     return "success"
 
 
+def _format_dest_lines(
+    posted: list | None,
+    failed: list | None,
+    *,
+    max_chars: int = 1200,
+    id_key: str = "channel_id",
+    name_key: str = "ao",
+) -> list[str]:
+    """Compact posted/failed destination lines; cap length for Slack section limits."""
+    lines: list[str] = []
+
+    def _fmt_items(items: list, *, with_reason: bool) -> str:
+        parts: list[str] = []
+        shown = 0
+        for item in items:
+            name = item.get(name_key) or item.get("pax") or "?"
+            cid = item.get(id_key) or item.get("user_id") or "?"
+            if with_reason:
+                reason = str(item.get("reason") or "?")[:80]
+                part = f"{name} ({cid}) - {reason}"
+            else:
+                part = f"{name} ({cid})"
+            parts.append(part)
+            shown += 1
+            joined = ", ".join(parts)
+            if len(joined) > max_chars:
+                overflow = len(items) - shown + 1
+                parts = parts[:-1]
+                if overflow > 0:
+                    parts.append(f"+{overflow} more")
+                break
+        return ", ".join(parts)
+
+    if posted:
+        lines.append(f"posted: {_fmt_items(posted, with_reason=False)}")
+    if failed:
+        lines.append(f"failed: {_fmt_items(failed, with_reason=True)}")
+    return lines
+
+
+def _apply_delivery_result(
+    result: dict,
+    *,
+    attempted_channels: int = 0,
+    attempted_users: int = 0,
+) -> dict:
+    """Prefer producer posted counts over attempted destination counts."""
+    out = dict(result)
+    posted = out.get("posted_channels") or []
+    failed = out.get("failed_channels") or []
+    posted_users = out.get("posted_users") or []
+    failed_users = out.get("failed_users") or []
+
+    if "posted_channels" in out or "failed_channels" in out:
+        out["channel_count"] = len(posted)
+        out["attempted_count"] = attempted_channels or (len(posted) + len(failed))
+        if not posted and failed:
+            out["ok"] = False
+            reasons = "; ".join(
+                f"{f.get('ao') or f.get('channel_id')}: {f.get('reason')}" for f in failed[:5]
+            )
+            out.setdefault("error", f"all channel uploads failed: {reasons}"[:500])
+    elif "channel_count" not in out:
+        out["channel_count"] = attempted_channels
+
+    if "posted_users" in out or "failed_users" in out:
+        out["user_count"] = len(posted_users)
+        if not posted_users and failed_users and not posted:
+            out["ok"] = False
+            reasons = "; ".join(
+                f"{f.get('pax') or f.get('user_id')}: {f.get('reason')}" for f in failed_users[:5]
+            )
+            out.setdefault("error", f"all user DMs failed: {reasons}"[:500])
+    elif "user_count" not in out:
+        out["user_count"] = attempted_users
+
+    return out
+
+
 def format_run_result(result: dict) -> tuple[str, list[dict] | None]:
     """Human-readable summary for Run Now result DMs."""
     sid = result.get("schedule_id")
@@ -128,6 +286,21 @@ def format_run_result(result: dict) -> tuple[str, list[dict] | None]:
         return text, None
     if result.get("error") and not result.get("ok", True):
         text = f"Schedule #{sid} ({report_type}): *failed*{dur}\n`{str(result.get('error'))[:500]}`"
+        dest_lines = _format_dest_lines(
+            result.get("posted_channels"),
+            result.get("failed_channels"),
+        )
+        if result.get("posted_users") or result.get("failed_users"):
+            dest_lines.extend(
+                _format_dest_lines(
+                    result.get("posted_users"),
+                    result.get("failed_users"),
+                    id_key="user_id",
+                    name_key="pax",
+                )
+            )
+        if dest_lines:
+            text = text + "\n" + "\n".join(dest_lines)
         return text, None
     skipped = result.get("skipped") or (result.get("result") or {}).get("skipped")
     if skipped:
@@ -142,6 +315,21 @@ def format_run_result(result: dict) -> tuple[str, list[dict] | None]:
         dest_bits.append(f"{users} user DM(s)")
     dest = (", ".join(dest_bits) if dest_bits else "destinations resolved")
     text = f"Schedule #{sid} ({report_type}): *success* — posted to {dest}{dur}."
+    dest_lines = _format_dest_lines(
+        result.get("posted_channels"),
+        result.get("failed_channels"),
+    )
+    if result.get("posted_users") or result.get("failed_users"):
+        dest_lines.extend(
+            _format_dest_lines(
+                result.get("posted_users"),
+                result.get("failed_users"),
+                id_key="user_id",
+                name_key="pax",
+            )
+        )
+    if dest_lines:
+        text = text + "\n" + "\n".join(dest_lines)
     return text, None
 
 
@@ -152,8 +340,24 @@ def format_schedule_log_line(region_name: str, result: dict) -> str:
     duration = result.get("duration_s")
     dur = f" ({duration}s)" if duration is not None else ""
     label = f"- Schedule ({region_name}) #{sid} ({report_type})"
+    dest_lines = _format_dest_lines(
+        result.get("posted_channels"),
+        result.get("failed_channels"),
+        max_chars=800,
+    )
+    if result.get("posted_users") or result.get("failed_users"):
+        dest_lines.extend(
+            _format_dest_lines(
+                result.get("posted_users"),
+                result.get("failed_users"),
+                max_chars=800,
+                id_key="user_id",
+                name_key="pax",
+            )
+        )
+    dest_suffix = (" | " + " | ".join(dest_lines)) if dest_lines else ""
     if result.get("error") and not result.get("ok", True):
-        return f"{label}: FAILED - {str(result.get('error'))[:500]}{dur}"
+        return f"{label}: FAILED - {str(result.get('error'))[:500]}{dur}{dest_suffix}"
     skipped = result.get("skipped") or (result.get("result") or {}).get("skipped")
     if skipped:
         return f"{label}: skipped - {skipped}{dur}"
@@ -165,7 +369,7 @@ def format_schedule_log_line(region_name: str, result: dict) -> str:
     if users is not None:
         dest_bits.append(f"{users} user DM(s)")
     dest = ", ".join(dest_bits) if dest_bits else "destinations resolved"
-    return f"{label}: success - posted to {dest}{dur}"
+    return f"{label}: success - posted to {dest}{dur}{dest_suffix}"
 
 
 def _post_schedule_outcome_log(region: dict | None, result: dict) -> None:
@@ -173,7 +377,7 @@ def _post_schedule_outcome_log(region: dict | None, result: dict) -> None:
     region_name = "?"
     token_enc = None
     if region:
-        region_name = region.get("region") or region.get("schema_name") or "?"
+        region_name = region.get("schema_name") or "?"
         token_enc = region.get("slack_token")
     if not token_enc:
         token = (os.environ.get("PM_SLACK_TOKEN") or "").strip() or None
@@ -240,8 +444,14 @@ def run_one_schedule_item(
     if not region:
         try:
             tz_guess = "America/Chicago"
+            local_guess = region_local_now(tz_guess)
             mark_schedule_status(
-                registry_conn, pm_schema, schedule_id, region_local_now(tz_guess).date(), "error"
+                registry_conn,
+                pm_schema,
+                schedule_id,
+                local_guess.date(),
+                "error",
+                local_dt=local_guess,
             )
         except Exception:
             LOG.exception("mark error status failed schedule_id=%s", schedule_id)
@@ -259,7 +469,9 @@ def run_one_schedule_item(
 
     definition = _load_definition(registry_conn, pm_schema, int(schedule["report_definition_id"]))
     if not definition:
-        mark_schedule_status(registry_conn, pm_schema, schedule_id, local_date, "error")
+        mark_schedule_status(
+            registry_conn, pm_schema, schedule_id, local_date, "error", local_dt=local
+        )
         out = {
             "schedule_id": schedule_id,
             "ok": False,
@@ -287,7 +499,9 @@ def run_one_schedule_item(
             "schema": schema_name,
         }
 
-    mark_schedule_status(registry_conn, pm_schema, schedule_id, local_date, "running")
+    mark_schedule_status(
+        registry_conn, pm_schema, schedule_id, local_date, "running", local_dt=local
+    )
     try:
         result = _dispatch_report(
             registry_conn,
@@ -297,7 +511,9 @@ def run_one_schedule_item(
             definition,
         )
         status = _result_status(result)
-        mark_schedule_status(registry_conn, pm_schema, schedule_id, local_date, status)
+        mark_schedule_status(
+            registry_conn, pm_schema, schedule_id, local_date, status, local_dt=local
+        )
         out = {
             "schedule_id": schedule_id,
             "ok": status != "error",
@@ -321,7 +537,9 @@ def run_one_schedule_item(
             schedule_id,
             report_type,
         )
-        mark_schedule_status(registry_conn, pm_schema, schedule_id, local_date, "error")
+        mark_schedule_status(
+            registry_conn, pm_schema, schedule_id, local_date, "error", local_dt=local
+        )
         out = {
             "schedule_id": schedule_id,
             "ok": False,
@@ -377,6 +595,12 @@ def _dispatch_report(
                 "user_count": 0,
             }
 
+        window = None
+        if report_type not in ("kotter", "award_achievements"):
+            window = resolve_time_window(
+                definition, timezone_name=region.get("timezone")
+            )
+
         if report_type == "pax_charts":
             from monthly_charts.PAXcharter import run_pax_charter
 
@@ -387,11 +611,10 @@ def _dispatch_report(
                 schema_name,
                 plot_dir=plot_dir,
                 user_ids=user_ids,
+                window=window,
             )
             if isinstance(result, dict):
-                result = dict(result)
-                result.setdefault("user_count", len(user_ids))
-                result.setdefault("channel_count", 0)
+                return _apply_delivery_result(result, attempted_users=len(user_ids))
             return result
         if report_type == "q_charts":
             from monthly_charts.Qcharter import run_q_charter
@@ -405,10 +628,10 @@ def _dispatch_report(
                 plot_dir=plot_dir,
                 destinations=channel_ids,
                 post_per_ao=(dest_type == "all_ao_channels"),
+                window=window,
             )
             if isinstance(result, dict):
-                result = dict(result)
-                result.setdefault("channel_count", len(channel_ids))
+                return _apply_delivery_result(result, attempted_channels=len(channel_ids))
             return result
         if report_type == "region_leaderboard":
             from monthly_charts.Leaderboard_Charter import run_region_leaderboard
@@ -422,10 +645,10 @@ def _dispatch_report(
                 dest,
                 plot_dir=plot_dir,
                 destinations=channel_ids,
+                window=window,
             )
             if isinstance(result, dict):
-                result = dict(result)
-                result.setdefault("channel_count", len(channel_ids))
+                return _apply_delivery_result(result, attempted_channels=len(channel_ids))
             return result
         if report_type == "ao_leaderboard":
             from monthly_charts.LeaderboardByAO_Charter import run_ao_leaderboard
@@ -439,10 +662,10 @@ def _dispatch_report(
                 plot_dir=plot_dir,
                 destinations=channel_ids,
                 post_per_ao=(dest_type == "all_ao_channels"),
+                window=window,
             )
             if isinstance(result, dict):
-                result = dict(result)
-                result.setdefault("channel_count", len(channel_ids))
+                return _apply_delivery_result(result, attempted_channels=len(channel_ids))
             return result
         if report_type == "achievement_leaderboard":
             from achievements.leaderboard import run_leaderboard_for_region
@@ -450,17 +673,60 @@ def _dispatch_report(
             region = dict(region)
             if channel_ids:
                 region["achievement_channel"] = channel_ids[0]
-            result = run_leaderboard_for_region(registry_conn, pm_schema, region)
+            result = run_leaderboard_for_region(
+                registry_conn, pm_schema, region, window=window
+            )
             client = slack_client(token)
-            if len(channel_ids) > 1 and result.get("text"):
-                for cid in channel_ids[1:]:
+            posted_channels: list[dict] = []
+            failed_channels: list[dict] = []
+            if result.get("text") and channel_ids:
+                for cid in channel_ids:
                     try:
-                        post_message(client, cid, result["text"], blocks=result.get("blocks"))
-                    except Exception:
+                        if cid != channel_ids[0]:
+                            post_message(client, cid, result["text"], blocks=result.get("blocks"))
+                        posted_channels.append({"ao": "achievement-lb", "channel_id": cid})
+                    except Exception as exc:
                         LOG.exception("extra achievement_leaderboard post failed channel=%s", cid)
+                        failed_channels.append(
+                            {"ao": "achievement-lb", "channel_id": cid, "reason": str(exc)[:200]}
+                        )
             if isinstance(result, dict):
                 result = dict(result)
-                result.setdefault("channel_count", len(channel_ids))
+                if posted_channels or failed_channels:
+                    result["posted_channels"] = posted_channels
+                    result["failed_channels"] = failed_channels
+                return _apply_delivery_result(result, attempted_channels=len(channel_ids))
+            return result
+        if report_type == "award_achievements":
+            from achievements.runner import run_achievements_for_region
+
+            if not channel_ids:
+                return {
+                    "skipped": "no destinations configured",
+                    "channel_count": 0,
+                    "user_count": 0,
+                }
+            result = run_achievements_for_region(
+                registry_conn,
+                pm_schema=pm_schema,
+                regional_schema=schema_name,
+                region_row=region,
+                channel_override=channel_ids[0],
+                post_channels=channel_ids,
+            )
+            if isinstance(result, dict):
+                result = dict(result)
+                if result.get("skipped"):
+                    return _apply_delivery_result(result, attempted_channels=0)
+                posted_any = bool(result.get("grants") or result.get("revokes"))
+                if posted_any:
+                    result["posted_channels"] = [
+                        {"ao": "awards", "channel_id": cid} for cid in channel_ids
+                    ]
+                    return _apply_delivery_result(
+                        result, attempted_channels=len(channel_ids)
+                    )
+                return _apply_delivery_result(result, attempted_channels=0)
             return result
         if report_type == "kotter":
             from kotter.kotter_report import run_kotter_for_region
@@ -481,15 +747,38 @@ def _dispatch_report(
                 dry_run=False,
             )
             client = slack_client(token)
+            posted_channels = []
+            failed_channels = []
+            primary = channel_ids[0] if channel_ids else region.get("kotter_channel")
+            if result.get("posted") and primary:
+                posted_channels.append({"ao": "kotter", "channel_id": primary})
+            if result.get("error"):
+                failed_channels.append(
+                    {
+                        "ao": "kotter",
+                        "channel_id": primary or "?",
+                        "reason": str(result.get("error"))[:200],
+                    }
+                )
             if len(channel_ids) > 1 and result.get("text"):
                 for cid in channel_ids[1:]:
                     try:
                         post_message(client, cid, result["text"], blocks=result.get("blocks"))
-                    except Exception:
+                        posted_channels.append({"ao": "kotter", "channel_id": cid})
+                    except Exception as exc:
                         LOG.exception("extra kotter post failed channel=%s", cid)
+                        failed_channels.append(
+                            {"ao": "kotter", "channel_id": cid, "reason": str(exc)[:200]}
+                        )
             if isinstance(result, dict):
                 result = dict(result)
-                result.setdefault("channel_count", len(channel_ids) or (1 if region.get("kotter_channel") else 0))
+                if posted_channels or failed_channels:
+                    result["posted_channels"] = posted_channels
+                    result["failed_channels"] = failed_channels
+                return _apply_delivery_result(
+                    result,
+                    attempted_channels=len(channel_ids) or (1 if region.get("kotter_channel") else 0),
+                )
             return result
         if report_type == "custom_report":
             result = run_custom_report(
@@ -503,9 +792,11 @@ def _dispatch_report(
                 plot_dir=plot_dir,
             )
             if isinstance(result, dict):
-                result = dict(result)
-                result.setdefault("channel_count", len(channel_ids))
-                result.setdefault("user_count", len(user_ids))
+                return _apply_delivery_result(
+                    result,
+                    attempted_channels=len(channel_ids),
+                    attempted_users=len(user_ids),
+                )
             return result
         raise RuntimeError(f"unknown report_type={report_type}")
     finally:

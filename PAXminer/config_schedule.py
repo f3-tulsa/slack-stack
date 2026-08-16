@@ -17,6 +17,7 @@ from scheduling import (
     destination_valid_for_report,
     format_schedule_summary,
     parse_time_of_day,
+    snap_time_to_tick,
     time_of_day_options,
 )
 
@@ -48,10 +49,37 @@ SCHEDULE_REPORT_ACTION_ID = "paxminer_schedule_report"
 ADD_REPORT_ACTION_ID = "paxminer_report_add"
 EDIT_REPORT_ACTION_ID = "paxminer_report_edit"
 DELETE_REPORT_ACTION_ID = "paxminer_report_delete"
+DUPLICATE_REPORT_ACTION_ID = "paxminer_report_duplicate"
 SELECT_REPORT_ACTION_ID = "paxminer_report_select"
 REPORT_WINDOW_ACTION_ID = "paxminer_report_window"
+LOAD_DEFAULTS_ACTION_ID = "paxminer_load_defaults"
 
 PAGE_SIZE = 8
+
+# report_type values rendered by dedicated Python (not the custom builder).
+CODE_RENDERED_REPORT_TYPES = frozenset(
+    {
+        "pax_charts",
+        "q_charts",
+        "region_leaderboard",
+        "ao_leaderboard",
+        "achievement_leaderboard",
+        "award_achievements",
+        "kotter",
+    }
+)
+
+
+def is_code_rendered(report_type: str | None) -> bool:
+    return (report_type or "") in CODE_RENDERED_REPORT_TYPES
+
+
+def supports_time_window(report_type: str | None) -> bool:
+    """Kotter and Award Achievements use their own engine windows, not a report window."""
+    return is_code_rendered(report_type) and report_type not in (
+        "kotter",
+        "award_achievements",
+    )
 
 TIMEZONE_OPTIONS = [
     "America/New_York",
@@ -99,6 +127,12 @@ def _find_option(options: list[dict], value: str | None) -> dict | None:
         if o["value"] == value:
             return o
     return None
+
+
+def _with_initial(options: list[dict], value: str | None) -> dict:
+    """Return ``{"initial_option": ...}`` only when the value is in options (Slack rejects null)."""
+    found = _find_option(options, value)
+    return {"initial_option": found} if found else {}
 
 
 def _state_selected(state: dict, block_id: str, action_id: str = "val") -> str:
@@ -240,7 +274,30 @@ def _schedules_list_modal(
         )
     else:
         blocks.append(
-            {"type": "section", "text": {"type": "mrkdwn", "text": "_No scheduled items yet._"}}
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "_No scheduled items yet._ Use *Load defaults* to add the "
+                        "builtin reports and schedules from `report_defaults.json`."
+                    ),
+                },
+            }
+        )
+        blocks.append(
+            {
+                "type": "actions",
+                "block_id": "schedule_load_defaults",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": LOAD_DEFAULTS_ACTION_ID,
+                        "text": {"type": "plain_text", "text": "Load defaults"},
+                        "style": "primary",
+                    }
+                ],
+            }
         )
 
     nav: list[dict] = []
@@ -335,9 +392,12 @@ def _schedules_list_modal(
                         "text": {
                             "type": "mrkdwn",
                             "text": (
-                                "Adds builtin schedule rows (enabled). Existing items "
-                                "are not deleted; duplicates are OK. Then set channels "
-                                "for specific-channel reports and disable any you do not want."
+                                "Adds any missing builtin schedule rows (enabled). "
+                                "Existing schedules are not deleted. Builtin reports "
+                                "you have edited (`is_customized`) keep their edits; "
+                                "missing builtins are re-added from defaults. Then set "
+                                "channels for specific-channel reports and disable any "
+                                "you do not want."
                             ),
                         },
                         "confirm": {"type": "plain_text", "text": "Restore"},
@@ -414,7 +474,6 @@ def _schedule_edit_modal(
         draft["destination_type"] = dest_type
 
     freq_opts = _select_options(FREQUENCY_TYPES)
-    tod_opts = time_of_day_options()
     tod = draft.get("time_of_day") or "07:00"
 
     blocks: list[dict] = [
@@ -426,11 +485,7 @@ def _schedule_edit_modal(
                 "type": "static_select",
                 "action_id": SCHEDULE_REPORT_ACTION_ID,
                 "options": def_opts,
-                **(
-                    {"initial_option": _find_option(def_opts, str(selected_def))}
-                    if _find_option(def_opts, str(selected_def))
-                    else {}
-                ),
+                **_with_initial(def_opts, str(selected_def) if selected_def else None),
             },
         },
         {
@@ -442,11 +497,7 @@ def _schedule_edit_modal(
                 "type": "static_select",
                 "action_id": SCHEDULE_DEST_TYPE_ACTION_ID,
                 "options": dest_opts,
-                **(
-                    {"initial_option": _find_option(dest_opts, dest_type)}
-                    if _find_option(dest_opts, dest_type)
-                    else {}
-                ),
+                **_with_initial(dest_opts, dest_type),
             },
         },
     ]
@@ -512,11 +563,7 @@ def _schedule_edit_modal(
                 "type": "static_select",
                 "action_id": SCHEDULE_FREQ_ACTION_ID,
                 "options": freq_opts,
-                **(
-                    {"initial_option": _find_option(freq_opts, freq)}
-                    if _find_option(freq_opts, freq)
-                    else {}
-                ),
+                **_with_initial(freq_opts, freq),
             },
         }
     )
@@ -541,11 +588,7 @@ def _schedule_edit_modal(
                     "type": "static_select",
                     "action_id": "val",
                     "options": dow_opts,
-                    **(
-                        {"initial_option": _find_option(dow_opts, dow)}
-                        if _find_option(dow_opts, dow)
-                        else {}
-                    ),
+                    **_with_initial(dow_opts, dow),
                 },
             }
         )
@@ -561,11 +604,7 @@ def _schedule_edit_modal(
                     "type": "static_select",
                     "action_id": "val",
                     "options": mode_opts,
-                    **(
-                        {"initial_option": _find_option(mode_opts, mode)}
-                        if _find_option(mode_opts, mode)
-                        else {}
-                    ),
+                    **_with_initial(mode_opts, mode),
                 },
             }
         )
@@ -596,25 +635,35 @@ def _schedule_edit_modal(
             }
         )
 
+    if freq == "hourly":
+        tod_opts = [
+            {
+                "text": {"type": "plain_text", "text": f":{minute:02d}"},
+                "value": f"00:{minute:02d}",
+            }
+            for minute in (0, 15, 30, 45)
+        ]
+        snapped = snap_time_to_tick(parse_time_of_day(tod))
+        tod = f"00:{snapped.minute:02d}"
+        tod_label = "Minute of hour"
+    else:
+        tod_opts = time_of_day_options()
+        tod_label = f"Time of day ({timezone_name})"
     blocks.append(
         {
             "type": "input",
             "block_id": "time_of_day",
-            "label": {"type": "plain_text", "text": f"Time of day ({timezone_name})"},
+            "label": {"type": "plain_text", "text": tod_label},
             "element": {
                 "type": "static_select",
                 "action_id": "val",
                 "options": tod_opts,
-                **(
-                    {"initial_option": _find_option(tod_opts, tod)}
-                    if _find_option(tod_opts, tod)
-                    else {}
-                ),
+                **_with_initial(tod_opts, tod),
             },
         }
     )
     enabled_opts = [_opt("1", "Enabled"), _opt("0", "Disabled")]
-    en = "1" if draft.get("enabled") else "0"
+    en = "1" if draft.get("enabled") not in (False, 0, "0", "false", "False") else "0"
     blocks.append(
         {
             "type": "input",
@@ -624,7 +673,7 @@ def _schedule_edit_modal(
                 "type": "static_select",
                 "action_id": "val",
                 "options": enabled_opts,
-                "initial_option": _find_option(enabled_opts, en),
+                **_with_initial(enabled_opts, en),
             },
         }
     )
@@ -679,6 +728,21 @@ def draft_from_schedule_state(state: dict, meta_draft: dict | None = None) -> di
     en = _state_selected(state, "enabled")
     if en != "":
         draft["enabled"] = en == "1"
+
+    # Drop stale keys for fields hidden by the current frequency / destination.
+    dest_type = draft.get("destination_type") or "specific_channels"
+    freq_type = draft.get("frequency_type") or "monthly"
+    if dest_type != "specific_channels":
+        draft.pop("destination_channels", None)
+    if dest_type != "dm_specific_pax":
+        draft.pop("destination_users", None)
+    if freq_type != "weekly":
+        draft.pop("day_of_week", None)
+    if freq_type != "monthly":
+        draft.pop("month_day_mode", None)
+        draft.pop("day_of_month", None)
+    if freq_type != "custom":
+        draft.pop("interval_days", None)
     return draft
 
 
@@ -724,8 +788,27 @@ def validate_schedule_form(values: dict, report_type: str | None) -> dict[str, s
         errors["destination_channels"] = "Pick at least one channel"
     if dest == "dm_specific_pax" and not values.get("destination_users"):
         errors["destination_users"] = "Pick at least one PAX"
-    if values.get("frequency_type") not in FREQUENCY_TYPES:
+    freq = values.get("frequency_type")
+    if freq not in FREQUENCY_TYPES:
         errors["frequency_type"] = "Invalid frequency"
+    elif freq == "weekly":
+        dow = values.get("day_of_week")
+        if dow is None or not (0 <= int(dow) <= 6):
+            errors["day_of_week"] = "Pick a day of week"
+    elif freq == "monthly":
+        mode = values.get("month_day_mode") or "first"
+        if mode == "specific":
+            dom = values.get("day_of_month")
+            if dom is None or not (1 <= int(dom) <= 31):
+                errors["day_of_month"] = "Enter a day of month (1–31)"
+    elif freq == "custom":
+        interval = (values.get("custom_spec") or {}).get("interval_days")
+        try:
+            n = int(interval)
+            if n < 1:
+                raise ValueError
+        except (TypeError, ValueError):
+            errors["interval_days"] = "Enter a positive number of days"
     return errors
 
 
@@ -741,27 +824,62 @@ def _reports_list_modal(
     blocks.append(
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*PAX Reports* ({regional_schema})"},
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f"*PAX Reports* ({regional_schema})\n"
+                    "Builtin reports render from code — you can rename, re-window, "
+                    "schedule, duplicate, and delete them. Custom reports are fully "
+                    "builder-editable."
+                ),
+            },
         }
     )
-    customs = [d for d in definitions if not d.get("is_builtin")]
-    builtins = [d for d in definitions if d.get("is_builtin")]
     lines = []
-    for d in builtins:
-        lines.append(f"• *{d['name']}* (`{d['code']}`) — builtin / {d['report_type']}")
-    for d in customs:
-        lines.append(
-            f"• *{d['name']}* (`{d['code']}`) — {d.get('kind') or 'custom'} / {d.get('source') or '-'}"
-        )
+    for d in definitions:
+        if d.get("is_builtin"):
+            customized = " · edited" if d.get("is_customized") else ""
+            window = d.get("time_window_type") or "—"
+            lines.append(
+                f"• *{d['name']}* (`{d['code']}`) — builtin / {d['report_type']}"
+                f" / window={window}{customized}"
+            )
+        else:
+            lines.append(
+                f"• *{d['name']}* (`{d['code']}`) — {d.get('kind') or 'custom'} / "
+                f"{d.get('source') or d.get('report_type') or '-'}"
+            )
     if lines:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines[:40])}})
     else:
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "_No reports yet._"}})
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "_No reports yet._ Use *Load defaults* to add the builtin "
+                        "reports and schedules from `report_defaults.json`."
+                    ),
+                },
+            }
+        )
+        blocks.append(
+            {
+                "type": "actions",
+                "block_id": "reports_load_defaults",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": LOAD_DEFAULTS_ACTION_ID,
+                        "text": {"type": "plain_text", "text": "Load defaults"},
+                        "style": "primary",
+                    }
+                ],
+            }
+        )
 
-    editable = [d for d in definitions if not d.get("is_builtin") or d.get("report_type") == "custom_report"]
-    # Allow selecting any definition for delete of custom; builtins can't be builder-edited.
-    selectable = definitions
-    if selectable:
+    if definitions:
         blocks.append(
             {
                 "type": "input",
@@ -772,7 +890,7 @@ def _reports_list_modal(
                     "type": "static_select",
                     "action_id": SELECT_REPORT_ACTION_ID,
                     "options": [
-                        _opt(str(d["id"]), f"{d['name']} ({d['code']})") for d in selectable
+                        _opt(str(d["id"]), f"{d['name']} ({d['code']})") for d in definitions
                     ],
                 },
             }
@@ -794,6 +912,11 @@ def _reports_list_modal(
                 },
                 {
                     "type": "button",
+                    "action_id": DUPLICATE_REPORT_ACTION_ID,
+                    "text": {"type": "plain_text", "text": "Duplicate selected"},
+                },
+                {
+                    "type": "button",
                     "action_id": DELETE_REPORT_ACTION_ID,
                     "text": {"type": "plain_text", "text": "Delete selected"},
                     "style": "danger",
@@ -801,7 +924,10 @@ def _reports_list_modal(
                         "title": {"type": "plain_text", "text": "Delete report?"},
                         "text": {
                             "type": "mrkdwn",
-                            "text": "Blocked if schedules still reference it. Delete or reassign those schedules first.",
+                            "text": (
+                                "Deletes this report and any schedules that reference it. "
+                                "You can restore builtins later with Load/Restore defaults."
+                            ),
                         },
                         "confirm": {"type": "plain_text", "text": "Delete"},
                         "deny": {"type": "plain_text", "text": "Cancel"},
@@ -828,6 +954,7 @@ def _report_edit_modal(
     draft: dict | None = None,
 ) -> dict:
     draft = dict(draft or {})
+    report_type = (row or {}).get("report_type") or draft.get("report_type") or "custom_report"
     if row and not draft:
         fields = _json_list(row.get("fields"))
         draft = {
@@ -843,23 +970,18 @@ def _report_edit_modal(
             "window_days": str(row.get("window_days") or 30),
             "window_start": str(row.get("window_start") or ""),
             "window_end": str(row.get("window_end") or ""),
+            "report_type": report_type,
         }
+    draft.setdefault("report_type", report_type)
     draft.setdefault("kind", "table")
     draft.setdefault("source", "bd_attendance")
     draft.setdefault("time_window_type", "last_month")
     draft.setdefault("metric", "posts")
     draft.setdefault("group_by", "PAX")
 
-    kind_opts = _select_options(REPORT_KINDS)
-    source_opts = _select_options(ALLOWED_SOURCES)
-    metric_opts = _select_options(METRIC_OPTIONS)
-    group_opts = _select_options(GROUP_BY_OPTIONS)
-    window_opts = _select_options(TIME_WINDOW_TYPES)
-    field_opts = [_opt(f) for f in FIELD_OPTIONS]
-    selected_fields = draft.get("fields") or []
-    field_initial = [o for o in field_opts if o["value"] in selected_fields]
+    code_rendered = is_code_rendered(report_type)
+    show_window = supports_time_window(report_type) or not code_rendered
 
-    wtype = draft.get("time_window_type") or "last_month"
     blocks: list[dict] = [
         {
             "type": "input",
@@ -871,130 +993,203 @@ def _report_edit_modal(
                 "initial_value": draft.get("name") or "",
             },
         },
-        {
-            "type": "input",
-            "block_id": "code",
-            "label": {"type": "plain_text", "text": "Code (unique snake_case)"},
-            "element": {
-                "type": "plain_text_input",
-                "action_id": "val",
-                "initial_value": draft.get("code") or "",
-            },
-        },
-        {
-            "type": "input",
-            "block_id": "kind",
-            "label": {"type": "plain_text", "text": "Output"},
-            "element": {
-                "type": "static_select",
-                "action_id": "val",
-                "options": kind_opts,
-                "initial_option": _find_option(kind_opts, draft.get("kind") or "table"),
-            },
-        },
-        {
-            "type": "input",
-            "block_id": "source",
-            "label": {"type": "plain_text", "text": "Data source"},
-            "element": {
-                "type": "static_select",
-                "action_id": "val",
-                "options": source_opts,
-                "initial_option": _find_option(source_opts, draft.get("source") or "bd_attendance"),
-            },
-        },
-        {
-            "type": "input",
-            "block_id": "fields",
-            "optional": True,
-            "label": {"type": "plain_text", "text": "Fields"},
-            "element": {
-                "type": "multi_static_select",
-                "action_id": "val",
-                "options": field_opts,
-                **({"initial_options": field_initial} if field_initial else {}),
-            },
-        },
-        {
-            "type": "input",
-            "block_id": "metric",
-            "label": {"type": "plain_text", "text": "Metric"},
-            "element": {
-                "type": "static_select",
-                "action_id": "val",
-                "options": metric_opts,
-                "initial_option": _find_option(metric_opts, draft.get("metric") or "posts"),
-            },
-        },
-        {
-            "type": "input",
-            "block_id": "group_by",
-            "label": {"type": "plain_text", "text": "Group by"},
-            "element": {
-                "type": "static_select",
-                "action_id": "val",
-                "options": group_opts,
-                "initial_option": _find_option(group_opts, draft.get("group_by") or "PAX"),
-            },
-        },
-        {
-            "type": "input",
-            "block_id": "top_n",
-            "label": {"type": "plain_text", "text": "Top N"},
-            "element": {
-                "type": "plain_text_input",
-                "action_id": "val",
-                "initial_value": str(draft.get("top_n") or "20"),
-            },
-        },
-        {
-            "type": "input",
-            "block_id": "time_window_type",
-            "dispatch_action": True,
-            "label": {"type": "plain_text", "text": "Time window"},
-            "element": {
-                "type": "static_select",
-                "action_id": REPORT_WINDOW_ACTION_ID,
-                "options": window_opts,
-                "initial_option": _find_option(window_opts, wtype),
-            },
-        },
     ]
-    if wtype == "relative_days":
+
+    if not code_rendered:
+        # New custom reports (and edits of customs) expose the full builder + code.
         blocks.append(
             {
                 "type": "input",
-                "block_id": "window_days",
-                "label": {"type": "plain_text", "text": "Last N days"},
+                "block_id": "code",
+                "label": {"type": "plain_text", "text": "Code (unique snake_case)"},
                 "element": {
                     "type": "plain_text_input",
                     "action_id": "val",
-                    "initial_value": str(draft.get("window_days") or "30"),
+                    "initial_value": draft.get("code") or "",
                 },
             }
         )
-    elif wtype == "custom":
-        for bid, label, key in (
-            ("window_start", "Start date", "window_start"),
-            ("window_end", "End date", "window_end"),
-        ):
-            el: dict[str, Any] = {"type": "datepicker", "action_id": "val"}
-            if draft.get(key):
-                el["initial_date"] = str(draft[key])[:10]
+    else:
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"Renderer: `{report_type}` (code `{draft.get('code') or ''}`). "
+                            "Source/fields/metric stay fixed for code-rendered reports."
+                        ),
+                    }
+                ],
+            }
+        )
+
+    if not code_rendered:
+        kind_opts = _select_options(REPORT_KINDS)
+        source_opts = _select_options(ALLOWED_SOURCES)
+        metric_opts = _select_options(METRIC_OPTIONS)
+        group_opts = _select_options(GROUP_BY_OPTIONS)
+        field_opts = [_opt(f) for f in FIELD_OPTIONS]
+        selected_fields = draft.get("fields") or []
+        field_initial = [o for o in field_opts if o["value"] in selected_fields]
+        blocks.extend(
+            [
+                {
+                    "type": "input",
+                    "block_id": "kind",
+                    "label": {"type": "plain_text", "text": "Output"},
+                    "element": {
+                        "type": "static_select",
+                        "action_id": "val",
+                        "options": kind_opts,
+                        **_with_initial(kind_opts, draft.get("kind") or "table"),
+                    },
+                },
+                {
+                    "type": "input",
+                    "block_id": "source",
+                    "label": {"type": "plain_text", "text": "Data source"},
+                    "element": {
+                        "type": "static_select",
+                        "action_id": "val",
+                        "options": source_opts,
+                        **_with_initial(source_opts, draft.get("source") or "bd_attendance"),
+                    },
+                },
+                {
+                    "type": "input",
+                    "block_id": "fields",
+                    "optional": True,
+                    "label": {"type": "plain_text", "text": "Fields"},
+                    "element": {
+                        "type": "multi_static_select",
+                        "action_id": "val",
+                        "options": field_opts,
+                        **({"initial_options": field_initial} if field_initial else {}),
+                    },
+                },
+                {
+                    "type": "input",
+                    "block_id": "metric",
+                    "label": {"type": "plain_text", "text": "Metric"},
+                    "element": {
+                        "type": "static_select",
+                        "action_id": "val",
+                        "options": metric_opts,
+                        **_with_initial(metric_opts, draft.get("metric") or "posts"),
+                    },
+                },
+                {
+                    "type": "input",
+                    "block_id": "group_by",
+                    "label": {"type": "plain_text", "text": "Group by"},
+                    "element": {
+                        "type": "static_select",
+                        "action_id": "val",
+                        "options": group_opts,
+                        **_with_initial(group_opts, draft.get("group_by") or "PAX"),
+                    },
+                },
+                {
+                    "type": "input",
+                    "block_id": "top_n",
+                    "label": {"type": "plain_text", "text": "Top N"},
+                    "element": {
+                        "type": "plain_text_input",
+                        "action_id": "val",
+                        "initial_value": str(draft.get("top_n") or "20"),
+                    },
+                },
+            ]
+        )
+
+    if show_window:
+        window_opts = _select_options(TIME_WINDOW_TYPES)
+        wtype = draft.get("time_window_type") or "last_month"
+        blocks.append(
+            {
+                "type": "input",
+                "block_id": "time_window_type",
+                "dispatch_action": True,
+                "label": {"type": "plain_text", "text": "Time window"},
+                "element": {
+                    "type": "static_select",
+                    "action_id": REPORT_WINDOW_ACTION_ID,
+                    "options": window_opts,
+                    **_with_initial(window_opts, wtype),
+                },
+            }
+        )
+        if wtype == "relative_days":
             blocks.append(
                 {
                     "type": "input",
-                    "block_id": bid,
-                    "label": {"type": "plain_text", "text": label},
-                    "element": el,
+                    "block_id": "window_days",
+                    "label": {"type": "plain_text", "text": "Last N days"},
+                    "element": {
+                        "type": "plain_text_input",
+                        "action_id": "val",
+                        "initial_value": str(draft.get("window_days") or "30"),
+                    },
                 }
             )
+        elif wtype == "custom":
+            for bid, label, key in (
+                ("window_start", "Start date", "window_start"),
+                ("window_end", "End date", "window_end"),
+            ):
+                el: dict[str, Any] = {"type": "datepicker", "action_id": "val"}
+                if draft.get(key):
+                    el["initial_date"] = str(draft[key])[:10]
+                blocks.append(
+                    {
+                        "type": "input",
+                        "block_id": bid,
+                        "label": {"type": "plain_text", "text": label},
+                        "element": el,
+                    }
+                )
+    elif report_type == "kotter":
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": (
+                            "Kotter uses the *Kotter Report* thresholds (weeks without "
+                            "posting / Q'ing), not a time window."
+                        ),
+                    }
+                ],
+            }
+        )
+    elif report_type == "award_achievements":
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": (
+                            "Award rules are configured under *PAX Achievements*. "
+                            "This schedule only controls when and where awards are posted."
+                        ),
+                    }
+                ],
+            }
+        )
 
     return {
         "type": "modal",
         "callback_id": REPORT_EDIT_CALLBACK_ID,
         "private_metadata": _metadata(
-            team_id, regional_schema, definition_id=row["id"] if row else None, draft=draft
+            team_id,
+            regional_schema,
+            definition_id=row["id"] if row else None,
+            draft=draft,
+            report_type=report_type,
         ),
         "title": {"type": "plain_text", "text": "Edit report" if row else "Add report"},
         "submit": {"type": "plain_text", "text": "Save"},
@@ -1035,6 +1230,7 @@ def parse_report_form(payload: dict) -> dict:
     state = payload.get("view", {}).get("state", {}).get("values", {})
     meta = _parse_metadata((payload.get("view") or {}).get("private_metadata"))
     draft = draft_from_report_state(state, meta.get("draft"))
+    report_type = meta.get("report_type") or draft.get("report_type") or "custom_report"
     top_n = 20
     try:
         top_n = int(draft.get("top_n") or 20)
@@ -1045,6 +1241,7 @@ def parse_report_form(payload: dict) -> dict:
         window_days = int(draft.get("window_days") or 30)
     except ValueError:
         window_days = 30
+    code_rendered = is_code_rendered(report_type)
     return {
         "definition_id": meta.get("definition_id"),
         "name": (draft.get("name") or "").strip(),
@@ -1055,12 +1252,17 @@ def parse_report_form(payload: dict) -> dict:
         "metric": draft.get("metric") or "posts",
         "group_by": draft.get("group_by") or "PAX",
         "top_n": top_n,
-        "time_window_type": draft.get("time_window_type") or "last_month",
+        "time_window_type": (
+            None
+            if report_type in ("kotter", "award_achievements")
+            else (draft.get("time_window_type") or "last_month")
+        ),
         "window_days": window_days,
         "window_start": (draft.get("window_start") or None) or None,
         "window_end": (draft.get("window_end") or None) or None,
-        "report_type": "custom_report",
+        "report_type": report_type if code_rendered else "custom_report",
         "is_builtin": 0,
+        "code_rendered": code_rendered,
     }
 
 
@@ -1070,15 +1272,19 @@ def validate_report_form(values: dict) -> dict[str, str]:
     errors: dict[str, str] = {}
     if not values.get("name"):
         errors["name"] = "Name is required"
-    code = values.get("code") or ""
-    if not code:
-        errors["code"] = "Code is required"
-    elif not re.match(r"^[a-z0-9_]+$", code):
-        errors["code"] = "Use lowercase letters, numbers, underscores"
-    if values.get("kind") not in REPORT_KINDS:
-        errors["kind"] = "Invalid output"
-    if values.get("source") not in ALLOWED_SOURCES:
-        errors["source"] = "Invalid source"
+    code_rendered = values.get("code_rendered") or is_code_rendered(values.get("report_type"))
+    if not code_rendered:
+        code = values.get("code") or ""
+        if not code:
+            errors["code"] = "Code is required"
+        elif not re.match(r"^[a-z0-9_]+$", code):
+            errors["code"] = "Use lowercase letters, numbers, underscores"
+        if values.get("kind") not in REPORT_KINDS:
+            errors["kind"] = "Invalid output"
+        if values.get("source") not in ALLOWED_SOURCES:
+            errors["source"] = "Invalid source"
+    if values.get("report_type") in ("kotter", "award_achievements"):
+        return errors
     if values.get("time_window_type") == "custom":
         if not values.get("window_start"):
             errors["window_start"] = "Start date required"

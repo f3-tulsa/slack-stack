@@ -21,6 +21,7 @@ REPORT_TYPES = (
     "region_leaderboard",
     "ao_leaderboard",
     "achievement_leaderboard",
+    "award_achievements",
     "kotter",
     "custom_report",
 )
@@ -32,7 +33,7 @@ DESTINATION_TYPES = (
     "dm_specific_pax",
 )
 
-FREQUENCY_TYPES = ("daily", "weekly", "monthly", "custom")
+FREQUENCY_TYPES = ("hourly", "daily", "weekly", "monthly", "custom")
 MONTH_DAY_MODES = ("first", "last", "specific")
 TIME_WINDOW_TYPES = ("relative_days", "last_month", "ytd", "custom")
 REPORT_KINDS = ("chart", "table")
@@ -45,6 +46,7 @@ VALID_DESTINATIONS: dict[str, tuple[str, ...]] = {
     "region_leaderboard": ("specific_channels", "all_ao_channels"),
     "ao_leaderboard": ("all_ao_channels", "specific_channels"),
     "achievement_leaderboard": ("specific_channels", "all_ao_channels"),
+    "award_achievements": ("specific_channels",),
     "kotter": ("specific_channels",),
     "custom_report": DESTINATION_TYPES,
 }
@@ -79,21 +81,38 @@ def region_local_now(timezone_name: str | None, *, utc_now: datetime | None = No
 
 
 def parse_time_of_day(value: Any) -> time:
-    """Parse TIME / 'HH:MM' / 'HH:MM:SS' / datetime.time into time."""
-    if isinstance(value, time):
-        return value.replace(tzinfo=None)
-    if isinstance(value, datetime):
-        return value.time().replace(tzinfo=None)
-    if value is None:
+    """Parse TIME / 'HH:MM' / 'HH:MM:SS' / datetime.time / timedelta into time.
+
+    Never raises — falls back to 07:00 on unparseable values (PyMySQL TIME may
+    arrive as timedelta, bytes, or fractional seconds).
+    """
+    try:
+        if isinstance(value, time):
+            return value.replace(tzinfo=None)
+        if isinstance(value, datetime):
+            return value.time().replace(tzinfo=None)
+        if isinstance(value, timedelta):
+            total = int(value.total_seconds()) % (24 * 3600)
+            hour, rem = divmod(total, 3600)
+            minute, second = divmod(rem, 60)
+            return time(hour, minute, second)
+        if value is None:
+            return time(7, 0)
+        if isinstance(value, (bytes, bytearray)):
+            value = value.decode("utf-8", errors="ignore")
+        s = str(value).strip()
+        if not s:
+            return time(7, 0)
+        # Strip fractional seconds: "7:00:00.500000" → "7:00:00"
+        if "." in s:
+            s = s.split(".", 1)[0]
+        parts = s.split(":")
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+        second = int(float(parts[2])) if len(parts) > 2 else 0
+        return time(hour % 24, minute % 60, second % 60)
+    except Exception:
         return time(7, 0)
-    s = str(value).strip()
-    if not s:
-        return time(7, 0)
-    parts = s.split(":")
-    hour = int(parts[0])
-    minute = int(parts[1]) if len(parts) > 1 else 0
-    second = int(parts[2]) if len(parts) > 2 else 0
-    return time(hour, minute, second)
 
 
 def snap_time_to_tick(t: time, tick_minutes: int = TICK_MINUTES) -> time:
@@ -127,6 +146,8 @@ def _last_day_of_month(d: date) -> int:
 def is_due_today(schedule: dict[str, Any], local_date: date) -> bool:
     """True when the schedule's calendar rule matches local_date."""
     freq = (schedule.get("frequency_type") or "monthly").strip()
+    if freq == "hourly":
+        return True
     if freq == "daily":
         return True
     if freq == "weekly":
@@ -192,20 +213,61 @@ def already_ran_successfully(schedule: dict[str, Any], local_date: date) -> bool
     return status == "success"
 
 
+def already_ran_this_hour(schedule: dict[str, Any], local_dt: datetime) -> bool:
+    """Skip when last_run_at falls in the same local hour and status is terminal.
+
+    ``success`` and ``skipped`` are both terminal for the hour so a no-op run
+    (no rules / no attendance / no destinations) does not re-fire every tick.
+    ``last_run_at`` is region-local wall time, matching ``mark_schedule_status``.
+    """
+    last_at = schedule.get("last_run_at")
+    if last_at is None:
+        return False
+    if isinstance(last_at, str):
+        last_at = datetime.fromisoformat(last_at.replace("Z", "+00:00"))
+        if last_at.tzinfo is not None:
+            last_at = last_at.replace(tzinfo=None)
+    elif isinstance(last_at, datetime) and last_at.tzinfo is not None:
+        last_at = last_at.replace(tzinfo=None)
+    local_naive = local_dt.replace(tzinfo=None) if local_dt.tzinfo else local_dt
+    if (last_at.year, last_at.month, last_at.day, last_at.hour) != (
+        local_naive.year,
+        local_naive.month,
+        local_naive.day,
+        local_naive.hour,
+    ):
+        return False
+    status = (schedule.get("last_run_status") or "").strip().lower()
+    return status in ("success", "skipped")
+
+
 def is_due_now(
     schedule: dict[str, Any],
     *,
     timezone_name: str | None,
     utc_now: datetime | None = None,
 ) -> bool:
-    """Due today + region-local now >= time_of_day + not already run successfully today."""
+    """Due today + region-local now >= time_of_day + not already run successfully.
+
+    Hourly schedules use ``last_run_at`` for intra-day idempotency and fire when
+    the local minute is past the configured minute-of-hour from ``time_of_day``
+    (snapped to the 15-minute tick so a stored ``:50`` still fires at ``:45``).
+    """
     local = region_local_now(timezone_name, utc_now=utc_now)
     local_date = local.date()
+    freq = (schedule.get("frequency_type") or "monthly").strip()
+    tod = parse_time_of_day(schedule.get("time_of_day"))
+
+    if freq == "hourly":
+        if already_ran_this_hour(schedule, local):
+            return False
+        tod = snap_time_to_tick(tod)
+        return local.minute >= tod.minute
+
     if already_ran_successfully(schedule, local_date):
         return False
     if not is_due_today(schedule, local_date):
         return False
-    tod = parse_time_of_day(schedule.get("time_of_day"))
     return local.time().replace(tzinfo=None) >= tod
 
 
@@ -241,6 +303,46 @@ def resolve_time_window(
     return first_prev, last_prev
 
 
+def is_calendar_month(start: date, end: date) -> bool:
+    """True when [start, end] is exactly one calendar month."""
+    if start.day != 1 or start.year != end.year or start.month != end.month:
+        return False
+    import calendar
+
+    return end.day == calendar.monthrange(start.year, start.month)[1]
+
+
+def format_window_label(start: date, end: date) -> str:
+    """Human label for chart titles: 'July 2026' or 'Jun 01 - Jul 27, 2026'."""
+    if is_calendar_month(start, end):
+        return start.strftime("%B %Y")
+    if start == end:
+        return start.strftime("%b %d, %Y")
+    if start.year == end.year:
+        return f"{start.strftime('%b %d')} - {end.strftime('%b %d, %Y')}"
+    return f"{start.strftime('%b %d, %Y')} - {end.strftime('%b %d, %Y')}"
+
+
+def window_file_tag(start: date, end: date) -> str:
+    """Short slug for chart filenames."""
+    if is_calendar_month(start, end):
+        return start.strftime("%b%Y")
+    return f"{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}"
+
+
+def default_chart_window() -> tuple[date, date]:
+    """Legacy CHART_PERIOD_OFFSET_DAYS → prior calendar month containing that day."""
+    import os
+
+    off = int(os.environ.get("CHART_PERIOD_OFFSET_DAYS", "7"))
+    d = (datetime.now() - timedelta(days=off)).date()
+    first = date(d.year, d.month, 1)
+    import calendar
+
+    last = date(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
+    return first, last
+
+
 def destination_valid_for_report(report_type: str, destination_type: str) -> bool:
     allowed = VALID_DESTINATIONS.get(report_type, DESTINATION_TYPES)
     return destination_type in allowed
@@ -253,7 +355,11 @@ def format_schedule_summary(schedule: dict[str, Any], definition: dict[str, Any]
     freq = schedule.get("frequency_type") or "?"
     tod = parse_time_of_day(schedule.get("time_of_day"))
     enabled = "on" if schedule.get("enabled") else "off"
-    line = f"*{name}* — {dest} / {freq} @ {tod.strftime('%H:%M')} ({enabled})"
+    if freq == "hourly":
+        time_label = f":{tod.minute:02d}"
+    else:
+        time_label = tod.strftime("%H:%M")
+    line = f"*{name}* — {dest} / {freq} @ {time_label} ({enabled})"
     status = (schedule.get("last_run_status") or "").strip()
     last_on = schedule.get("last_run_on")
     if status or last_on:

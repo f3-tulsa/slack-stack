@@ -34,3 +34,24 @@ DB_ENCRYPTION_KEY='your-test-key-at-least-16' pytest -q qsignups/testing/
 ```
 
 `PAXminer/tests/test_BD_Comparer.py` requires `config/credentials_test.ini` and a live database; it is **skipped** when `CI=true` (e.g. in GitHub Actions). Run it only locally with a configured test DB.
+
+### Seed synthetic attendance (PAXMiner test schemas)
+
+**Test-only** seeder — always loads `.env.deploy.test` and refuses prod schemas / workspaces. **Default is one-shot baseline** (clear `[SEED]` rows, rebuild ~180 days of multi-PAX weekly beatdowns at QSignups AOs). Use `--interactive` to overlay Kotter / one Achievement per user on top of that calendar; `--verify` / `--verify-only` print which schedules would post vs skip (destinations + row counts).
+
+```bash
+python PAXminer/scripts/seed_test_region.py --yes --verify
+python PAXminer/scripts/seed_test_region.py --interactive
+# optional: python PAXminer/scripts/seed_test_region.py --schema f3ttown_test --days 180 --synthetic-pax 12
+```
+
+Pulls real test-workspace users via `PM_SLACK_TOKEN` and the AO list from QSignups (`qsignups_aos`, falling back to the regional `aos` table then all channels). Synthetic PAX (`--synthetic-pax`) fill leaderboards but are not in Slack — prefer `dm_specific_pax` when testing PAX chart DMs. Requires `F3_REGION_SLACK_TEAM_ID` to match Slack `auth.test`. Dev-only — not part of CI or deploy.
+
+Prod-derived attendance is not useful in test (different Slack user IDs), so start from a clean slate:
+
+```bash
+python PAXminer/scripts/reset_test_region.py --dry-run
+python PAXminer/scripts/reset_test_region.py
+```
+
+Reset shares the seeder's test-only guards, deletes all `bd_attendance` / `beatdowns` / `achievements_awarded`, prunes `users` / `aos` missing from the test workspace (`--keep-roster` to skip), and keeps `achievements_list` + views.

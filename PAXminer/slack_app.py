@@ -36,7 +36,7 @@ from config_paxminer import (
     _validate_achievement,
 )
 from paxminer_db import connect_from_env, paxminer_schema_from_env
-from slack_http import is_http_request, is_slack_admin
+from slack_http import is_http_request, is_slack_admin, notify_admin_required
 
 LOCAL_DEVELOPMENT = not os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
 
@@ -81,15 +81,25 @@ def handle_error(error, body, logger, client):
     logger.exception("Unhandled Slack Bolt error: %s", error)
     user_id = body.get("user_id") or (body.get("user") or {}).get("id")
     channel_id = body.get("channel_id") or (body.get("channel") or {}).get("id")
+    notice = "Something went wrong — try again. If it keeps happening, check #paxminer_logs."
     if user_id and channel_id:
         try:
             client.chat_postEphemeral(
                 channel=channel_id,
                 user=user_id,
-                text=f"Something went wrong: {str(error)[:500]}",
+                text=notice,
             )
+            return
         except Exception:
             logger.exception("Failed to send error ephemeral")
+    if user_id:
+        try:
+            opened = client.conversations_open(users=user_id)
+            dm = (opened.get("channel") or {}).get("id")
+            if dm:
+                client.chat_postMessage(channel=dm, text=notice)
+        except Exception:
+            logger.exception("Failed to send error DM")
 
 
 def _strip_channel_initials(view: dict) -> dict:
@@ -168,10 +178,10 @@ def _region_context_from_body(body: dict) -> tuple[str, str, dict | None]:
 
 def handle_add_achievement(ack, body, client, logger):
     user_id = (body.get("user") or {}).get("id", "")
-    if not is_slack_admin(user_id, client=client):
-        ack()
-        return
     ack()
+    if not is_slack_admin(user_id, client=client):
+        notify_admin_required(client, body)
+        return
     team_id, regional_schema, region = _region_context_from_body(body)
     if not region or not regional_schema:
         return
@@ -198,10 +208,10 @@ def _refresh_achievements_list(client, body, team_id, regional_schema, notice: s
 
 def handle_edit_achievement(ack, body, client, logger):
     user_id = (body.get("user") or {}).get("id", "")
-    if not is_slack_admin(user_id, client=client):
-        ack()
-        return
     ack()
+    if not is_slack_admin(user_id, client=client):
+        notify_admin_required(client, body)
+        return
     team_id, regional_schema, region = _region_context_from_body(body)
     if not region or not regional_schema:
         return
@@ -231,10 +241,10 @@ app.action(EDIT_ACHIEVEMENT_ACTION_ID)(handle_edit_achievement)
 
 def handle_delete_achievement(ack, body, client, logger):
     user_id = (body.get("user") or {}).get("id", "")
-    if not is_slack_admin(user_id, client=client):
-        ack()
-        return
     ack()
+    if not is_slack_admin(user_id, client=client):
+        notify_admin_required(client, body)
+        return
     team_id, regional_schema, region = _region_context_from_body(body)
     if not region or not regional_schema:
         return
@@ -311,18 +321,30 @@ def handle_config_submit(ack, body, client, logger):
     if not region:
         ack(response_action="errors", errors={"timezone": "Region not found"})
         return
+    region_key = region.get("region")
+    if not region_key:
+        ack(response_action="errors", errors={"timezone": "Region key missing"})
+        return
     values = {k: v for k, v in _parse_modal_values(body).items() if v is not None}
     pm = paxminer_schema_from_env()
-    conn = connect_from_env(_registry_db())
+    try:
+        conn = connect_from_env(_registry_db())
+    except Exception as exc:
+        logger.exception("config submit connect failed")
+        ack(response_action="errors", errors={"timezone": f"Save failed: {str(exc)[:120]}"})
+        return
     try:
         with conn.cursor() as cur:
             sets = ", ".join(f"`{k}`=%s" for k in values)
             cur.execute(
                 f"UPDATE `{pm}`.`regions` SET {sets} WHERE region=%s",
-                (*values.values(), region["region"]),
+                (*values.values(), region_key),
             )
             conn.commit()
         ack(response_action="clear")
+    except Exception as exc:
+        logger.exception("config submit failed")
+        ack(response_action="errors", errors={"timezone": f"Save failed: {str(exc)[:120]}"})
     finally:
         conn.close()
 
@@ -349,7 +371,12 @@ def handle_achievement_edit_submit(ack, body, client, logger):
         ack(response_action="errors", errors=errors)
         return
 
-    conn = connect_from_env(_registry_db())
+    try:
+        conn = connect_from_env(_registry_db())
+    except Exception as exc:
+        logger.exception("achievement edit connect failed")
+        ack(response_action="errors", errors={"name": f"Save failed: {str(exc)[:120]}"})
+        return
     try:
         with conn.cursor() as cur:
             if achievement_id:
@@ -409,6 +436,9 @@ def handle_achievement_edit_submit(ack, body, client, logger):
             achievements = _load_achievements(cur, regional_schema)
             view = _achievements_list_modal(team_id, regional_schema, achievements)
             ack(response_action="update", view=view)
+    except Exception as exc:
+        logger.exception("achievement edit submit failed")
+        ack(response_action="errors", errors={"name": f"Save failed: {str(exc)[:120]}"})
     finally:
         conn.close()
 

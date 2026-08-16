@@ -10,9 +10,11 @@ _REPO = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_REPO / "PAXminer"))
 
 from schedule_schema import (  # noqa: E402
+    backfill_award_achievements_schedules,
+    ensure_is_customized_column,
+    ensure_last_run_at_column,
     ensure_scheduler_tables,
     ensure_timezone_column,
-    seed_all_regions,
 )
 
 from paxminer_phases.db import _pm_schema  # noqa: E402
@@ -22,10 +24,14 @@ LOG = logging.getLogger(__name__)
 
 def run_scheduler(cur, stage: str) -> dict:
     """
-    Ensure regions.timezone, scheduler tables, and seed default schedules.
+    Ensure regions.timezone, scheduler tables, last_run_at, and backfill
+    Award Achievements schedules for regions that previously used the daily
+    EventBridge path (send_achievements + achievement_channel).
 
-    Seeds report definitions and schedules from report_defaults.json (via
-    schedule_schema), not from legacy send_* region flags.
+    report_defaults.json is NOT loaded wholesale here. Admins load or restore
+    defaults from the PAX Reports / Schedule modals (Load defaults / Restore
+    Defaults). seed_all_regions remains available in schedule_schema for
+    one-time onboarding scripts, but is not invoked by this migration phase.
     """
     pm_schema = _pm_schema(stage)
 
@@ -37,14 +43,36 @@ def run_scheduler(cur, stage: str) -> dict:
     )
     tables_created = ensure_scheduler_tables(cur, pm_schema)
     LOG.info("Scheduler tables created this run: %s", tables_created or "(none)")
-    counts = seed_all_regions(cur, pm_schema)
+    added_customized = ensure_is_customized_column(cur, pm_schema)
+    LOG.info(
+        "%s.region_report_definitions.is_customized: %s",
+        pm_schema,
+        "added" if added_customized else "already present",
+    )
+    added_last_run_at = ensure_last_run_at_column(cur, pm_schema)
+    LOG.info(
+        "%s.region_schedules.last_run_at: %s",
+        pm_schema,
+        "added" if added_last_run_at else "already present",
+    )
+    backfill = backfill_award_achievements_schedules(cur, pm_schema)
+    LOG.info(
+        "Award Achievements backfill: definitions=%s schedules=%s skipped=%s",
+        backfill.get("definitions_ensured"),
+        backfill.get("schedules_inserted"),
+        backfill.get("skipped"),
+    )
+    LOG.info(
+        "Defaults not seeded by migration — use Load defaults / Restore Defaults in Slack"
+    )
 
     return {
         "pm_schema": pm_schema,
         "timezone_added": added_tz,
         "tables_created": tables_created,
-        "regions": counts["regions"],
-        "regions_with_schema": counts["regions_with_schema"],
-        "definitions": counts["definitions"],
-        "schedules": counts["schedules"],
+        "is_customized_added": added_customized,
+        "last_run_at_added": added_last_run_at,
+        "award_achievements_backfill": backfill,
+        "defaults_seeded": False,
+        "note": "report_defaults.json loads only via Slack Load/Restore defaults",
     }

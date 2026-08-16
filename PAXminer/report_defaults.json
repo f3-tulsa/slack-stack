@@ -36,6 +36,13 @@
       "time_window_type": "ytd"
     },
     {
+      "code": "award_achievements",
+      "name": "Award Achievements",
+      "report_type": "award_achievements",
+      "is_builtin": 1,
+      "time_window_type": null
+    },
+    {
       "code": "kotter",
       "name": "Kotter report",
       "report_type": "kotter",
@@ -81,6 +88,13 @@
       "destination_type": "specific_channels",
       "frequency_type": "monthly",
       "month_day_mode": "first",
+      "time_of_day": "07:00:00",
+      "enabled": true
+    },
+    {
+      "code": "award_achievements",
+      "destination_type": "specific_channels",
+      "frequency_type": "daily",
       "time_of_day": "07:00:00",
       "enabled": true
     },

@@ -8,11 +8,10 @@ The graph then is sent to each AO in a Slack message.
 
 from __future__ import annotations
 
-import datetime
 import logging
-import os
 import sys
 import time
+from datetime import date
 from pathlib import Path
 
 import matplotlib
@@ -28,13 +27,14 @@ _PAX_ROOT = Path(__file__).resolve().parent.parent
 if str(_PAX_ROOT) not in sys.path:
     sys.path.insert(0, str(_PAX_ROOT))
 
+from scheduling import (  # noqa: E402
+    default_chart_window,
+    format_window_label,
+    is_calendar_month,
+    window_file_tag,
+)
+
 _LOG = logging.getLogger(__name__)
-
-
-def _lb_ao_period():
-    off = int(os.environ.get("CHART_PERIOD_OFFSET_DAYS", "7"))
-    d = datetime.datetime.now() - datetime.timedelta(days=off)
-    return d.strftime("%m"), d.strftime("%b"), d.strftime("%B"), d.strftime("%Y")
 
 
 def run_ao_leaderboard(
@@ -46,6 +46,7 @@ def run_ao_leaderboard(
     plot_dir: str | Path = "/tmp/paxminer_plots",
     destinations: list[str] | None = None,
     post_per_ao: bool = True,
+    window: tuple[date, date] | None = None,
 ) -> dict:
     _ = region, firstf
     plot_base = Path(plot_dir) / schema
@@ -55,9 +56,15 @@ def run_ao_leaderboard(
     rate_limit_handler = RateLimitErrorRetryHandler(max_retry_count=7)
     slack.retry_handlers.append(rate_limit_handler)
 
-    thismonth, thismonthname, thismonthnamelong, yearnum = _lb_ao_period()
+    start, end = window or default_chart_window()
+    label = format_window_label(start, end)
+    tag = window_file_tag(start, end)
+    include_ytd = is_calendar_month(start, end)
     total_graphs = 0
     fallback_channels = list(destinations) if destinations else []
+    posted_channels: list[dict] = []
+    failed_channels: list[dict] = []
+    skipped_no_data: list[dict] = []
 
     try:
         with mydb.cursor() as cursor:
@@ -95,47 +102,61 @@ def run_ao_leaderboard(
                     `ao`.`ao`
             ) a
             where
-            MONTH(Date) = %s
-            AND YEAR(Date) = %s
+            Date BETWEEN %s AND %s
             AND ao= %s
             group by PAX
             order by count(1) desc
             limit 20
             """
-                val = (thismonth, yearnum, ao)
+                val = (start.isoformat(), end.isoformat(), ao)
                 cursor.execute(sql, val)
                 posts = cursor.fetchall()
                 posts_df = pd.DataFrame(posts, columns=["PAX", "Posts"])
         finally:
             pass
 
-        if not posts_df.empty:
+        if posts_df.empty:
+            skipped_no_data.append({"ao": ao, "channel_id": channel_id})
+        else:
             posts_df.plot.bar(x="PAX", color={"Posts": "orange"})
-            plt.title("Monthly Leaderboard - " + thismonthnamelong + ", " + yearnum)
+            plt.title("Leaderboard - " + label)
             plt.xlabel("")
-            plt.ylabel("# Posts for " + thismonthname + ", " + yearnum)
-            out_m = plot_base / f"PAX_Leaderboard_{ao}{thismonthname}{yearnum}.jpg"
+            plt.ylabel("# Posts for " + label)
+            out_m = plot_base / f"PAX_Leaderboard_{ao}{tag}.jpg"
             plt.savefig(str(out_m), bbox_inches="tight")
-            comment = (
-                "Hey "
-                + ao
-                + "! Here are the posting leaderboards for "
-                + thismonthnamelong
-                + ", "
-                + yearnum
-                + " as well as for Year to Date (includes all beatdowns, rucks, Qsource, etc.) "
-                "with the top 20 posters! T-CLAPS to these HIMs."
-            )
+            if include_ytd:
+                comment = (
+                    "Hey "
+                    + ao
+                    + "! Here are the posting leaderboards for "
+                    + label
+                    + " as well as for Year to Date (includes all beatdowns, rucks, Qsource, etc.) "
+                    "with the top 20 posters! T-CLAPS to these HIMs."
+                )
+            else:
+                comment = (
+                    "Hey "
+                    + ao
+                    + "! Here are the posting leaderboards for "
+                    + label
+                    + " with the top 20 posters! T-CLAPS to these HIMs."
+                )
             for ch in upload_channels:
                 max_attempts = 5
                 for attempt in range(max_attempts):
                     try:
+                        try:
+                            slack.conversations_join(channel=ch)
+                        except Exception:
+                            pass
                         slack.files_upload_v2(
                             channel=ch,
                             initial_comment=comment,
                             file=str(out_m),
                         )
                         total_graphs += 1
+                        if not any(p.get("channel_id") == ch and p.get("ao") == ao for p in posted_channels):
+                            posted_channels.append({"ao": ao, "channel_id": ch})
                         break
                     except SlackApiError as e:
                         if e.response.status_code == 429:
@@ -148,71 +169,110 @@ def run_ao_leaderboard(
                             time.sleep(delay)
                         else:
                             _LOG.exception("AO leaderboard upload failed ao=%s channel=%s", ao, ch)
-                            break
-            plt.close("all")
-
-        try:
-            with mydb.cursor() as cursor:
-                sql = """
-            select PAX, count(1) as Posts FROM (
-                select
-                    `bd`.`date` AS `Date`,
-                    `ao`.`ao` AS `AO`,
-                    `u`.`user_name` AS `PAX`
-                from
-                    (((`bd_attendance` `bd`
-                left join `aos` `ao` on
-                    ((`bd`.`ao_id` = `ao`.`channel_id`)))
-                left join `users` `u` on
-                    ((`bd`.`user_id` = `u`.`user_id`))))
-                where `u`.app != 1
-                order by
-                    `bd`.`date` desc,
-                    `ao`.`ao`
-            ) a
-            where
-            YEAR(Date) = %s
-            AND ao= %s
-            group by PAX
-            order by count(1) desc
-            limit 20
-            """
-                val = (yearnum, ao)
-                cursor.execute(sql, val)
-                posts = cursor.fetchall()
-                posts_df = pd.DataFrame(posts, columns=["PAX", "Posts"])
-        finally:
-            pass
-
-        if not posts_df.empty:
-            posts_df.plot.bar(x="PAX", color={"Posts": "green"})
-            plt.title("Year to Date Leaderboard - " + yearnum)
-            plt.xlabel("")
-            plt.ylabel("# Posts for " + yearnum + " - Year To Date")
-            out_y = plot_base / f"PAX_Leaderboard_YTD_{ao}{yearnum}.jpg"
-            plt.savefig(str(out_y), bbox_inches="tight")
-            for ch in upload_channels:
-                max_attempts = 5
-                for attempt in range(max_attempts):
-                    try:
-                        slack.files_upload_v2(file=str(out_y), channel=ch)
-                        total_graphs += 1
-                        break
-                    except SlackApiError as e:
-                        if e.response.status_code == 429:
-                            delay = int(e.response.headers["Retry-After"])
-                            _LOG.info(
-                                "AO leaderboard YTD: rate limited, retrying in %s seconds (ao=%s)",
-                                delay,
-                                ao,
+                            failed_channels.append(
+                                {"ao": ao, "channel_id": ch, "reason": str(e)[:200]}
                             )
-                            time.sleep(delay)
-                        else:
-                            _LOG.exception("AO leaderboard YTD upload failed ao=%s channel=%s", ao, ch)
                             break
+                    except Exception as exc:
+                        _LOG.exception("AO leaderboard upload failed ao=%s channel=%s", ao, ch)
+                        failed_channels.append(
+                            {"ao": ao, "channel_id": ch, "reason": str(exc)[:200]}
+                        )
+                        break
             plt.close("all")
 
-    return {"schema": schema, "graphs": total_graphs}
+        if include_ytd:
+            ytd_start = date(end.year, 1, 1)
+            ytd_end = end
+            yearnum = str(end.year)
+            try:
+                with mydb.cursor() as cursor:
+                    sql = """
+                select PAX, count(1) as Posts FROM (
+                    select
+                        `bd`.`date` AS `Date`,
+                        `ao`.`ao` AS `AO`,
+                        `u`.`user_name` AS `PAX`
+                    from
+                        (((`bd_attendance` `bd`
+                    left join `aos` `ao` on
+                        ((`bd`.`ao_id` = `ao`.`channel_id`)))
+                    left join `users` `u` on
+                        ((`bd`.`user_id` = `u`.`user_id`))))
+                    where `u`.app != 1
+                    order by
+                        `bd`.`date` desc,
+                        `ao`.`ao`
+                ) a
+                where
+                Date BETWEEN %s AND %s
+                AND ao= %s
+                group by PAX
+                order by count(1) desc
+                limit 20
+                """
+                    val = (ytd_start.isoformat(), ytd_end.isoformat(), ao)
+                    cursor.execute(sql, val)
+                    posts = cursor.fetchall()
+                    posts_df = pd.DataFrame(posts, columns=["PAX", "Posts"])
+            finally:
+                pass
+
+            if not posts_df.empty:
+                posts_df.plot.bar(x="PAX", color={"Posts": "green"})
+                plt.title("Year to Date Leaderboard - " + yearnum)
+                plt.xlabel("")
+                plt.ylabel("# Posts for " + yearnum + " - Year To Date")
+                out_y = plot_base / f"PAX_Leaderboard_YTD_{ao}{yearnum}.jpg"
+                plt.savefig(str(out_y), bbox_inches="tight")
+                for ch in upload_channels:
+                    max_attempts = 5
+                    for attempt in range(max_attempts):
+                        try:
+                            try:
+                                slack.conversations_join(channel=ch)
+                            except Exception:
+                                pass
+                            slack.files_upload_v2(file=str(out_y), channel=ch)
+                            total_graphs += 1
+                            if not any(p.get("channel_id") == ch and p.get("ao") == ao for p in posted_channels):
+                                posted_channels.append({"ao": ao, "channel_id": ch})
+                            break
+                        except SlackApiError as e:
+                            if e.response.status_code == 429:
+                                delay = int(e.response.headers["Retry-After"])
+                                _LOG.info(
+                                    "AO leaderboard YTD: rate limited, retrying in %s seconds (ao=%s)",
+                                    delay,
+                                    ao,
+                                )
+                                time.sleep(delay)
+                            else:
+                                _LOG.exception("AO leaderboard YTD upload failed ao=%s channel=%s", ao, ch)
+                                if not any(f.get("channel_id") == ch and f.get("ao") == ao for f in failed_channels):
+                                    failed_channels.append(
+                                        {"ao": ao, "channel_id": ch, "reason": str(e)[:200]}
+                                    )
+                                break
+                        except Exception as exc:
+                            _LOG.exception("AO leaderboard YTD upload failed ao=%s channel=%s", ao, ch)
+                            if not any(f.get("channel_id") == ch and f.get("ao") == ao for f in failed_channels):
+                                failed_channels.append(
+                                    {"ao": ao, "channel_id": ch, "reason": str(exc)[:200]}
+                                )
+                            break
+                plt.close("all")
+
+    return {
+        "schema": schema,
+        "graphs": total_graphs,
+        "posted_channels": posted_channels,
+        "failed_channels": failed_channels,
+        "skipped_no_data": skipped_no_data,
+        "channel_count": len(posted_channels),
+        "window_start": start.isoformat(),
+        "window_end": end.isoformat(),
+    }
 
 
 if __name__ == "__main__":

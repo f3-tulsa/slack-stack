@@ -68,6 +68,185 @@ def test_is_due_now_at_or_after_and_idempotency():
     assert is_due_now(schedule, timezone_name="America/Chicago", utc_now=utc)
 
 
+def test_hourly_is_due_today_and_minute_gate():
+    from scheduling import FREQUENCY_TYPES, already_ran_this_hour, format_schedule_summary
+
+    assert "hourly" in FREQUENCY_TYPES
+    assert is_due_today({"frequency_type": "hourly"}, date(2026, 7, 19))
+
+    # 13:20 CDT = 18:20 UTC
+    utc = datetime(2026, 7, 19, 18, 20, tzinfo=ZoneInfo("UTC"))
+    schedule = {
+        "frequency_type": "hourly",
+        "time_of_day": "00:15:00",
+        "last_run_at": None,
+        "last_run_status": None,
+    }
+    assert is_due_now(schedule, timezone_name="America/Chicago", utc_now=utc)
+
+    early = datetime(2026, 7, 19, 18, 5, tzinfo=ZoneInfo("UTC"))  # 13:05 CDT
+    assert not is_due_now(schedule, timezone_name="America/Chicago", utc_now=early)
+
+    schedule["last_run_at"] = datetime(2026, 7, 19, 13, 15)
+    schedule["last_run_status"] = "success"
+    assert already_ran_this_hour(schedule, datetime(2026, 7, 19, 13, 45))
+    assert not is_due_now(schedule, timezone_name="America/Chicago", utc_now=utc)
+
+    # Next hour clears the guard
+    next_hour = datetime(2026, 7, 19, 19, 20, tzinfo=ZoneInfo("UTC"))  # 14:20 CDT
+    assert is_due_now(schedule, timezone_name="America/Chicago", utc_now=next_hour)
+
+    # Minute > 45 (e.g. :50) snaps to :45 so the :45 tick still fires.
+    late = datetime(2026, 7, 19, 18, 50, tzinfo=ZoneInfo("UTC"))  # 13:50 CDT
+    late_sched = {
+        "frequency_type": "hourly",
+        "time_of_day": "00:50:00",
+        "last_run_at": None,
+        "last_run_status": None,
+    }
+    assert is_due_now(late_sched, timezone_name="America/Chicago", utc_now=late)
+    at_tick = datetime(2026, 7, 19, 18, 45, tzinfo=ZoneInfo("UTC"))  # 13:45 CDT
+    assert is_due_now(late_sched, timezone_name="America/Chicago", utc_now=at_tick)
+
+    # skipped is terminal for the hour (no re-fire every tick)
+    schedule["last_run_status"] = "skipped"
+    schedule["last_run_at"] = datetime(2026, 7, 19, 13, 15)
+    assert already_ran_this_hour(schedule, datetime(2026, 7, 19, 13, 45))
+    assert not is_due_now(schedule, timezone_name="America/Chicago", utc_now=utc)
+
+    summary = format_schedule_summary(
+        {
+            "id": 1,
+            "name": "Award Achievements",
+            "destination_type": "specific_channels",
+            "frequency_type": "hourly",
+            "time_of_day": "00:15:00",
+            "enabled": 1,
+        },
+        {"name": "Award Achievements"},
+    )
+    assert "hourly @ :15" in summary
+
+
+def test_mark_schedule_status_tolerates_missing_last_run_at():
+    from datetime import date, datetime
+    from unittest.mock import MagicMock
+
+    from schedule_runner import mark_schedule_status, reset_last_run_at_probe
+
+    reset_last_run_at_probe()
+    conn = MagicMock()
+    cur = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cur
+    conn.cursor.return_value.__exit__.return_value = False
+
+    class UnknownColumn(Exception):
+        def __init__(self):
+            super().__init__(1054, "Unknown column 'last_run_at' in 'field list'")
+            self.args = (1054, "Unknown column 'last_run_at' in 'field list'")
+
+    cur.execute.side_effect = [UnknownColumn(), None]
+    mark_schedule_status(
+        conn,
+        "paxminer_test",
+        7,
+        date(2026, 7, 19),
+        "running",
+        local_dt=datetime(2026, 7, 19, 13, 15),
+    )
+    assert cur.execute.call_count == 2
+    second_sql = cur.execute.call_args_list[1].args[0]
+    assert "last_run_at" not in second_sql
+    assert "last_run_on" in second_sql
+    conn.commit.assert_called()
+
+    # Cached miss skips the last_run_at write on the next call
+    cur.reset_mock()
+    cur.execute.side_effect = None
+    mark_schedule_status(
+        conn,
+        "paxminer_test",
+        8,
+        date(2026, 7, 19),
+        "success",
+        local_dt=datetime(2026, 7, 19, 13, 16),
+    )
+    assert cur.execute.call_count == 1
+    assert "last_run_at" not in cur.execute.call_args.args[0]
+    reset_last_run_at_probe()
+
+
+def test_award_achievements_destination_and_dispatch():
+    from unittest.mock import MagicMock, patch
+
+    from schedule_runner import _dispatch_report
+    from scheduling import destination_valid_for_report
+
+    assert destination_valid_for_report("award_achievements", "specific_channels")
+    assert not destination_valid_for_report("award_achievements", "dm_all_pax")
+
+    region = {
+        "schema_name": "f3test",
+        "slack_token": "enc",
+        "send_achievements": 0,
+        "achievement_channel": None,
+    }
+    schedule = {
+        "destination_type": "specific_channels",
+        "destination_channels": '["C_AWARD"]',
+    }
+    definition = {"report_type": "award_achievements", "code": "award_achievements"}
+
+    with patch("schedule_runner.decrypt_field", return_value="xoxb-test"):
+        with patch("schedule_runner.connect_from_env") as mock_conn:
+            mock_conn.return_value = MagicMock()
+            with patch(
+                "schedule_runner.resolve_destinations",
+                return_value=[{"kind": "channel", "id": "C_AWARD"}],
+            ):
+                with patch(
+                    "achievements.runner.run_achievements_for_region",
+                    return_value={"grants": 1, "revokes": 0},
+                ) as mock_run:
+                    result = _dispatch_report(
+                        MagicMock(), "paxminer_test", region, schedule, definition
+                    )
+
+    mock_run.assert_called_once()
+    assert mock_run.call_args.kwargs["channel_override"] == "C_AWARD"
+    assert mock_run.call_args.kwargs["post_channels"] == ["C_AWARD"]
+    assert mock_run.call_args.kwargs["regional_schema"] == "f3test"
+    assert result.get("posted_channels") == [{"ao": "awards", "channel_id": "C_AWARD"}]
+
+
+def test_award_dispatch_omits_posted_channels_when_nothing_posted():
+    from unittest.mock import MagicMock, patch
+
+    from schedule_runner import _dispatch_report
+
+    region = {"schema_name": "f3test", "slack_token": "enc"}
+    schedule = {
+        "destination_type": "specific_channels",
+        "destination_channels": '["C_AWARD"]',
+    }
+    definition = {"report_type": "award_achievements", "code": "award_achievements"}
+    with patch("schedule_runner.decrypt_field", return_value="xoxb-test"):
+        with patch("schedule_runner.connect_from_env", return_value=MagicMock()):
+            with patch(
+                "schedule_runner.resolve_destinations",
+                return_value=[{"kind": "channel", "id": "C_AWARD"}],
+            ):
+                with patch(
+                    "achievements.runner.run_achievements_for_region",
+                    return_value={"grants": 0, "revokes": 0},
+                ):
+                    result = _dispatch_report(
+                        MagicMock(), "paxminer_test", region, schedule, definition
+                    )
+    assert "posted_channels" not in result
+    assert result.get("channel_count") == 0
+
+
 def test_already_ran_successfully():
     assert already_ran_successfully(
         {"last_run_on": date(2026, 7, 19), "last_run_status": "success"},
@@ -154,6 +333,31 @@ def test_schedule_edit_modal_has_submit_and_tod_options():
     assert view.get("submit")
     tod = next(b for b in view["blocks"] if b.get("block_id") == "time_of_day")
     assert len(tod["element"]["options"]) == 96
+
+
+def test_hourly_schedule_edit_uses_minute_of_hour_picker():
+    from config_schedule import _schedule_edit_modal
+
+    view = _schedule_edit_modal(
+        "T1",
+        "f3test",
+        [{"id": 1, "name": "Awards", "report_type": "award_achievements", "code": "award_achievements"}],
+        schedule={
+            "id": 3,
+            "report_definition_id": 1,
+            "destination_type": "specific_channels",
+            "destination_channels": '["C1"]',
+            "frequency_type": "hourly",
+            "time_of_day": "00:50:00",
+            "enabled": 1,
+        },
+        timezone_name="America/Chicago",
+    )
+    tod = next(b for b in view["blocks"] if b.get("block_id") == "time_of_day")
+    assert tod["label"]["text"] == "Minute of hour"
+    values = [o["value"] for o in tod["element"]["options"]]
+    assert values == ["00:00", "00:15", "00:30", "00:45"]
+    assert tod["element"]["initial_option"]["value"] == "00:45"
 
 
 def test_reports_list_and_edit_modals_have_submit():
@@ -244,7 +448,7 @@ def test_format_schedule_log_line_variants():
     from schedule_runner import format_schedule_log_line
 
     line = format_schedule_log_line(
-        "Tulsa",
+        "f3ttown_test",
         {
             "schedule_id": 1,
             "report_type": "kotter",
@@ -253,11 +457,11 @@ def test_format_schedule_log_line_variants():
             "duration_s": 1.5,
         },
     )
-    assert line.startswith("- Schedule (Tulsa) #1 (kotter): success")
+    assert line.startswith("- Schedule (f3ttown_test) #1 (kotter): success")
     assert "2 channel(s)" in line
 
     line = format_schedule_log_line(
-        "Tulsa",
+        "f3ttown_test",
         {
             "schedule_id": 2,
             "report_type": "kotter",
@@ -268,10 +472,40 @@ def test_format_schedule_log_line_variants():
     assert "skipped - no destinations configured" in line
 
     line = format_schedule_log_line(
-        "Tulsa",
+        "f3ttown_test",
         {"schedule_id": 3, "report_type": "kotter", "ok": False, "error": "boom"},
     )
     assert "FAILED - boom" in line
+
+
+def test_post_schedule_outcome_log_uses_schema_name():
+    from unittest.mock import MagicMock, patch
+
+    from schedule_runner import _post_schedule_outcome_log
+
+    region = {
+        "region": "Tulsa",
+        "schema_name": "f3ttown_test",
+        "slack_token": "enc",
+    }
+    result = {
+        "schedule_id": 1,
+        "report_type": "kotter",
+        "ok": True,
+        "channel_count": 1,
+    }
+    log_lines: list[str] = []
+    with patch("schedule_runner.decrypt_field", return_value="xoxb-test"):
+        with patch("schedule_runner.slack_client", return_value=MagicMock()):
+            with patch(
+                "schedule_runner.post_log",
+                side_effect=lambda _c, text, **_k: log_lines.append(text),
+            ):
+                _post_schedule_outcome_log(region, result)
+
+    assert len(log_lines) == 1
+    assert log_lines[0].startswith("- Schedule (f3ttown_test) #1 (kotter)")
+    assert "Tulsa" not in log_lines[0]
 
 
 def test_resolve_destinations_empty_specific_channels():
@@ -425,13 +659,53 @@ def test_report_defaults_json_consistency():
     from scheduling import BUILTIN_DEFINITIONS, DEFAULT_SCHEDULES, VALID_DESTINATIONS
 
     codes = {d["code"] for d in BUILTIN_DEFINITIONS}
-    assert len(BUILTIN_DEFINITIONS) == 6
-    assert len(DEFAULT_SCHEDULES) == 6
+    assert len(BUILTIN_DEFINITIONS) == 7
+    assert len(DEFAULT_SCHEDULES) == 7
+    assert "award_achievements" in codes
     assert {s["code"] for s in DEFAULT_SCHEDULES} == codes
     for s in DEFAULT_SCHEDULES:
         assert s.get("enabled") is True
         defn = next(d for d in BUILTIN_DEFINITIONS if d["code"] == s["code"])
         assert s["destination_type"] in VALID_DESTINATIONS[defn["report_type"]]
+
+
+def test_backfill_award_achievements_schedules_idempotent():
+    from unittest.mock import MagicMock, patch
+
+    from schedule_schema import backfill_award_achievements_schedules
+
+    cur = MagicMock()
+    region = {
+        "schema_name": "f3ttown_test",
+        "achievement_channel": "C_ACH",
+        "send_achievements": 1,
+    }
+    cur.fetchall.return_value = [region]
+
+    with patch("schedule_schema._table_exists", return_value=True):
+        cur.fetchone.side_effect = [{"id": 42}, {"c": 0}]
+        first = backfill_award_achievements_schedules(cur, "paxminer_test")
+        assert first["schedules_inserted"] == 1
+        assert first["definitions_ensured"] == 0
+        insert_calls = [
+            c for c in cur.execute.call_args_list if "INSERT INTO" in str(c.args[0])
+        ]
+        assert len(insert_calls) == 1
+        args = insert_calls[0].args[1]
+        assert args[2] == "specific_channels"
+        assert "C_ACH" in args[3]
+        assert args[4] == "daily"
+        assert ", 0)" in insert_calls[0].args[0]
+
+        cur.reset_mock()
+        cur.fetchall.return_value = [region]
+        cur.fetchone.side_effect = [{"id": 42}, {"c": 1}]
+        second = backfill_award_achievements_schedules(cur, "paxminer_test")
+        assert second["schedules_inserted"] == 0
+        assert second["skipped"] == 1
+        assert not any(
+            "INSERT INTO" in str(c.args[0]) for c in cur.execute.call_args_list
+        )
 
 
 def test_seed_default_schedules_uses_defaults_json():
@@ -450,7 +724,7 @@ def test_seed_default_schedules_uses_defaults_json():
 
     cur.fetchone.side_effect = [
         {"c": 0},  # skip_if_any_schedules count
-        *[{"id": code_ids[d["code"]]} for d in __import__("scheduling").BUILTIN_DEFINITIONS],
+        *[{"c": 0} for _ in DEFAULT_SCHEDULES],  # merge_only per-definition counts
     ]
 
     # Patch upsert to return stable ids so we only assert INSERT args
@@ -477,3 +751,406 @@ def test_seed_default_schedules_uses_defaults_json():
         assert args[2] == item["destination_type"]
         assert args[3] is None  # empty specific_channels
         assert args[7] == 1  # enabled
+
+
+def test_parse_time_of_day_timedelta_bytes_fractional():
+    from datetime import timedelta
+
+    assert parse_time_of_day(timedelta(hours=7, minutes=0)) == time(7, 0)
+    assert parse_time_of_day(timedelta(hours=7, minutes=0, microseconds=500000)) == time(7, 0)
+    assert parse_time_of_day(b"07:15:00") == time(7, 15)
+    assert parse_time_of_day("7:00:00.500000") == time(7, 0)
+    assert parse_time_of_day("not-a-time") == time(7, 0)
+    assert parse_time_of_day(None) == time(7, 0)
+
+
+def test_format_run_result_includes_posted_failed_channels():
+    from schedule_runner import format_run_result
+
+    text, _ = format_run_result(
+        {
+            "schedule_id": 9,
+            "report_type": "q_charts",
+            "ok": True,
+            "channel_count": 1,
+            "posted_channels": [{"ao": "The Fort", "channel_id": "C111"}],
+            "failed_channels": [
+                {"ao": "Brickyard", "channel_id": "C222", "reason": "not_in_channel"}
+            ],
+        }
+    )
+    assert "posted: The Fort (C111)" in text
+    assert "failed: Brickyard (C222) - not_in_channel" in text
+
+
+def test_format_schedule_log_line_includes_destinations():
+    from schedule_runner import format_schedule_log_line
+
+    line = format_schedule_log_line(
+        "f3ttown_test",
+        {
+            "schedule_id": 4,
+            "report_type": "q_charts",
+            "ok": False,
+            "error": "all channel uploads failed",
+            "posted_channels": [],
+            "failed_channels": [{"ao": "AO1", "channel_id": "C1", "reason": "missing_scope"}],
+        },
+    )
+    assert "FAILED" in line
+    assert "failed: AO1 (C1) - missing_scope" in line
+
+
+def test_apply_delivery_result_marks_error_when_all_failed():
+    from schedule_runner import _apply_delivery_result
+
+    out = _apply_delivery_result(
+        {
+            "posted_channels": [],
+            "failed_channels": [{"ao": "x", "channel_id": "C1", "reason": "boom"}],
+        },
+        attempted_channels=1,
+    )
+    assert out["ok"] is False
+    assert out["channel_count"] == 0
+    assert "all channel uploads failed" in out["error"]
+
+
+def test_validate_schedule_form_frequency_fields():
+    from config_schedule import validate_schedule_form
+
+    base = {
+        "report_definition_id": 1,
+        "destination_type": "all_ao_channels",
+        "destination_channels": [],
+        "destination_users": [],
+    }
+    assert "day_of_week" in validate_schedule_form(
+        {**base, "frequency_type": "weekly", "day_of_week": None}, "q_charts"
+    )
+    assert "day_of_month" in validate_schedule_form(
+        {
+            **base,
+            "frequency_type": "monthly",
+            "month_day_mode": "specific",
+            "day_of_month": None,
+        },
+        "q_charts",
+    )
+    assert "interval_days" in validate_schedule_form(
+        {**base, "frequency_type": "custom", "custom_spec": {"interval_days": 0}},
+        "q_charts",
+    )
+    assert not validate_schedule_form(
+        {**base, "frequency_type": "weekly", "day_of_week": 6}, "q_charts"
+    )
+
+
+def test_draft_from_schedule_state_clears_stale_fields():
+    from config_schedule import draft_from_schedule_state
+
+    draft = draft_from_schedule_state(
+        {
+            "frequency_type": {
+                "paxminer_schedule_freq": {"selected_option": {"value": "weekly"}}
+            },
+            "destination_type": {
+                "paxminer_schedule_dest_type": {
+                    "selected_option": {"value": "all_ao_channels"}
+                }
+            },
+            "day_of_week": {"val": {"selected_option": {"value": "6"}}},
+        },
+        {
+            "month_day_mode": "first",
+            "day_of_month": "15",
+            "destination_channels": ["C1"],
+            "interval_days": "7",
+        },
+    )
+    assert draft["frequency_type"] == "weekly"
+    assert draft["day_of_week"] == "6"
+    assert "month_day_mode" not in draft
+    assert "day_of_month" not in draft
+    assert "destination_channels" not in draft
+    assert "interval_days" not in draft
+
+
+def test_restore_defaults_is_idempotent():
+    from unittest.mock import MagicMock, patch
+
+    from schedule_schema import seed_default_schedules
+    from scheduling import DEFAULT_SCHEDULES
+
+    cur = MagicMock()
+    code_ids = {s["code"]: i + 1 for i, s in enumerate(DEFAULT_SCHEDULES)}
+
+    # First restore: no existing schedules for any definition → insert all
+    cur.fetchone.side_effect = [{"c": 0} for _ in DEFAULT_SCHEDULES]
+    with patch("schedule_schema.upsert_builtin_definitions", return_value=code_ids):
+        first = seed_default_schedules(
+            cur, "paxminer_test", {"schema_name": "f3ttown"}, merge_only=True
+        )
+    assert first == len(DEFAULT_SCHEDULES)
+
+    # Second restore: every definition already has a row → insert 0
+    cur2 = MagicMock()
+    cur2.fetchone.side_effect = [{"c": 1} for _ in DEFAULT_SCHEDULES]
+    with patch("schedule_schema.upsert_builtin_definitions", return_value=code_ids):
+        second = seed_default_schedules(
+            cur2, "paxminer_test", {"schema_name": "f3ttown"}, merge_only=True
+        )
+    assert second == 0
+    insert_calls = [
+        c for c in cur2.execute.call_args_list if "INSERT INTO" in str(c.args[0])
+    ]
+    assert insert_calls == []
+
+
+def test_schedule_edit_modal_omits_null_initial_option():
+    from config_schedule import _schedule_edit_modal
+
+    view = _schedule_edit_modal(
+        "T1",
+        "f3ttown_test",
+        [{"id": 1, "name": "Kotter", "report_type": "kotter"}],
+        schedule={
+            "id": 42,
+            "report_definition_id": 1,
+            "destination_type": "specific_channels",
+            "destination_channels": "[]",
+            "destination_users": None,
+            "frequency_type": "monthly",
+            "month_day_mode": "first",
+            "time_of_day": "07:00:00",
+            "enabled": 1,
+        },
+    )
+    for block in view["blocks"]:
+        el = block.get("element") or {}
+        if "initial_option" in el:
+            assert el["initial_option"] is not None
+
+
+def test_format_window_label_and_calendar_month():
+    from datetime import date
+
+    from scheduling import (
+        format_window_label,
+        is_calendar_month,
+        resolve_time_window,
+        window_file_tag,
+    )
+
+    start, end = date(2026, 6, 1), date(2026, 6, 30)
+    assert is_calendar_month(start, end)
+    assert format_window_label(start, end) == "June 2026"
+    assert window_file_tag(start, end) == "Jun2026"
+
+    start2, end2 = date(2026, 6, 1), date(2026, 7, 15)
+    assert not is_calendar_month(start2, end2)
+    assert "Jun 01" in format_window_label(start2, end2)
+
+    # last_month default matches calendar prior month
+    from datetime import datetime, timezone
+
+    fixed = datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc)
+    w = resolve_time_window(
+        {"time_window_type": "last_month"},
+        timezone_name="America/Chicago",
+        utc_now=fixed,
+    )
+    assert w == (date(2026, 6, 1), date(2026, 6, 30))
+
+
+def test_reports_list_empty_shows_load_defaults():
+    from config_schedule import LOAD_DEFAULTS_ACTION_ID, _reports_list_modal, _schedules_list_modal
+
+    reports = _reports_list_modal("T1", "f3test", [])
+    actions = [b for b in reports["blocks"] if b.get("type") == "actions"]
+    assert any(
+        LOAD_DEFAULTS_ACTION_ID in [e.get("action_id") for e in a.get("elements", [])]
+        for a in actions
+    )
+
+    schedules = _schedules_list_modal("T1", "f3test", [])
+    actions = [b for b in schedules["blocks"] if b.get("type") == "actions"]
+    assert any(
+        LOAD_DEFAULTS_ACTION_ID in [e.get("action_id") for e in a.get("elements", [])]
+        for a in actions
+    )
+
+
+def test_report_edit_modal_code_rendered_vs_custom():
+    from config_schedule import _report_edit_modal
+
+    builtin = _report_edit_modal(
+        "T1",
+        "f3test",
+        {
+            "id": 1,
+            "name": "Q charts",
+            "code": "q_charts",
+            "report_type": "q_charts",
+            "is_builtin": 1,
+            "time_window_type": "last_month",
+        },
+    )
+    block_ids = [b.get("block_id") for b in builtin["blocks"] if b.get("block_id")]
+    assert "name" in block_ids
+    assert "time_window_type" in block_ids
+    assert "source" not in block_ids
+    assert "kind" not in block_ids
+    assert "code" not in block_ids
+
+    kotter = _report_edit_modal(
+        "T1",
+        "f3test",
+        {
+            "id": 2,
+            "name": "Kotter",
+            "code": "kotter",
+            "report_type": "kotter",
+            "is_builtin": 1,
+            "time_window_type": None,
+        },
+    )
+    kotter_ids = [b.get("block_id") for b in kotter["blocks"] if b.get("block_id")]
+    assert "name" in kotter_ids
+    assert "time_window_type" not in kotter_ids
+
+    custom = _report_edit_modal("T1", "f3test", None)
+    custom_ids = [b.get("block_id") for b in custom["blocks"] if b.get("block_id")]
+    assert "code" in custom_ids
+    assert "source" in custom_ids
+    assert "kind" in custom_ids
+
+
+def test_reports_list_has_duplicate_action():
+    from config_schedule import DUPLICATE_REPORT_ACTION_ID, _reports_list_modal
+
+    view = _reports_list_modal(
+        "T1",
+        "f3test",
+        [
+            {
+                "id": 1,
+                "name": "Kotter",
+                "code": "kotter",
+                "report_type": "kotter",
+                "is_builtin": 1,
+            }
+        ],
+    )
+    action_ids = []
+    for b in view["blocks"]:
+        for e in b.get("elements") or []:
+            if e.get("action_id"):
+                action_ids.append(e["action_id"])
+    assert DUPLICATE_REPORT_ACTION_ID in action_ids
+
+
+def test_uniquify_and_duplicate_definition():
+    from unittest.mock import MagicMock
+
+    from schedule_schema import duplicate_definition, uniquify_definition_code
+
+    cur = MagicMock()
+    # First candidate taken, second free
+    cur.fetchone.side_effect = [{"c": 1}, {"c": 0}, {"id": 99, "code": "kotter_copy_2", "name": "Kotter (copy)"}]
+    code = uniquify_definition_code(cur, "pm", "f3", "kotter")
+    assert code == "kotter_copy_2"
+
+    cur2 = MagicMock()
+    cur2.fetchone.side_effect = [
+        {"c": 0},  # uniquify first try
+        {
+            "id": 7,
+            "code": "kotter_copy",
+            "name": "Kotter (copy)",
+            "report_type": "kotter",
+            "is_builtin": 0,
+        },
+    ]
+    copy = duplicate_definition(
+        cur2,
+        "pm",
+        "f3",
+        {"code": "kotter", "name": "Kotter", "report_type": "kotter", "is_builtin": 1},
+    )
+    assert copy["code"] == "kotter_copy"
+    assert copy["is_builtin"] == 0
+    insert_sql = cur2.execute.call_args_list[1].args[0]
+    assert "is_builtin" in insert_sql or "0,0" in str(cur2.execute.call_args_list[1])
+
+
+def test_delete_definition_and_schedules():
+    from unittest.mock import MagicMock
+
+    from schedule_schema import delete_definition_and_schedules
+
+    cur = MagicMock()
+    cur.rowcount = 2
+    # Two deletes; rowcount applies to last — simulate via side_effect on property is hard;
+    # just assert both DELETEs ran.
+    counts = delete_definition_and_schedules(cur, "pm", 5, "f3")
+    assert len(cur.execute.call_args_list) == 2
+    assert "region_schedules" in cur.execute.call_args_list[0].args[0]
+    assert "region_report_definitions" in cur.execute.call_args_list[1].args[0]
+    assert counts["schedules"] == 2
+    assert counts["definitions"] == 2
+
+
+def test_dispatch_passes_window_to_q_charts():
+    from datetime import date
+    from unittest.mock import MagicMock, patch
+
+    from schedule_runner import _dispatch_report
+
+    regional = MagicMock()
+    registry = MagicMock()
+    definition = {
+        "report_type": "q_charts",
+        "time_window_type": "last_month",
+        "code": "q_charts",
+        "name": "Q charts",
+    }
+    schedule = {
+        "destination_type": "specific_channels",
+        "destination_channels": '["C1"]',
+        "destination_users": None,
+    }
+    region = {
+        "schema_name": "f3ttown_test",
+        "region": "Tulsa",
+        "slack_token": "enc",
+        "timezone": "America/Chicago",
+    }
+    captured = {}
+
+    def fake_q(*args, **kwargs):
+        captured["window"] = kwargs.get("window")
+        return {"posted_channels": [{"ao": "x", "channel_id": "C1"}]}
+
+    with (
+        patch("schedule_runner.decrypt_field", return_value="tok"),
+        patch("schedule_runner.connect_from_env", return_value=regional),
+        patch(
+            "schedule_runner.resolve_destinations",
+            return_value=[{"kind": "channel", "id": "C1"}],
+        ),
+        patch(
+            "schedule_runner.resolve_time_window",
+            return_value=(date(2026, 6, 1), date(2026, 6, 30)),
+        ),
+        patch("monthly_charts.Qcharter.run_q_charter", side_effect=fake_q),
+    ):
+        _dispatch_report(registry, "paxminer", region, schedule, definition)
+
+    assert captured["window"] == (date(2026, 6, 1), date(2026, 6, 30))
+
+
+def test_ddl_includes_is_customized():
+    from schedule_schema import DDL_REGION_REPORT_DEFINITIONS
+
+    assert "is_customized" in DDL_REGION_REPORT_DEFINITIONS
