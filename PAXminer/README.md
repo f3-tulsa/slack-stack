@@ -140,7 +140,10 @@ Use **[manifest.json](manifest.json)**. After deploy, **`manifest-{test|prod}.js
 
 ## Tests
 
+Install local test extras so `pytest.ini`'s `timeout = 30` guard actually applies:
+
 ```bash
+python -m pip install -r PAXminer/requirements-dev.txt
 cd PAXminer && python -m pytest tests/ -q
 pytest -q migration/tests   # from repo root (orchestrator unit tests)
 ```
