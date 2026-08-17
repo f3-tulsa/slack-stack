@@ -273,7 +273,9 @@ aws s3 cp slackblast/assets/ s3://YOUR_IMAGE_BUCKET/ --recursive
 | **[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)** | Pull requests and pushes to **`main`**, **`test`**, and **`prod`**: **`requirements-sync`** (re-exports slackblast/weaselbot lockfiles when drifted; pushes with the automation App token so Dependabot auto-merge gets a fresh CI run), SAM lint, Python tests, and **`pip-audit`**. No AWS credentials. |
 | **[`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)** | Pushes to **`test`** and **`prod`** only, plus manual *Run workflow*. **`main`** stays PR-only for merges. |
 | **[`.github/workflows/dependabot-automerge.yml`](../.github/workflows/dependabot-automerge.yml)** | Minor/patch → auto-merge to **`main`**; majors retarget to **`test`**. |
-| **[`.github/workflows/promote-main-to-prod.yml`](../.github/workflows/promote-main-to-prod.yml)** / **[`sync-prod-to-test.yml`](../.github/workflows/sync-prod-to-test.yml)** | After main merges: promote to prod, then sync to test via `chore/sync-prod-to-test` (auto-resolves dependency-pin conflicts preferring prod). |
+| **[`.github/workflows/promote-main-to-prod.yml`](../.github/workflows/promote-main-to-prod.yml)** | After main merges: promote to prod (auto-merge when CI passes). |
+| **[`.github/workflows/sync-prod-to-test.yml`](../.github/workflows/sync-prod-to-test.yml)** | **Manual only** (*Actions → Sync prod to test → Run workflow*). Merges prod into test via `chore/sync-prod-to-test` (dep-file conflicts prefer prod). Not on push to prod while test is the Weaselbot fork; restore `push: branches: [prod]` after cutover. |
+| **[`.github/workflows/promote-major-to-main.yml`](../.github/workflows/promote-major-to-main.yml)** | **Paused** until Weaselbot cutover. Was: after a successful test deploy of a `dependency-major` PR, cherry-pick onto main. Restore `workflow_run` after cutover. |
 
 Manual deploy: *Actions → Deploy Slack Stack → Run workflow*. Choose **environment** (`test` / `prod`) and optional **stack** (`all` or a single app). On **push**, path-based detection is used (the stack input is ignored).
 
