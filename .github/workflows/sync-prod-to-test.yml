@@ -1,17 +1,25 @@
 name: Sync prod to test
 
-# Keeps test current with everything that reaches prod, so test-targeted work
-# (feature branches, major dependency validation) builds on the latest shipped
-# code. This is the downstream counterpart to promote-main-to-prod: updates flow
-# main -> prod, then prod -> test. test's own commits are preserved (this opens a
-# merge PR, it never resets test).
+# Optional merge of prod into test (preserves test-only commits). Used to keep
+# test current with what shipped to prod without resetting the test branch.
+#
+# Automatic on-push-to-prod is off while test is a long-lived Weaselbot fork
+# (#169). Auto-sync fought /weaselbot, preferred prod on requirement files, and
+# redeployed test after every Dependabot patch. Keep test current by merging
+# origin/main into the integration branch instead.
+#
+# After Weaselbot cutover, restore:
+#   on:
+#     push:
+#       branches: [prod]
+#     workflow_dispatch:
 #
 # Always sync via branch chore/sync-prod-to-test (not head=prod) so conflict
 # resolutions can be pushed. Dependency-file conflicts auto-resolve preferring
 # prod; other conflicts fail the job with a clear error.
+# Dispatch is the human gate; the job still auto-merges the sync PR.
 on:
-  push:
-    branches: [prod]
+  workflow_dispatch:
 
 permissions:
   contents: write
