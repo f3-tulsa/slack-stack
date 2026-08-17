@@ -1,4 +1,4 @@
-slack-sdk>=3.43.0
-pandas>=3.0.5
-pymysql>=1.2.0
-numpy>=1.26.0
+slack-sdk>=3.43.0,<4
+pandas>=3.0.5,<4
+pymysql>=1.2.0,<2
+numpy>=2.5.2,<3
