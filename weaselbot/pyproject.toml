@@ -65,7 +65,7 @@ dependencies = [
 
 [dependency-groups]
 lambda = [
-    "cryptography>=49.0.0",
+    "cryptography>=50.0.0,<51",
     "connectorx>=0.4.1",
     "pyarrow>=23.0.1",
     "polars>=1.21.0",
