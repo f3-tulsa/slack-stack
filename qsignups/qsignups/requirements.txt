@@ -1,8 +1,8 @@
 Pillow>=12.2.0,<13
-cryptography>=46.0.7
+cryptography>=50.0.0,<51
 slack_sdk>=3.43.0,<4
 slack_bolt>=1.30.0,<2
 pymysql>=1.1.1,<2
 pytz>=2026.3.post1
-SQLAlchemy>=2.0.36,<3
+SQLAlchemy>=2.0.52,<3
 urllib3>=2.7.0,<3
