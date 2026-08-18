@@ -17,6 +17,8 @@ cd "$ROOT"
 
 ENV_NAME=""
 STACK="all"
+# Weaselbot image is frozen until cutover (#169). --stack weaselbot exits;
+# --stack all skips the Weaselbot sam build/deploy. The running Lambda stays.
 BUILD_ONLY=false
 CONFIRM=false
 DO_BOOTSTRAP=false
@@ -78,6 +80,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$ENV_NAME" ]] || usage
+
+if [[ "$STACK" == "weaselbot" ]]; then
+  echo "Weaselbot deploy is frozen until cutover. The running Lambda image is left in place." >&2
+  exit 1
+fi
 
 ENV_FILE="$ROOT/.env.deploy.$ENV_NAME"
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -559,7 +566,8 @@ deploy_qsignups() {
 case "$STACK" in
   all)
     deploy_paxminer; PAX_RC=$?
-    deploy_weaselbot; WEASEL_RC=$?
+    echo "Weaselbot deploy is frozen until cutover; skipping sam build/deploy." | tee -a "$RECEIPT_FILE"
+    WEASEL_RC=-1
     deploy_slackblast; SB_RC=$?
     deploy_qsignups; QS_RC=$?
     ;;
@@ -567,7 +575,8 @@ case "$STACK" in
     deploy_paxminer; PAX_RC=$?
     ;;
   weaselbot)
-    deploy_weaselbot; WEASEL_RC=$?
+    echo "Weaselbot deploy is frozen until cutover. The running Lambda image is left in place." >&2
+    exit 1
     ;;
   slackblast)
     deploy_slackblast; SB_RC=$?
