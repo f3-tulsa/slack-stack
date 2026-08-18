@@ -54,6 +54,78 @@ def _mock_engine_with_execute(side_effect_fn):
     return mock_engine, mock_conn
 
 
+class _AwardTable:
+    """In-memory achievements_awarded rows for merge-collapse tests."""
+
+    def __init__(self, rows):
+        self.rows = [dict(r) for r in rows]
+
+    def apply(self, sql, params):
+        if "DELETE FROM achievements_awarded" in sql:
+            held = {
+                (r["achievement_id"], r["period_key"])
+                for r in self.rows
+                if r["pax_id"] == params["new"]
+            }
+            self.rows = [
+                r
+                for r in self.rows
+                if not (
+                    r["pax_id"] == params["old"]
+                    and (r["achievement_id"], r["period_key"]) in held
+                )
+            ]
+            return True
+        if "UPDATE achievements_awarded SET pax_id" in sql:
+            for r in self.rows:
+                if r["pax_id"] == params["old"]:
+                    r["pax_id"] = params["new"]
+            return True
+        return False
+
+
+def _merge_canonical_execute(calls, old_row, awards: _AwardTable):
+    def execute(stmt, params=None):
+        calls.append((str(stmt), params))
+        sql = str(stmt)
+        if "FROM users WHERE email" in sql and "user_id !=" in sql:
+            return _ExecResult([old_row])
+        if "UPDATE beatdowns SET q_user_id" in sql:
+            return _ExecResult()
+        if "UPDATE beatdowns SET coq_user_id" in sql:
+            return _ExecResult()
+        if "UPDATE bd_attendance SET user_id" in sql:
+            return _ExecResult()
+        if "UPDATE bd_attendance SET q_user_id" in sql:
+            return _ExecResult()
+        if awards.apply(sql, params):
+            return _ExecResult()
+        if "DELETE FROM users WHERE user_id" in sql:
+            assert params["old"] == "U_OLD"
+            return _ExecResult()
+        if "INSERT INTO users" in sql:
+            return _ExecResult()
+        if sql.strip().startswith("SELECT json FROM users"):
+            return _ExecResult(one=('{"from_canonical": 1}',))
+        if "start_date = COALESCE" in sql:
+            return _ExecResult()
+        raise AssertionError(f"Unexpected SQL in award-merge test: {sql[:160]}")
+
+    return execute
+
+
+def _assert_award_merge_in_one_transaction(calls, mock_engine):
+    sqls = [c[0] for c in calls]
+    award_del = next(i for i, s in enumerate(sqls) if "DELETE FROM achievements_awarded" in s)
+    award_upd = next(i for i, s in enumerate(sqls) if "UPDATE achievements_awarded SET pax_id" in s)
+    user_del = next(i for i, s in enumerate(sqls) if "DELETE FROM users" in s)
+    assert award_del < award_upd < user_del
+    assert "AS held" in sqls[award_del]
+    mock_engine.begin.assert_called_once()
+    # One begin() context: collapse + move + delete-user share that transaction.
+    assert mock_engine.begin.return_value.__enter__.call_count == 1
+
+
 def test_safe_get():
     assert safe_get({"a": {"b": {"c": 1}}}, "a", "b", "c") == 1
     assert safe_get({"a": {"b": {"c": 1}}}, "a", "b", "d") == None
@@ -277,6 +349,8 @@ def test_ensure_users_in_db_merge_old_row_only(mock_ge):
             return _ExecResult()
         if "UPDATE bd_attendance SET q_user_id" in sql:
             return _ExecResult()
+        if "DELETE FROM achievements_awarded" in sql:
+            return _ExecResult()
         if "UPDATE achievements_awarded SET pax_id" in sql:
             return _ExecResult()
         if "DELETE FROM users WHERE user_id" in sql:
@@ -334,6 +408,8 @@ def test_ensure_users_in_db_merge_when_canonical_row_exists(mock_ge):
             return _ExecResult()
         if "UPDATE bd_attendance SET q_user_id" in sql:
             return _ExecResult()
+        if "DELETE FROM achievements_awarded" in sql:
+            return _ExecResult()
         if "UPDATE achievements_awarded SET pax_id" in sql:
             return _ExecResult()
         if "DELETE FROM users WHERE user_id" in sql:
@@ -365,7 +441,71 @@ def test_ensure_users_in_db_merge_when_canonical_row_exists(mock_ge):
 
 
 @patch("utilities.helper_functions.get_engine")
-def test_ensure_users_in_db_no_email_logs_warning(mock_ge):
+def test_ensure_users_in_db_merge_colliding_awards_keeps_one_row(mock_ge):
+    """Both accounts hold the same period award: drop the old copy, move the rest."""
+    calls = []
+    old_row = (
+        "U_OLD",
+        date(2020, 1, 1),
+        0,
+        "000-OLD",
+        json.dumps({"is_admin": True}),
+    )
+    awards = _AwardTable(
+        [
+            {"id": 1, "achievement_id": 10, "pax_id": "U_OLD", "period_key": "2026"},
+            {"id": 2, "achievement_id": 10, "pax_id": "U_NEW", "period_key": "2026"},
+            {"id": 3, "achievement_id": 11, "pax_id": "U_OLD", "period_key": "2026"},
+        ]
+    )
+    mock_engine, _ = _mock_engine_with_execute(
+        _merge_canonical_execute(calls, old_row, awards)
+    )
+    mock_ge.return_value = mock_engine
+
+    client = MagicMock()
+    client.users_info.return_value = _slack_user(email="dup@x.com")
+    ensure_users_in_db(["U_NEW"], client, MagicMock(), "region_schema")
+
+    _assert_award_merge_in_one_transaction(calls, mock_engine)
+    by_id = {r["id"]: r for r in awards.rows}
+    assert set(by_id) == {2, 3}
+    assert by_id[2]["pax_id"] == "U_NEW"
+    assert by_id[3]["pax_id"] == "U_NEW"
+    assert by_id[3]["achievement_id"] == 11
+
+
+@patch("utilities.helper_functions.get_engine")
+def test_ensure_users_in_db_merge_moves_awards_when_no_overlap(mock_ge):
+    """No shared (achievement, period): every old-account row moves; none are deleted."""
+    calls = []
+    old_row = (
+        "U_OLD",
+        date(2020, 1, 1),
+        0,
+        "000-OLD",
+        json.dumps({}),
+    )
+    awards = _AwardTable(
+        [
+            {"id": 1, "achievement_id": 10, "pax_id": "U_OLD", "period_key": "2026"},
+            {"id": 2, "achievement_id": 11, "pax_id": "U_NEW", "period_key": "2026"},
+        ]
+    )
+    mock_engine, _ = _mock_engine_with_execute(
+        _merge_canonical_execute(calls, old_row, awards)
+    )
+    mock_ge.return_value = mock_engine
+
+    client = MagicMock()
+    client.users_info.return_value = _slack_user(email="dup@x.com")
+    ensure_users_in_db(["U_NEW"], client, MagicMock(), "region_schema")
+
+    _assert_award_merge_in_one_transaction(calls, mock_engine)
+    by_id = {r["id"]: r for r in awards.rows}
+    assert set(by_id) == {1, 2}
+    assert by_id[1]["pax_id"] == "U_NEW"
+    assert by_id[2]["pax_id"] == "U_NEW"
     calls = []
 
     def execute(stmt, params=None):

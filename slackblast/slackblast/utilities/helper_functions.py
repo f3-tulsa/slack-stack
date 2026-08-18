@@ -160,9 +160,35 @@ def ensure_users_in_db(
                             "UPDATE beatdowns SET coq_user_id = :new WHERE coq_user_id = :old",
                             "UPDATE bd_attendance SET user_id = :new WHERE user_id = :old",
                             "UPDATE bd_attendance SET q_user_id = :new WHERE q_user_id = :old",
-                            "UPDATE achievements_awarded SET pax_id = :new WHERE pax_id = :old",
                         ):
                             conn.execute(text(stmt), {"new": uid, "old": old_uid})
+                        # Drop the old account's awards that the surviving account
+                        # already holds for the same period, then move the rest.
+                        # UPDATE IGNORE would hide other errors and orphan skipped rows.
+                        # The derived-table wrapper is required: MySQL will not
+                        # SELECT the table being deleted from directly.
+                        conn.execute(
+                            text(
+                                """
+                                DELETE FROM achievements_awarded
+                                 WHERE pax_id = :old
+                                   AND (achievement_id, period_key) IN (
+                                     SELECT achievement_id, period_key FROM (
+                                       SELECT achievement_id, period_key
+                                         FROM achievements_awarded
+                                        WHERE pax_id = :new
+                                     ) AS held
+                                   )
+                                """
+                            ),
+                            {"new": uid, "old": old_uid},
+                        )
+                        conn.execute(
+                            text(
+                                "UPDATE achievements_awarded SET pax_id = :new WHERE pax_id = :old"
+                            ),
+                            {"new": uid, "old": old_uid},
+                        )
                         conn.execute(text("DELETE FROM users WHERE user_id = :old"), {"old": old_uid})
                         logger.info(
                             "ensure_users_in_db: merged user %s into %s (same email %s)",
