@@ -98,13 +98,17 @@ def _ensure_list_and_awarded_columns(cur, schema: str) -> dict:
     }
     for col in AWARDED_PERIOD_COLUMNS:
         added[col] = _add_column(cur, schema, "achievements_awarded", col, typedefs[col])
-    added["awarded_period_lookup"] = _ensure_index(
-        cur,
-        schema,
-        "achievements_awarded",
-        "awarded_period_lookup",
-        "`achievement_id`, `pax_id`, `period_key`",
-    )
+    # Prefer the unique period key; keep the old lookup index only until it exists.
+    if _index_exists(cur, schema, "achievements_awarded", "uniq_award_period"):
+        added["awarded_period_lookup"] = False
+    else:
+        added["awarded_period_lookup"] = _ensure_index(
+            cur,
+            schema,
+            "achievements_awarded",
+            "awarded_period_lookup",
+            "`achievement_id`, `pax_id`, `period_key`",
+        )
     try:
         added["activity_type"] = _add_column(
             cur, schema, "beatdowns", "activity_type", "VARCHAR(64) DEFAULT NULL"
@@ -254,6 +258,70 @@ def _classify_activity_types(cur, schema: str) -> int:
     return updated
 
 
+def _enforce_award_period_unique(cur, schema: str) -> dict:
+    """Collapse duplicate awards, then add UNIQUE (achievement_id, pax_id, period_key).
+
+    MySQL unique indexes allow multiple NULLs, so a NULL period_key would escape
+    the constraint. Count those rows and skip the ALTER when any remain.
+    """
+    result = {
+        "duplicates_deleted": 0,
+        "null_period_key": 0,
+        "unique_added": False,
+        "unique_already_present": False,
+    }
+    if _index_exists(cur, schema, "achievements_awarded", "uniq_award_period"):
+        result["unique_already_present"] = True
+        return result
+
+    cur.execute(
+        f"SELECT COUNT(*) AS c FROM `{schema}`.`achievements_awarded` WHERE period_key IS NULL"
+    )
+    result["null_period_key"] = int((cur.fetchone() or {}).get("c") or 0)
+
+    cur.execute(
+        f"""
+        DELETE a FROM `{schema}`.`achievements_awarded` a
+        JOIN `{schema}`.`achievements_awarded` b
+          ON a.achievement_id = b.achievement_id
+         AND a.pax_id = b.pax_id
+         AND a.period_key = b.period_key
+         AND a.id > b.id
+        """
+    )
+    result["duplicates_deleted"] = int(cur.rowcount or 0)
+    if result["duplicates_deleted"]:
+        LOG.info(
+            "Deleted %s duplicate award row(s) in %s (kept lowest id per period)",
+            result["duplicates_deleted"],
+            schema,
+        )
+
+    if result["null_period_key"]:
+        LOG.warning(
+            "%s has %s achievements_awarded row(s) with NULL period_key; "
+            "UNIQUE uniq_award_period was not added (MySQL allows multiple NULLs)",
+            schema,
+            result["null_period_key"],
+        )
+        return result
+
+    cur.execute(
+        f"""
+        ALTER TABLE `{schema}`.`achievements_awarded`
+          ADD UNIQUE KEY `uniq_award_period` (`achievement_id`, `pax_id`, `period_key`)
+        """
+    )
+    result["unique_added"] = True
+    LOG.info("Added unique key uniq_award_period on %s.achievements_awarded", schema)
+    if _index_exists(cur, schema, "achievements_awarded", "awarded_period_lookup"):
+        cur.execute(
+            f"ALTER TABLE `{schema}`.`achievements_awarded` DROP KEY `awarded_period_lookup`"
+        )
+        LOG.info("Dropped redundant index awarded_period_lookup on %s.achievements_awarded", schema)
+    return result
+
+
 def _refresh_view(cur, schema: str) -> bool:
     try:
         cur.execute(ACHIEVEMENTS_VIEW_DDL.format(schema=schema))
@@ -269,6 +337,7 @@ def migrate_regional_schema(cur, schema: str) -> dict:
     added = _ensure_list_and_awarded_columns(cur, schema)
     versions = _seed_version_1(cur, schema)
     awards = _backfill_award_periods(cur, schema)
+    unique = _enforce_award_period_unique(cur, schema)
     classified = _classify_activity_types(cur, schema)
     view_ok = _refresh_view(cur, schema)
     return {
@@ -276,6 +345,7 @@ def migrate_regional_schema(cur, schema: str) -> dict:
         "columns_added": {k: v for k, v in added.items() if v},
         "versions_seeded": versions,
         "awards_backfilled": awards,
+        "award_unique": unique,
         "activity_type_classified": classified,
         "view_ok": view_ok,
     }
@@ -294,6 +364,9 @@ def run_achievements(cur, stage: str) -> dict:
         "regional_schemas": len(results),
         "versions_seeded": sum(r["versions_seeded"] for r in results),
         "awards_backfilled": sum(r["awards_backfilled"] for r in results),
+        "duplicates_deleted": sum(r["award_unique"]["duplicates_deleted"] for r in results),
+        "null_period_key": sum(r["award_unique"]["null_period_key"] for r in results),
+        "unique_keys_added": sum(1 for r in results if r["award_unique"]["unique_added"]),
         "activity_type_classified": sum(r["activity_type_classified"] for r in results),
         "results": results,
     }
