@@ -71,8 +71,17 @@ from slack_http import is_slack_admin, notify_admin_required
 LOG = logging.getLogger(__name__)
 
 
+def _json_date(value) -> str | None:
+    """ISO date string for Lambda payloads; accepts date/datetime/str."""
+    if value is None or value == "":
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()[:10]
+    return str(value)[:10]
+
+
 def queue_run_now(schedule_id: int, user_id: str) -> None:
-    """Async-invoke ScheduleFunction for a forced Run Now (DMs ``user_id`` on completion)."""
+    """Async-invoke ScheduleFunction for a forced Run Now."""
     import boto3
 
     fn = os.environ.get("SCHEDULE_FUNCTION_NAME", "").strip()
@@ -89,6 +98,39 @@ def queue_run_now(schedule_id: int, user_id: str) -> None:
                 "notify_user": user_id or "",
             }
         ).encode("utf-8"),
+    )
+
+
+def queue_achievement_backfill(
+    *,
+    schema: str,
+    achievement_id: int,
+    actor: str,
+    start: str | None = None,
+    end: str | None = None,
+) -> None:
+    """Ack-friendly async invoke of reconcile_rule_awards via ScheduleFunction."""
+    import boto3
+
+    fn = os.environ.get("SCHEDULE_FUNCTION_NAME", "").strip()
+    if not fn:
+        raise RuntimeError("SCHEDULE_FUNCTION_NAME not configured")
+    payload = {
+        "source": "achievement_rule_backfill",
+        "schema": schema,
+        "achievement_id": int(achievement_id),
+        "actor": actor or "",
+    }
+    start_s = _json_date(start)
+    end_s = _json_date(end)
+    if start_s:
+        payload["start"] = start_s
+    if end_s:
+        payload["end"] = end_s
+    boto3.client("lambda").invoke(
+        FunctionName=fn,
+        InvocationType="Event",
+        Payload=json.dumps(payload).encode("utf-8"),
     )
 
 

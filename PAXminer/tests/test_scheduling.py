@@ -429,19 +429,37 @@ def test_format_run_result_variants():
     from schedule_runner import format_run_result
 
     text, _ = format_run_result(
-        {"schedule_id": 1, "report_type": "kotter", "ok": True, "channel_count": 2, "duration_s": 1.5}
+        {
+            "definition_name": "Kotter",
+            "ok": True,
+            "channel_count": 2,
+            "specified_channels": ["C1", "C2"],
+        }
     )
-    assert "success" in text and "2 channel" in text
+    assert "ran on schedule" in text
+    assert "Status: success" in text
+    assert "Number of Messages: 2" in text
 
     text, _ = format_run_result(
-        {"schedule_id": 2, "report_type": "kotter", "ok": True, "skipped": "no destinations configured"}
+        {
+            "definition_name": "Kotter",
+            "ok": True,
+            "skipped": "no destinations configured",
+        }
     )
-    assert "skipped" in text and "no destinations" in text
+    assert "Status: skipped" in text
+    assert "no destinations configured" in text
 
     text, _ = format_run_result(
-        {"schedule_id": 3, "report_type": "kotter", "ok": False, "error": "boom"}
+        {
+            "definition_name": "Kotter",
+            "ok": False,
+            "error": "boom",
+            "specified_channels": ["C1"],
+        }
     )
-    assert "failed" in text and "boom" in text
+    assert "Status: failed" in text
+    assert "boom" in text
 
 
 def test_format_schedule_log_line_variants():
@@ -450,32 +468,39 @@ def test_format_schedule_log_line_variants():
     line = format_schedule_log_line(
         "f3ttown_test",
         {
-            "schedule_id": 1,
-            "report_type": "kotter",
+            "definition_name": "Kotter",
             "ok": True,
             "channel_count": 2,
-            "duration_s": 1.5,
+            "specified_channels": ["C0APR1E1137"],
         },
     )
-    assert line.startswith("- Schedule (f3ttown_test) #1 (kotter): success")
-    assert "2 channel(s)" in line
+    assert line.startswith("The Kotter report ran on schedule.")
+    assert "Status: success" in line
+    assert "<#C0APR1E1137>" in line
+    assert "Number of Messages: 2" in line
 
     line = format_schedule_log_line(
         "f3ttown_test",
         {
-            "schedule_id": 2,
-            "report_type": "kotter",
+            "definition_name": "Kotter",
             "ok": True,
             "skipped": "no destinations configured",
         },
     )
-    assert "skipped - no destinations configured" in line
+    assert "Status: skipped" in line
+    assert "no destinations configured" in line
 
     line = format_schedule_log_line(
         "f3ttown_test",
-        {"schedule_id": 3, "report_type": "kotter", "ok": False, "error": "boom"},
+        {
+            "definition_name": "Kotter",
+            "ok": False,
+            "error": "boom",
+            "specified_channels": ["C1"],
+        },
     )
-    assert "FAILED - boom" in line
+    assert "Status: failed" in line
+    assert "boom" in line
 
 
 def test_post_schedule_outcome_log_uses_schema_name():
@@ -504,7 +529,7 @@ def test_post_schedule_outcome_log_uses_schema_name():
                 _post_schedule_outcome_log(region, result)
 
     assert len(log_lines) == 1
-    assert log_lines[0].startswith("- Schedule (f3ttown_test) #1 (kotter)")
+    assert log_lines[0].startswith("The kotter report ran on schedule.")
     assert "Tulsa" not in log_lines[0]
 
 
@@ -589,7 +614,7 @@ def test_run_one_schedule_item_logs_automatic_not_manual():
 
     out, mock_log = _run(manual=True)
     assert out["ok"] is True
-    mock_log.assert_not_called()
+    mock_log.assert_called_once()
 
 
 def test_queue_run_now_payload_includes_notify_user():
@@ -632,10 +657,9 @@ def test_schedule_handler_notifies_user_on_completion():
     with patch("handlers.connect_from_env", return_value=mock_conn):
         with patch("handlers._pm_schema", return_value="paxminer_test"):
             with patch("handlers._registry_database", return_value="paxminer_test"):
-                with patch(
-                    "schedule_runner.run_one_schedule_item", return_value=result
-                ) as mock_run:
-                    with patch("schedule_runner.notify_run_result") as mock_notify:
+                    with patch(
+                        "schedule_runner.run_one_schedule_item", return_value=result
+                    ) as mock_run:
                         resp = schedule_handler(
                             {
                                 "source": "run_now",
@@ -650,9 +674,38 @@ def test_schedule_handler_notifies_user_on_completion():
     assert body["ok"] is True
     mock_run.assert_called_once()
     assert mock_run.call_args.kwargs.get("manual") is True
-    mock_notify.assert_called_once()
-    assert mock_notify.call_args.args[1] == "U9"
-    assert mock_notify.call_args.args[2] == result
+    assert mock_run.call_args.kwargs.get("notify_user") == "U9"
+
+
+def test_schedule_handler_run_now_does_not_dm_admin():
+    from unittest.mock import MagicMock, patch
+
+    from handlers import schedule_handler
+
+    result = {"schedule_id": 7, "ok": True, "report_type": "kotter", "channel_count": 1}
+    row = {"id": 7, "schema_name": "f3test", "report_definition_id": 1}
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchone.return_value = row
+
+    with patch("handlers.connect_from_env", return_value=mock_conn):
+        with patch("handlers._pm_schema", return_value="paxminer_test"):
+            with patch("handlers._registry_database", return_value="paxminer_test"):
+                with patch("schedule_runner.run_one_schedule_item", return_value=result):
+                    with patch("schedule_runner.notify_run_result") as mock_dm:
+                        schedule_handler(
+                            {
+                                "source": "run_now",
+                                "schedule_id": 7,
+                                "force": True,
+                                "notify_user": "U9",
+                            },
+                            None,
+                        )
+    mock_dm.assert_not_called()
 
 
 def test_report_defaults_json_consistency():
@@ -779,8 +832,8 @@ def test_format_run_result_includes_posted_failed_channels():
             ],
         }
     )
-    assert "posted: The Fort (C111)" in text
-    assert "failed: Brickyard (C222) - not_in_channel" in text
+    assert "Status: success" in text
+    assert "<#C111>" in text
 
 
 def test_format_schedule_log_line_includes_destinations():
@@ -789,16 +842,17 @@ def test_format_schedule_log_line_includes_destinations():
     line = format_schedule_log_line(
         "f3ttown_test",
         {
-            "schedule_id": 4,
-            "report_type": "q_charts",
+            "definition_name": "Q charts",
             "ok": False,
-            "error": "all channel uploads failed",
-            "posted_channels": [],
-            "failed_channels": [{"ao": "AO1", "channel_id": "C1", "reason": "missing_scope"}],
+            "error": "all channel uploads failed: not_in_channel",
+            "specified_channels": ["C1"],
+            "message_count": 0,
         },
     )
-    assert "FAILED" in line
-    assert "failed: AO1 (C1) - missing_scope" in line
+    assert "Status: failed" in line
+    assert "all channel uploads failed" in line
+    assert "<#C1>" in line
+    assert "Number of Messages: 0" in line
 
 
 def test_apply_delivery_result_marks_error_when_all_failed():
@@ -1154,3 +1208,77 @@ def test_ddl_includes_is_customized():
     from schedule_schema import DDL_REGION_REPORT_DEFINITIONS
 
     assert "is_customized" in DDL_REGION_REPORT_DEFINITIONS
+
+
+def test_format_schedule_log_line_manual_vs_scheduled_and_dm_dest():
+    from schedule_runner import format_schedule_log_line
+
+    scheduled = format_schedule_log_line(
+        "x",
+        {
+            "definition_name": "Achievement leaderboard",
+            "ok": True,
+            "specified_channels": ["C0APR1E1137"],
+            "message_count": 1,
+        },
+    )
+    assert scheduled.startswith("The Achievement leaderboard report ran on schedule.")
+    assert "<@U" not in scheduled
+    assert "Destination: <#C0APR1E1137>" in scheduled
+
+    manual = format_schedule_log_line(
+        "x",
+        {
+            "definition_name": "Achievement leaderboard",
+            "ok": False,
+            "error": "all channel uploads failed: not_in_channel",
+            "notify_user": "UADMIN",
+            "specified_channels": ["C0APR1E1137"],
+            "message_count": 0,
+        },
+    )
+    assert "was run manually by <@UADMIN>." in manual
+    assert "Status: failed" in manual
+    assert "all channel uploads failed: not_in_channel" in manual
+    assert "Number of Messages: 0" in manual
+
+    dm = format_schedule_log_line(
+        "x",
+        {
+            "definition_name": "PAX charts (DM)",
+            "ok": True,
+            "destination_type": "dm_all_pax",
+            "user_count": 12,
+            "channel_count": 0,
+        },
+    )
+    assert "Destination: DM to specified PAX" in dm
+    assert "Number of Messages: 12" in dm
+
+
+def test_queue_achievement_backfill_serializes_dates():
+    import json
+    from datetime import date
+    from unittest.mock import MagicMock, patch
+
+    import slack_schedule
+
+    mock_client = MagicMock()
+    with patch.dict("os.environ", {"SCHEDULE_FUNCTION_NAME": "paxminer-test-schedule"}):
+        with patch("boto3.client", return_value=mock_client):
+            slack_schedule.queue_achievement_backfill(
+                schema="f3test",
+                achievement_id=4,
+                actor="U1",
+                start=date(2026, 3, 1),
+                end=date(2026, 8, 18),
+            )
+    payload = json.loads(mock_client.invoke.call_args.kwargs["Payload"].decode("utf-8"))
+    assert payload == {
+        "source": "achievement_rule_backfill",
+        "schema": "f3test",
+        "achievement_id": 4,
+        "actor": "U1",
+        "start": "2026-03-01",
+        "end": "2026-08-18",
+    }

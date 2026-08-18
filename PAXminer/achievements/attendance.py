@@ -7,6 +7,8 @@ from datetime import date
 
 import pandas as pd
 
+from achievements.activity import activity_list_from_rule, filter_by_activity_types
+from achievements.period import period_key_series
 from slack_util import home_region_date_tiers
 
 LOG = logging.getLogger(__name__)
@@ -22,7 +24,9 @@ def _nation_sql_for_schema(schema: str) -> str:
         ao.ao,
         b.bd_date AS date,
         CASE WHEN (a.user_id = b.q_user_id OR a.user_id = b.coq_user_id) THEN 1 ELSE 0 END AS q_flag,
-        b.backblast
+        b.activity_type,
+        b.timestamp,
+        b.json
     FROM `{schema}`.users u
     JOIN `{schema}`.bd_attendance a ON a.user_id = u.user_id
     JOIN `{schema}`.beatdowns b ON (
@@ -30,8 +34,8 @@ def _nation_sql_for_schema(schema: str) -> str:
         AND a.ao_id = b.ao_id AND a.date = b.bd_date
     )
     JOIN `{schema}`.aos ao ON b.ao_id = ao.channel_id
-    WHERE YEAR(b.bd_date) = YEAR(CURDATE())
-      AND b.bd_date <= CURDATE()
+    WHERE b.bd_date >= %s
+      AND b.bd_date <= %s
       AND u.email != 'none'
       AND u.user_name != 'PAXminer'
       AND b.q_user_id IS NOT NULL
@@ -101,17 +105,38 @@ def _home_region_sql_for_schema(schema: str, tiers: tuple[int, int, int, int]) -
     """
 
 
-def load_nation_attendance(conn, schemas: list[str]) -> pd.DataFrame:
-    """Union YTD attendance across regional schemas.
+def _default_attendance_window() -> tuple[date, date]:
+    today = date.today()
+    return date(today.year, 1, 1), today
 
-    TODO: union external_attendance from brother regions when Nation API sync exists.
+
+def load_nation_attendance(
+    conn,
+    schemas: list[str],
+    *,
+    start: date | None = None,
+    end: date | None = None,
+) -> pd.DataFrame:
+    """Union attendance across regional schemas for [start, end] (inclusive).
+
+    Defaults to year-to-date through today. TODO: union external_attendance from
+    brother regions when Nation API sync exists.
     """
     from paxminer_db import read_sql_df
+
+    if start is None or end is None:
+        default_start, default_end = _default_attendance_window()
+        start = start or default_start
+        end = end or default_end
 
     frames: list[pd.DataFrame] = []
     for schema in schemas:
         try:
-            df = read_sql_df(conn, _nation_sql_for_schema(schema))
+            df = read_sql_df(
+                conn,
+                _nation_sql_for_schema(schema),
+                (start.isoformat(), end.isoformat()),
+            )
             LOG.info("nation attendance schema=%s rows=%s", schema, len(df))
             df["region"] = schema
             frames.append(df)
@@ -133,8 +158,14 @@ def load_nation_attendance(conn, schemas: list[str]) -> pd.DataFrame:
         out = out[out["date"].notna()].copy()
     if out.empty:
         return out
-    out["backblast"] = out["backblast"].astype(str)
-    out["ao"] = out["ao"].astype(str)
+    if "ao" in out.columns:
+        out["ao"] = out["ao"].astype(str)
+    if "activity_type" in out.columns:
+        out["activity_type"] = out["activity_type"].fillna("").astype(str)
+        empty = out["activity_type"].str.strip() == ""
+        out.loc[empty, "activity_type"] = "beatdown"
+    if "timestamp" in out.columns:
+        out["timestamp"] = out["timestamp"].where(out["timestamp"].notna(), None)
     return out
 
 
@@ -161,40 +192,9 @@ def attach_home_regions(conn, nation_df: pd.DataFrame, schemas: list[str]) -> pd
     return nation_df.merge(home.drop(columns=["attendance"], errors="ignore"), on="email", how="left")
 
 
-# Q-source / Q1.1 patterns in the first 100 chars of backblast (or AO name).
-# Character class must close with ]; a typo "[0-9}" raises re.error at runtime.
-QSOURCE_BB_RE = r"q.{0,1}source|q{0,1}[1-9]\.[0-9]\s"
-QSOURCE_AO_RE = r"q.{0,1}source"
-BEATDOWN_EXCLUDE_AO_RE = r"q.{0,1}source|ruck"
-
-
-def qsource_mask(df: pd.DataFrame) -> pd.Series:
-    bb = df["backblast"].str.slice(0, 100).str.lower()
-    ao = df["ao"].str.lower()
-    return bb.str.contains(QSOURCE_BB_RE, regex=True) | ao.str.contains(
-        QSOURCE_AO_RE, regex=True
-    )
-
-
-def beatdown_mask(df: pd.DataFrame) -> pd.Series:
-    bb = df["backblast"].str.slice(0, 100).str.lower()
-    ao = df["ao"].str.lower()
-    return ~bb.str.contains(QSOURCE_BB_RE, regex=True) & ~ao.str.contains(
-        BEATDOWN_EXCLUDE_AO_RE, regex=True
-    )
-
-
 def period_key(series: pd.Series, period: str) -> pd.Series:
-    if period == "week":
-        return series.dt.isocalendar().week.astype(int)
-    if period == "month":
-        return series.dt.month.astype(int)
-    return series.dt.year.astype(int)
+    return period_key_series(series, period)
 
 
-def filter_activity(df: pd.DataFrame, activity: str) -> pd.DataFrame:
-    if activity == "qsource":
-        return df[qsource_mask(df)]
-    if activity == "beatdown":
-        return df[beatdown_mask(df)]
-    return df
+def filter_activity(df: pd.DataFrame, activity) -> pd.DataFrame:
+    return filter_by_activity_types(df, activity_list_from_rule({"activity": activity}))

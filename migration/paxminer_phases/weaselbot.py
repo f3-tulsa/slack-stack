@@ -171,17 +171,13 @@ def ensure_regional_achievements(cur, regional_schema: str, *, upsert_seeds: boo
                 cur.execute(
                     f"""
                     UPDATE `{regional_schema}`.`achievements_list`
-                    SET name=%s, description=%s, verb=%s, metric=%s, activity=%s, period=%s, threshold=%s
+                    SET name=%s, description=%s, verb=%s
                     WHERE code=%s
                     """,
                     (
                         seed["name"],
                         seed["description"],
                         seed["verb"],
-                        seed["metric"],
-                        seed["activity"],
-                        seed["period"],
-                        seed["threshold"],
                         seed["code"],
                     ),
                 )

@@ -276,100 +276,74 @@ def _apply_delivery_result(
 
 
 def format_run_result(result: dict) -> tuple[str, list[dict] | None]:
-    """Human-readable summary for Run Now result DMs."""
-    sid = result.get("schedule_id")
-    report_type = result.get("report_type") or "?"
-    duration = result.get("duration_s")
-    dur = f" ({duration}s)" if duration is not None else ""
-    if result.get("dry_run"):
-        text = f"Schedule #{sid} ({report_type}): dry run — would run{dur}."
-        return text, None
-    if result.get("error") and not result.get("ok", True):
-        text = f"Schedule #{sid} ({report_type}): *failed*{dur}\n`{str(result.get('error'))[:500]}`"
-        dest_lines = _format_dest_lines(
-            result.get("posted_channels"),
-            result.get("failed_channels"),
-        )
-        if result.get("posted_users") or result.get("failed_users"):
-            dest_lines.extend(
-                _format_dest_lines(
-                    result.get("posted_users"),
-                    result.get("failed_users"),
-                    id_key="user_id",
-                    name_key="pax",
-                )
-            )
-        if dest_lines:
-            text = text + "\n" + "\n".join(dest_lines)
-        return text, None
-    skipped = result.get("skipped") or (result.get("result") or {}).get("skipped")
-    if skipped:
-        text = f"Schedule #{sid} ({report_type}): *skipped* — {skipped}{dur}"
-        return text, None
-    channels = result.get("channel_count")
-    users = result.get("user_count")
-    dest_bits = []
-    if channels is not None:
-        dest_bits.append(f"{channels} channel(s)")
-    if users is not None:
-        dest_bits.append(f"{users} user DM(s)")
-    dest = (", ".join(dest_bits) if dest_bits else "destinations resolved")
-    text = f"Schedule #{sid} ({report_type}): *success* — posted to {dest}{dur}."
-    dest_lines = _format_dest_lines(
-        result.get("posted_channels"),
-        result.get("failed_channels"),
-    )
-    if result.get("posted_users") or result.get("failed_users"):
-        dest_lines.extend(
-            _format_dest_lines(
-                result.get("posted_users"),
-                result.get("failed_users"),
-                id_key="user_id",
-                name_key="pax",
-            )
-        )
-    if dest_lines:
-        text = text + "\n" + "\n".join(dest_lines)
-    return text, None
+    """Alias of the paxminer_logs formatter (Run Now no longer DMs the admin)."""
+    return format_schedule_log_line("", result), None
 
 
 def format_schedule_log_line(region_name: str, result: dict) -> str:
-    """Channel-styled bullet for automatic schedule runs posted to paxminer_logs."""
-    sid = result.get("schedule_id")
-    report_type = result.get("report_type") or "?"
-    duration = result.get("duration_s")
-    dur = f" ({duration}s)" if duration is not None else ""
-    label = f"- Schedule ({region_name}) #{sid} ({report_type})"
-    dest_lines = _format_dest_lines(
-        result.get("posted_channels"),
-        result.get("failed_channels"),
-        max_chars=800,
-    )
-    if result.get("posted_users") or result.get("failed_users"):
-        dest_lines.extend(
-            _format_dest_lines(
-                result.get("posted_users"),
-                result.get("failed_users"),
-                max_chars=800,
-                id_key="user_id",
-                name_key="pax",
+    """Outcome line for scheduled ticks and Run Now, posted to paxminer_logs."""
+    name = result.get("definition_name") or result.get("report_type") or "report"
+    notify_user = (result.get("notify_user") or "").strip()
+    if result.get("manual") or notify_user:
+        trigger = f"was run manually by <@{notify_user}>." if notify_user else "was run manually."
+    else:
+        trigger = "ran on schedule."
+    header = f"The {name} report {trigger}"
+
+    nested = result.get("result") if isinstance(result.get("result"), dict) else {}
+    skipped = result.get("skipped") or nested.get("skipped")
+    error = result.get("error")
+    ok = result.get("ok", True)
+    status_name = result.get("status")
+    if skipped and ok:
+        status = "skipped"
+        detail = str(skipped)
+    elif error or not ok or status_name == "error":
+        status = "failed"
+        detail = str(error or "failed")[:500]
+    else:
+        status = "success"
+        detail = ""
+
+    dest_type = (result.get("destination_type") or nested.get("destination_type") or "").lower()
+    specified = result.get("specified_channels") or []
+    if dest_type.startswith("dm") or dest_type in ("specific_users", "dm_all_pax", "all_pax"):
+        dest = "DM to specified PAX"
+    elif specified:
+        links = []
+        extra = 0
+        for cid in specified:
+            tag = f"<#{cid}>" if str(cid).startswith("C") else str(cid)
+            candidate = " ".join(links + [tag])
+            if len(candidate) > 2800:
+                extra += 1
+            else:
+                links.append(tag)
+        dest = " ".join(links)
+        if extra:
+            dest = f"{dest} +{extra} more"
+    else:
+        posted = result.get("posted_channels") or nested.get("posted_channels") or []
+        if posted:
+            dest = " ".join(
+                f"<#{p.get('channel_id')}>" if str(p.get("channel_id") or "").startswith("C") else str(p.get("channel_id"))
+                for p in posted
+                if p.get("channel_id")
             )
-        )
-    dest_suffix = (" | " + " | ".join(dest_lines)) if dest_lines else ""
-    if result.get("error") and not result.get("ok", True):
-        return f"{label}: FAILED - {str(result.get('error'))[:500]}{dur}{dest_suffix}"
-    skipped = result.get("skipped") or (result.get("result") or {}).get("skipped")
-    if skipped:
-        return f"{label}: skipped - {skipped}{dur}"
-    channels = result.get("channel_count")
-    users = result.get("user_count")
-    dest_bits = []
-    if channels is not None:
-        dest_bits.append(f"{channels} channel(s)")
-    if users is not None:
-        dest_bits.append(f"{users} user DM(s)")
-    dest = ", ".join(dest_bits) if dest_bits else "destinations resolved"
-    return f"{label}: success - posted to {dest}{dur}{dest_suffix}"
+        else:
+            dest = "(none)"
+
+    inner = nested if nested else result
+    messages = int(inner.get("channel_count") or 0) + int(inner.get("user_count") or 0)
+    if "message_count" in result and result["message_count"] is not None:
+        messages = int(result["message_count"])
+
+    lines = [header, f"Status: {status}"]
+    if detail and status != "success":
+        lines.append(detail)
+    lines.append(f"Destination: {dest}")
+    lines.append(f"Number of Messages: {messages}")
+    return "\n".join(lines)
 
 
 def _post_schedule_outcome_log(region: dict | None, result: dict) -> None:
@@ -431,11 +405,12 @@ def run_one_schedule_item(
     dry_run: bool = False,
     force: bool = False,
     manual: bool = False,
+    notify_user: str = "",
 ) -> dict:
     """Execute a single schedule row. force=True skips due-now check (Run Now).
 
-    manual=True (Run Now) skips paxminer_logs; the admin is DMed instead.
-    Automatic tick/fan-out runs post an outcome line to paxminer_logs.
+    Scheduled ticks and Run Now both post an outcome line to paxminer_logs.
+    ``manual`` / ``notify_user`` only change the first sentence of that line.
     """
     started = time.time()
     schedule_id = int(schedule["id"])
@@ -455,8 +430,14 @@ def run_one_schedule_item(
             )
         except Exception:
             LOG.exception("mark error status failed schedule_id=%s", schedule_id)
-        out = {"schedule_id": schedule_id, "ok": False, "error": "region not found"}
-        if not manual and not dry_run:
+        out = {
+            "schedule_id": schedule_id,
+            "ok": False,
+            "error": "region not found",
+            "manual": bool(manual or notify_user),
+            "notify_user": notify_user or "",
+        }
+        if not dry_run:
             _post_schedule_outcome_log(None, out)
         return out
 
@@ -476,8 +457,10 @@ def run_one_schedule_item(
             "schedule_id": schedule_id,
             "ok": False,
             "error": "definition not found",
+            "manual": bool(manual or notify_user),
+            "notify_user": notify_user or "",
         }
-        if not manual and not dry_run:
+        if not dry_run:
             _post_schedule_outcome_log(region, out)
         return out
 
@@ -518,16 +501,29 @@ def run_one_schedule_item(
             "schedule_id": schedule_id,
             "ok": status != "error",
             "report_type": report_type,
+            "definition_name": definition.get("name") or report_type,
             "result": result,
             "status": status,
             "duration_s": round(time.time() - started, 2),
             "channel_count": result.get("channel_count") if isinstance(result, dict) else None,
             "user_count": result.get("user_count") if isinstance(result, dict) else None,
+            "manual": bool(manual or notify_user),
+            "notify_user": notify_user or "",
+            "destination_type": schedule.get("destination_type"),
+            "specified_channels": _parse_json_list(schedule.get("destination_channels")),
         }
+        if isinstance(result, dict):
+            out["posted_channels"] = result.get("posted_channels")
+            out["failed_channels"] = result.get("failed_channels")
+            out["posted_users"] = result.get("posted_users")
+            out["failed_users"] = result.get("failed_users")
+        ch = int(out.get("channel_count") or 0)
+        us = int(out.get("user_count") or 0)
+        out["message_count"] = ch + us
         if status == "skipped":
             out["skipped"] = (result or {}).get("skipped") or "no delivery"
             out["ok"] = True
-        if not manual:
+        if not dry_run:
             _post_schedule_outcome_log(region, out)
         return out
     except Exception as e:
@@ -544,11 +540,17 @@ def run_one_schedule_item(
             "schedule_id": schedule_id,
             "ok": False,
             "report_type": report_type,
+            "definition_name": definition.get("name") or report_type,
             "error": str(e),
             "status": "error",
             "duration_s": round(time.time() - started, 2),
+            "manual": bool(manual or notify_user),
+            "notify_user": notify_user or "",
+            "destination_type": schedule.get("destination_type"),
+            "specified_channels": _parse_json_list(schedule.get("destination_channels")),
+            "message_count": 0,
         }
-        if not manual:
+        if not dry_run:
             _post_schedule_outcome_log(region, out)
         return out
 

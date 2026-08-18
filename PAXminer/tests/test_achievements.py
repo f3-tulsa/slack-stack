@@ -21,8 +21,10 @@ def test_achievement_seeds_have_rule_columns():
 def test_period_bucket_for_date():
     from achievements.engine import period_bucket_for_date
 
-    assert period_bucket_for_date(date(2026, 3, 15), "month") == 3
-    assert period_bucket_for_date(date(2026, 3, 15), "year") == 2026
+    assert period_bucket_for_date(date(2026, 3, 15), "month") == "2026-03"
+    assert period_bucket_for_date(date(2026, 3, 15), "year") == "2026"
+    assert period_bucket_for_date(date(2025, 12, 29), "week") == "2026-W01"
+    assert period_bucket_for_date(date(2026, 1, 5), "week") == "2026-W02"
 
 
 def test_verify_achievements_webhook_secret():
@@ -250,7 +252,7 @@ def test_almost_there_excludes_awarded_and_caps_gap():
         }
     )
 
-    with patch("achievements.leaderboard.period_bucket_for_today", return_value=2026):
+    with patch("achievements.leaderboard.period_bucket_for_today", return_value="2026"):
         with patch("achievements.leaderboard._progress_for_rule") as mock_prog:
             mock_prog.return_value = pd.DataFrame(
                 {
@@ -491,6 +493,8 @@ def test_run_achievements_scoped_revoke_only_for_webhook_pax():
         "activity": "beatdown",
         "period": "year",
         "threshold": 50,
+        "version_id": 7,
+        "enabled": 1,
     }
     region_row = {
         "send_achievements": 1,
@@ -505,6 +509,8 @@ def test_run_achievements_scoped_revoke_only_for_webhook_pax():
             "pax_id": "U1",
             "date_awarded": date(2026, 7, 1),
             "period": "year",
+            "achievement_version_id": 7,
+            "period_key": "2026",
         },
         {
             "id": 100,
@@ -512,6 +518,8 @@ def test_run_achievements_scoped_revoke_only_for_webhook_pax():
             "pax_id": "U2",
             "date_awarded": date(2026, 7, 1),
             "period": "year",
+            "achievement_version_id": 7,
+            "period_key": "2026",
         },
     ]
     nation = pd.DataFrame(
@@ -910,6 +918,7 @@ def test_achievements_handler_webhook_success():
     assert mock_run.call_args.kwargs["pax_user_ids"] == {"U1", "U2"}
     assert mock_run.call_args.kwargs["post_to_ao"] is True
     assert mock_run.call_args.kwargs["ao_channel_id"] == "C_AO"
+    assert mock_run.call_args.kwargs["log_mode"] == "webhook"
 
 
 def test_achievements_loads_only_regional_schema():
@@ -1072,7 +1081,7 @@ def test_achievement_failure_log_uses_schema_name():
                 _post_achievement_failure_log(region_row, RuntimeError("boom"))
 
     assert len(log_lines) == 1
-    assert log_lines[0] == "- Achievement (f3ttown_test): FAILED - boom"
+    assert log_lines[0] == "- Achievements FAILED - boom"
 
 
 def test_achievements_emit_per_event_paxminer_logs():
@@ -1085,6 +1094,11 @@ def test_achievements_emit_per_event_paxminer_logs():
         "verb": "posting 30 times",
         "code": "ironman",
         "period": "year",
+        "version_id": 7,
+        "enabled": 1,
+        "metric": "posts",
+        "activity": "beatdown",
+        "threshold": 1,
     }
     awarded = pd.DataFrame(
         [
@@ -1095,6 +1109,10 @@ def test_achievements_emit_per_event_paxminer_logs():
                 "date_awarded": date(2026, 1, 5),
                 "period": "year",
                 "code": "ironman",
+                "achievement_version_id": 7,
+                "period_key": "2026",
+                "period_start": date(2026, 1, 1),
+                "period_end": date(2026, 12, 31),
             }
         ]
     )
@@ -1103,7 +1121,8 @@ def test_achievements_emit_per_event_paxminer_logs():
             {
                 "pax_id": "U0GRANTXXXX",
                 "date_awarded": date(2026, 7, 1),
-                "period_bucket": 2026,
+                "period_bucket": "2026",
+                "period_key": "2026",
             }
         ]
     )
@@ -1157,7 +1176,7 @@ def test_achievements_emit_per_event_paxminer_logs():
                                         runner_mod, "evaluate_rule", return_value=qualified
                                     ):
                                         with patch.object(
-                                            runner_mod, "_load_awarded_ytd", return_value=awarded
+                                            runner_mod, "_load_awarded", return_value=awarded
                                         ):
                                             result = runner_mod.run_achievements_for_region(
                                                 mock_conn,
@@ -1167,10 +1186,12 @@ def test_achievements_emit_per_event_paxminer_logs():
                                                 pax_user_ids={"U0GRANTXXXX", "U0REVOKEXXX"},
                                             )
 
-    assert result == {"grants": 1, "revokes": 1}
-    assert any("granted 'Ironman' to <@U0GRANTXXXX>" in line for line in log_lines)
-    assert any("revoked 'Ironman' from <@U0REVOKEXXX>" in line for line in log_lines)
-    assert all("Achievement (f3test)" in line for line in log_lines)
+    assert result["grants"] == 1
+    assert result["revokes"] == 1
+    assert any("was granted to `Grant`" in line for line in log_lines)
+    assert any("was revoked from `Revoke`" in line for line in log_lines)
+    assert not any("<@" in line for line in log_lines if line.startswith("- Achievement `"))
+    assert not any("f3test" in line for line in log_lines if line.startswith("- Achievement `"))
     assert not any("Tulsa" in line for line in log_lines)
 
 
@@ -1287,3 +1308,641 @@ def test_q_charter_joins_and_tracks_failed_channels():
     assert "not_in_channel" in result["failed_channels"][0]["reason"]
     # cleanup plot dir noise
     Path("/tmp/paxminer_plots_test/f3ttown_test").mkdir(parents=True, exist_ok=True)
+
+
+def _posts(user, dates, *, ao="C_AO", q=0, activity="beatdown"):
+    return pd.DataFrame(
+        {
+            "region": ["f3test"] * len(dates),
+            "email": ["a@x.com"] * len(dates),
+            "user_id": [user] * len(dates),
+            "user_name": ["PAX"] * len(dates),
+            "ao_id": [ao] * len(dates),
+            "ao": ["ao"] * len(dates),
+            "date": pd.to_datetime(dates),
+            "q_flag": [q] * len(dates),
+            "activity_type": [activity] * len(dates),
+            "timestamp": [f"175000000{i}.000000" for i in range(len(dates))],
+        }
+    )
+
+
+def test_evaluate_rule_year_qualified_week_and_crossing_date():
+    from achievements.engine import evaluate_rule
+
+    dates = [f"2026-08-{d:02d}" for d in range(10, 16)]
+    nation = _posts("U1", dates)
+    rule = {
+        "id": 1,
+        "metric": "posts",
+        "activity": "beatdown",
+        "period": "week",
+        "threshold": 6,
+        "effective_from": None,
+    }
+    out = evaluate_rule(nation, rule, schema="f3test")
+    assert len(out) == 1
+    assert out.iloc[0]["period_key"] == "2026-W33"
+    assert out.iloc[0]["date_awarded"] == date(2026, 8, 15)
+    extra = pd.concat([nation, _posts("U1", ["2026-08-16"])], ignore_index=True)
+    out2 = evaluate_rule(extra, rule, schema="f3test")
+    assert out2.iloc[0]["date_awarded"] == date(2026, 8, 15)
+
+
+def test_evaluate_rule_going_forward_skips_past_months():
+    from achievements.engine import evaluate_rule
+
+    nation = _posts("U1", ["2026-01-05", "2026-01-06", "2026-08-05", "2026-08-06"])
+    rule = {
+        "id": 1,
+        "metric": "posts",
+        "activity": [],
+        "period": "month",
+        "threshold": 2,
+        "effective_from": date(2026, 8, 1),
+    }
+    out = evaluate_rule(nation, rule, schema="f3test")
+    assert list(out["period_key"]) == ["2026-08"]
+
+
+def test_empty_activity_list_matches_all_types():
+    from achievements.engine import evaluate_rule
+
+    nation = pd.concat(
+        [
+            _posts("U1", ["2026-08-01"], activity="qsource"),
+            _posts("U1", ["2026-08-02"], activity="rucking"),
+        ],
+        ignore_index=True,
+    )
+    rule = {
+        "id": 1,
+        "metric": "posts",
+        "activity": [],
+        "period": "year",
+        "threshold": 2,
+    }
+    out = evaluate_rule(nation, rule, schema="f3test")
+    assert len(out) == 1
+
+
+def test_populated_activity_list_filters():
+    from achievements.engine import evaluate_rule
+
+    nation = pd.concat(
+        [
+            _posts("U1", ["2026-08-01"], activity="qsource"),
+            _posts("U1", ["2026-08-02"], activity="beatdown"),
+        ],
+        ignore_index=True,
+    )
+    rule = {
+        "id": 1,
+        "metric": "posts",
+        "activity": ["qsource"],
+        "period": "year",
+        "threshold": 1,
+    }
+    out = evaluate_rule(nation, rule, schema="f3test")
+    assert len(out) == 1
+    assert out.iloc[0]["date_awarded"] == date(2026, 8, 1)
+
+
+def test_rule_edit_does_not_revoke_older_version():
+    from achievements.runner import run_achievements_for_region
+
+    rule = {
+        "id": 1,
+        "name": "Six Pack",
+        "verb": "posting",
+        "period": "week",
+        "version_id": 2,
+        "enabled": 1,
+        "metric": "posts",
+        "threshold": 8,
+    }
+    awarded_row = {
+        "id": 9,
+        "achievement_id": 1,
+        "pax_id": "U1",
+        "date_awarded": date(2026, 8, 10),
+        "period": "week",
+        "achievement_version_id": 1,
+        "period_key": "2026-W33",
+        "period_start": date(2026, 8, 10),
+        "period_end": date(2026, 8, 16),
+    }
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[rule], [awarded_row]]
+    nation = _posts("U1", ["2026-08-10"])
+    with patch("achievements.runner.decrypt_field", return_value="x"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.load_nation_attendance", return_value=nation):
+                with patch("achievements.runner.attach_home_regions", side_effect=lambda c, n, s: n):
+                    with patch("achievements.runner.evaluate_rule", return_value=pd.DataFrame()):
+                        result = run_achievements_for_region(
+                            mock_conn,
+                            pm_schema="pm",
+                            regional_schema="f3test",
+                            region_row={
+                                "send_achievements": 1,
+                                "achievement_channel": "C1",
+                                "slack_token": "enc",
+                            },
+                            pax_user_ids={"U1"},
+                            dry_run=True,
+                        )
+    assert result["revokes"] == 0
+
+
+def test_null_version_is_grandfathered():
+    from achievements.runner import run_achievements_for_region
+
+    rule = {
+        "id": 1,
+        "name": "Test",
+        "verb": "x",
+        "period": "year",
+        "version_id": 1,
+        "enabled": 1,
+        "threshold": 1,
+    }
+    awarded_row = {
+        "id": 9,
+        "achievement_id": 1,
+        "pax_id": "U1",
+        "date_awarded": date(2026, 1, 1),
+        "period": "year",
+        "achievement_version_id": None,
+        "period_key": "2026",
+    }
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[rule], [awarded_row]]
+    with patch("achievements.runner.decrypt_field", return_value="x"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.load_nation_attendance", return_value=_posts("U1", ["2026-01-01"])):
+                with patch("achievements.runner.attach_home_regions", side_effect=lambda c, n, s: n):
+                    with patch("achievements.runner.evaluate_rule", return_value=pd.DataFrame()):
+                        result = run_achievements_for_region(
+                            mock_conn,
+                            pm_schema="pm",
+                            regional_schema="f3test",
+                            region_row={
+                                "send_achievements": 1,
+                                "achievement_channel": "C1",
+                                "slack_token": "enc",
+                            },
+                            pax_user_ids={"U1"},
+                            dry_run=True,
+                        )
+    assert result["revokes"] == 0
+
+
+def test_disabled_family_is_inert():
+    from achievements.runner import run_achievements_for_region
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[], []]
+    region_row = {"send_achievements": 1, "achievement_channel": "C1", "slack_token": "enc"}
+    with patch("achievements.runner.decrypt_field", return_value="x"):
+        with patch("achievements.runner.slack_client"):
+            result = run_achievements_for_region(
+                mock_conn,
+                pm_schema="pm",
+                regional_schema="f3test",
+                region_row=region_row,
+                dry_run=True,
+            )
+    assert result == {"skipped": "no rules"}
+
+
+def test_channel_single_and_batch_copy():
+    from achievements.announcements import channel_grant_messages, dm_grant_messages
+
+    g1 = {
+        "pax_id": "U01AAAAAAA1",
+        "achievement_id": 1,
+        "date_awarded": date(2026, 8, 16),
+        "ao_id": "C_AO",
+        "timestamp": "1750000000.000001",
+        "period": "month",
+        "period_start": date(2026, 8, 1),
+        "period_end": date(2026, 8, 31),
+        "rule": {"name": "Leader of Men", "verb": "Qing at 4 beatdowns in a month"},
+    }
+    msgs = channel_grant_messages(
+        [g1],
+        year=2026,
+        names={"U01AAAAAAA1": "A"},
+        known_ids={"U01AAAAAAA1"},
+        ytd_totals={"U01AAAAAAA1": 23},
+        ytd_family={("U01AAAAAAA1", 1): 5},
+    )
+    text = msgs[0][0]
+    assert "<@U01AAAAAAA1>" in text
+    assert "<#C_AO>" in text
+    assert "in 2026" in text
+    assert "Encourage this HIM to keep it up!" in text
+    assert "Keep up the good work!" not in text
+    assert "unfurl" not in text.lower()
+    g2 = dict(g1, pax_id="U01AAAAAAA2")
+    batch = channel_grant_messages(
+        [g1, g2],
+        year=2026,
+        names={"U01AAAAAAA1": "A", "U01AAAAAAA2": "B"},
+        known_ids={"U01AAAAAAA1", "U01AAAAAAA2"},
+        ytd_totals={"U01AAAAAAA1": 23, "U01AAAAAAA2": 2},
+        ytd_family={("U01AAAAAAA1", 1): 5, ("U01AAAAAAA2", 1): 1},
+    )
+    btext = batch[0][0]
+    assert "T-Claps" in btext
+    assert "achievement #23" not in btext
+    dms = dm_grant_messages(
+        [g1, dict(g1, achievement_id=2, rule={"name": "6 pack", "verb": "posting at 6 beatdowns in a week"})],
+        year=2026,
+        names={"U01AAAAAAA1": "A"},
+        known_ids={"U01AAAAAAA1"},
+        ytd_totals={"U01AAAAAAA1": 23},
+        ytd_family={("U01AAAAAAA1", 1): 5, ("U01AAAAAAA1", 2): 1},
+    )
+    dm_text = dms["U01AAAAAAA1"][0]
+    assert "you just earned 2 achievements!" in dm_text
+
+
+def test_missing_timestamp_prints_date_without_link():
+    from achievements.announcements import date_link
+
+    assert "http" not in date_link(date(2026, 8, 16), "C_AO", None)
+    assert "August 16, 2026" in date_link(date(2026, 8, 16), "C_AO", None)
+    linked = date_link(date(2026, 8, 16), "C_AO", "1750000000.123")
+    assert linked.startswith("<https://slack.com/archives/C_AO/p1750000000123|")
+
+
+def test_post_messages_retries_repeated_429():
+    from slack_sdk.errors import SlackApiError
+    from slack_util import post_messages
+
+    client = MagicMock()
+    err = SlackApiError("ratelimit", MagicMock(status_code=429, headers={"Retry-After": "0"}))
+    err.response.data = {"ok": False, "error": "ratelimited"}
+    client.chat_postMessage.side_effect = [err, err, {"ok": True, "ts": "1"}]
+    with patch("slack_util.time.sleep"):
+        post_messages(client, "C1", [("hello", None)])
+    assert client.chat_postMessage.call_count == 3
+    assert client.chat_postMessage.call_args.kwargs.get("unfurl_links") is False
+
+
+def test_iter_year_windows_overlap_attributes_iso_week_once():
+    from achievements.engine import evaluate_rule
+    from achievements.runner import _filter_period_year, iter_year_windows
+
+    nation = _posts("U1", ["2025-12-29", "2025-12-30", "2025-12-31", "2026-01-01", "2026-01-02", "2026-01-03"])
+    rule = {"id": 1, "metric": "posts", "activity": [], "period": "week", "threshold": 6}
+    windows = iter_year_windows(date(2025, 1, 1), date(2026, 12, 31))
+    keys = []
+    for year, start, end in windows:
+        chunk = nation[(nation["date"] >= pd.Timestamp(start)) & (nation["date"] <= pd.Timestamp(end))]
+        qualified = _filter_period_year(evaluate_rule(chunk, rule, schema="f3test"), year)
+        keys.extend(list(qualified["period_key"]) if not qualified.empty else [])
+    assert keys.count("2026-W01") == 1
+
+
+def test_genuine_revoke_posts_channel_dm_and_log():
+    from achievements.runner import run_achievements_for_region
+
+    pax = "U01REVOKE01"
+    rule = {
+        "id": 1,
+        "name": "Leader of Men",
+        "verb": "Qing",
+        "period": "month",
+        "version_id": 7,
+        "enabled": 1,
+        "metric": "qs",
+        "threshold": 4,
+    }
+    awarded_row = {
+        "id": 99,
+        "achievement_id": 1,
+        "pax_id": pax,
+        "date_awarded": date(2026, 8, 16),
+        "period": "month",
+        "achievement_version_id": 7,
+        "period_key": "2026-08",
+        "period_start": date(2026, 8, 1),
+        "period_end": date(2026, 8, 31),
+        "ao_id": "C_AO",
+        "timestamp": "1750000000.000001",
+    }
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[rule], [awarded_row]]
+    posts = []
+    logs = []
+    with patch("achievements.runner.decrypt_field", return_value="x"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.workspace_user_ids", return_value={pax}):
+                with patch(
+                    "achievements.runner.load_nation_attendance",
+                    return_value=_posts(pax, ["2026-08-01"]),
+                ):
+                    with patch(
+                        "achievements.runner.attach_home_regions",
+                        side_effect=lambda c, n, s: n,
+                    ):
+                        with patch("achievements.runner.evaluate_rule", return_value=pd.DataFrame()):
+                            with patch(
+                                "achievements.runner.post_message",
+                                side_effect=lambda _c, ch, text, **_k: posts.append((ch, text)),
+                            ):
+                                with patch(
+                                    "achievements.runner.post_log",
+                                    side_effect=lambda _c, text, **_k: logs.append(text),
+                                ):
+                                    with patch(
+                                        "achievements.runner.open_dm_channel",
+                                        return_value="D1",
+                                    ):
+                                        result = run_achievements_for_region(
+                                            mock_conn,
+                                            pm_schema="pm",
+                                            regional_schema="f3test",
+                                            region_row={
+                                                "send_achievements": 1,
+                                                "achievement_channel": "C1",
+                                                "slack_token": "enc",
+                                            },
+                                            pax_user_ids={pax},
+                                            log_mode="webhook",
+                                            trigger_ao_id="C_AO",
+                                            trigger_timestamp="1750000000.000001",
+                                            trigger_date=date(2026, 8, 16),
+                                        )
+    assert result["revokes"] == 1
+    assert result["grants"] == 0
+    channel_msgs = [t for ch, t in posts if ch == "C1"]
+    dm_msgs = [t for ch, t in posts if ch == "D1"]
+    assert len(channel_msgs) == 1
+    assert "Correction:" in channel_msgs[0]
+    assert "T-Claps" not in channel_msgs[0]
+    assert "this Backblast on August 16" in channel_msgs[0]
+    assert len(dm_msgs) == 1
+    assert "Keep showing up and you'll get it back!" in dm_msgs[0]
+    assert len(logs) == 1
+    assert "was revoked from" in logs[0]
+    assert "after an edit of" in logs[0]
+    assert "<@" not in logs[0]
+
+
+def test_ytd_run_does_not_revoke_prior_year():
+    from achievements.runner import run_achievements_for_region
+
+    rule = {
+        "id": 1,
+        "name": "Ironman",
+        "verb": "x",
+        "period": "year",
+        "version_id": 7,
+        "enabled": 1,
+        "threshold": 50,
+    }
+    awarded_row = {
+        "id": 9,
+        "achievement_id": 1,
+        "pax_id": "U01AAAAAAA1",
+        "date_awarded": date(2025, 6, 1),
+        "period": "year",
+        "achievement_version_id": 7,
+        "period_key": "2025",
+        "period_start": date(2025, 1, 1),
+        "period_end": date(2025, 12, 31),
+    }
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[rule], [awarded_row]]
+    with patch("achievements.runner.decrypt_field", return_value="x"):
+        with patch("achievements.runner.slack_client"):
+            with patch(
+                "achievements.runner.load_nation_attendance",
+                return_value=_posts("U01AAAAAAA1", ["2026-01-05"]),
+            ):
+                with patch(
+                    "achievements.runner.attach_home_regions",
+                    side_effect=lambda c, n, s: n,
+                ):
+                    with patch("achievements.runner.evaluate_rule", return_value=pd.DataFrame()):
+                        result = run_achievements_for_region(
+                            mock_conn,
+                            pm_schema="pm",
+                            regional_schema="f3test",
+                            region_row={
+                                "send_achievements": 1,
+                                "achievement_channel": "C1",
+                                "slack_token": "enc",
+                            },
+                            pax_user_ids={"U01AAAAAAA1"},
+                            dry_run=True,
+                            start=date(2026, 1, 1),
+                            end=date(2026, 8, 18),
+                        )
+    assert result["revokes"] == 0
+    assert result["held"] >= 1
+
+
+def test_reconcile_rule_awards_silent_channel_summary():
+    from achievements.runner import reconcile_rule_awards
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchone.return_value = {
+        "name": "Centurion",
+        "effective_from": date(2026, 1, 1),
+        "effective_to": date(2026, 12, 31),
+    }
+    posts = []
+    logs = []
+    with patch(
+        "achievements.runner.run_achievements_for_region",
+        return_value={"grants": 89, "revokes": 141, "held": 73},
+    ) as mock_run:
+        with patch("achievements.runner.resolve_achievement_channel", return_value="C_ACH"):
+            with patch("achievements.runner.decrypt_field", return_value="x"):
+                with patch("achievements.runner.slack_client"):
+                    with patch(
+                        "achievements.runner.post_message",
+                        side_effect=lambda _c, ch, text, **_k: posts.append((ch, text)),
+                    ):
+                        with patch(
+                            "achievements.runner.post_log",
+                            side_effect=lambda _c, text, **_k: logs.append(text),
+                        ):
+                            with patch("achievements.runner.open_dm_channel") as mock_dm:
+                                result = reconcile_rule_awards(
+                                    mock_conn,
+                                    pm_schema="pm",
+                                    regional_schema="f3test",
+                                    region_row={"slack_token": "enc"},
+                                    achievement_id=4,
+                                    actor="UADMIN1234",
+                                )
+    assert result["grants"] == 89
+    assert result["revokes"] == 141
+    assert mock_run.call_args.kwargs["announce"] is False
+    assert mock_run.call_args.kwargs["allow_revoke"] is True
+    assert mock_run.call_args.kwargs["emit_logs"] is False
+    assert len(posts) == 1
+    assert "Achievement *Centurion* was corrected" in posts[0][1]
+    assert mock_dm.call_count == 0
+    assert len(logs) == 1
+    assert "backfill triggered by <@UADMIN1234>" in logs[0]
+    assert "89 granted, 141 revoked, 73 unchanged" in logs[0]
+
+
+def test_scheduled_noop_logs_summary_webhook_silent():
+    from achievements.runner import run_achievements_for_region
+
+    rule = {
+        "id": 1,
+        "name": "Test",
+        "verb": "x",
+        "period": "year",
+        "version_id": 1,
+        "enabled": 1,
+        "threshold": 1,
+    }
+    region_row = {
+        "send_achievements": 1,
+        "achievement_channel": "C1",
+        "slack_token": "enc",
+    }
+    nation = _posts("U01AAAAAAA1", ["2026-01-01"])
+
+    def _run(log_mode: str):
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_conn.cursor.return_value.__exit__.return_value = False
+        mock_cur.fetchall.side_effect = [[rule], []]
+        logs = []
+        with patch("achievements.runner.decrypt_field", return_value="x"):
+            with patch("achievements.runner.slack_client"):
+                with patch("achievements.runner.load_nation_attendance", return_value=nation):
+                    with patch(
+                        "achievements.runner.attach_home_regions",
+                        side_effect=lambda c, n, s: n,
+                    ):
+                        with patch("achievements.runner.evaluate_rule", return_value=pd.DataFrame()):
+                            with patch("achievements.runner.post_message"):
+                                with patch(
+                                    "achievements.runner.post_log",
+                                    side_effect=lambda _c, text, **_k: logs.append(text),
+                                ):
+                                    run_achievements_for_region(
+                                        mock_conn,
+                                        pm_schema="pm",
+                                        regional_schema="f3test",
+                                        region_row=region_row,
+                                        log_mode=log_mode,
+                                    )
+        return logs
+
+    scheduled = _run("scheduled")
+    assert len(scheduled) == 1
+    assert "0 granted, 0 revoked" in scheduled[0]
+    assert _run("webhook") == []
+
+
+def test_dm_failure_counted_on_summary():
+    from achievements.runner import run_achievements_for_region
+
+    rule = {
+        "id": 1,
+        "name": "Test",
+        "verb": "testing",
+        "period": "year",
+        "version_id": 1,
+        "enabled": 1,
+        "threshold": 1,
+    }
+    qual = pd.DataFrame(
+        {
+            "pax_id": ["U01ABCDEF23"],
+            "achievement_id": [1],
+            "date_awarded": [date(2026, 7, 1)],
+            "period_key": ["2026"],
+        }
+    )
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[rule], []]
+    logs = []
+    with patch("achievements.runner.decrypt_field", return_value="x"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.workspace_user_ids", return_value={"U01ABCDEF23"}):
+                with patch(
+                    "achievements.runner.load_nation_attendance",
+                    return_value=_posts("U01ABCDEF23", ["2026-07-01"]),
+                ):
+                    with patch(
+                        "achievements.runner.attach_home_regions",
+                        side_effect=lambda c, n, s: n,
+                    ):
+                        with patch("achievements.runner.evaluate_rule", return_value=qual):
+                            with patch("achievements.runner.post_message"):
+                                with patch(
+                                    "achievements.runner.open_dm_channel",
+                                    side_effect=RuntimeError("boom"),
+                                ):
+                                    with patch(
+                                        "achievements.runner.post_log",
+                                        side_effect=lambda _c, text, **_k: logs.append(text),
+                                    ):
+                                        result = run_achievements_for_region(
+                                            mock_conn,
+                                            pm_schema="pm",
+                                            regional_schema="f3test",
+                                            region_row={
+                                                "send_achievements": 1,
+                                                "achievement_channel": "C1",
+                                                "slack_token": "enc",
+                                            },
+                                        )
+    assert result["grants"] == 1
+    assert result["dm_failed"] == 1
+    summary = [line for line in logs if "Achievements daily" in line]
+    assert summary
+    assert "1 failed" in summary[0]
+
+
+def test_legacy_activity_lists_and_classifier_text_formats():
+    from achievements.activity import classify_activity_type, legacy_activity_to_list
+
+    assert legacy_activity_to_list("any") == []
+    assert "beatdown" in legacy_activity_to_list("beatdown")
+    assert "Bootcamp" in legacy_activity_to_list("beatdown")
+    assert "qsource" in {a.lower() for a in legacy_activity_to_list("qsource")}
+    assert (
+        classify_activity_type(backblast="QSource with Klint at The Goose", ao_name="the-goose")
+        == "qsource"
+    )
+    assert (
+        classify_activity_type(backblast="QSource with <@U01ABCDEF23>", ao_name="the-goose")
+        == "qsource"
+    )
