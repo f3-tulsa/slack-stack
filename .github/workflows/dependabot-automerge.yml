@@ -45,6 +45,7 @@ jobs:
         env:
           UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
           DEP_GROUP: ${{ steps.meta.outputs.dependency-group }}
+          DEP_NAMES: ${{ steps.meta.outputs.dependency-names }}
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           set -uo pipefail
@@ -90,8 +91,17 @@ jobs:
             [[ "$level" == "minor" || "$level" == "patch" ]] && target=main || target=test
             echo "Inferred level from title: '${level}'"
           fi
+          # tzdata is CalVer (YYYY.N). Year bumps look like semver majors to
+          # fetch-metadata and classify_from_title; they are not API breaks.
+          # Always route to main like a minor. Check names and title: range PRs
+          # often have a null update-type and thin metadata.
+          names_csv=",${DEP_NAMES// /},"
+          if [[ "$names_csv" == *",tzdata,"* || "$PR_TITLE" == *tzdata* ]]; then
+            target=main
+            echo "tzdata is CalVer; routing to main as minor"
+          fi
           echo "target=$target" >> "$GITHUB_OUTPUT"
-          echo "Routing to $target (update-type='${UPDATE_TYPE}', group='${DEP_GROUP}', title='${PR_TITLE}')"
+          echo "Routing to $target (update-type='${UPDATE_TYPE}', group='${DEP_GROUP}', names='${DEP_NAMES}', title='${PR_TITLE}')"
 
       - name: Route major/unvalidated updates to test
         if: steps.route.outputs.target == 'test'
