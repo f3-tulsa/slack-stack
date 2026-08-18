@@ -271,7 +271,7 @@ aws s3 cp slackblast/assets/ s3://YOUR_IMAGE_BUCKET/ --recursive
 | Workflow | When it runs |
 |----------|----------------|
 | **[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)** | Pull requests and pushes to **`main`**, **`test`**, and **`prod`**: **`requirements-sync`** (re-exports slackblast/weaselbot lockfiles when drifted; pushes with the automation App token so Dependabot auto-merge gets a fresh CI run), SAM lint, Python tests, and **`pip-audit`**. No AWS credentials. |
-| **[`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)** | Pushes to **`test`** and **`prod`** only, plus manual *Run workflow*. **`main`** stays PR-only for merges. |
+| **[`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)** | Pushes to **`test`** and **`prod`** only, plus manual *Run workflow*. **`main`** stays PR-only for merges. **Weaselbot image is frozen** until cutover: `deploy-weaselbot` is `if: false` and `run_weaselbot` is always false, so path changes, `infra/**`, and *Run workflow* (`weaselbot` / `all`) do not rebuild the running Lambda. `./deploy.sh --stack weaselbot` exits; `--stack all` skips Weaselbot. #169 deletes the job. |
 | **[`.github/workflows/dependabot-automerge.yml`](../.github/workflows/dependabot-automerge.yml)** | Minor/patch → auto-merge to **`main`**; majors retarget to **`test`**. |
 | **[`.github/workflows/promote-main-to-prod.yml`](../.github/workflows/promote-main-to-prod.yml)** | After main merges: promote to prod (auto-merge when CI passes). |
 | **[`.github/workflows/sync-prod-to-test.yml`](../.github/workflows/sync-prod-to-test.yml)** | **Manual only** (*Actions → Sync prod to test → Run workflow*). Merges prod into test via `chore/sync-prod-to-test` (dep-file conflicts prefer prod). Not on push to prod while test is the Weaselbot fork; restore `push: branches: [prod]` after cutover. |
@@ -286,10 +286,10 @@ On **push** to `test` or `prod`, only apps whose paths changed are built and dep
 | Deploy job | Paths that trigger it (or always when “infra” changed) |
 |------------|--------------------------------------------------------|
 | PAXminer | `PAXminer/**` |
-| Weaselbot | `weaselbot/**`, `common/**` |
+| Weaselbot | **Frozen** until cutover. Paths `weaselbot/**`, `common/**` (and `infra/**`) no longer rebuild it. |
 | slackblast | `slackblast/**` |
 | qsignups | `qsignups/**` |
-| **All four** | `infra/**` (bootstrap-related templates only; workflow file changes do **not** force a full deploy) |
+| **All remaining** | `infra/**` (bootstrap-related templates only; workflow file changes do **not** force a full deploy). Weaselbot is still skipped. |
 
 Bootstrap stack deployment is **not** automated in Actions; run `./deploy.sh --env <env> --bootstrap` locally when needed. CI still **lints** `infra/template.bootstrap.yaml` in the deploy **setup** job and in **`ci.yml`**.
 
@@ -312,7 +312,7 @@ When the workflow finishes without deploy failures, the **post-deploy** job appe
 
 ### Dependabot
 
-[`.github/dependabot.yml`](../.github/dependabot.yml) opens weekly PRs to update **GitHub Actions**, **Docker** base images (`PAXminer/`, `weaselbot/`), and **pip** requirements under each app directory (`PAXminer/`, `weaselbot/`, `slackblast/slackblast/`, `qsignups/`, `migration/`, etc.). Auto-merge and branch promotion are described under **Workflows** above and in [DEVELOPMENT.md](DEVELOPMENT.md).
+[`.github/dependabot.yml`](../.github/dependabot.yml) opens weekly PRs to update **GitHub Actions**, **Docker** base images (`PAXminer/`), and **pip** requirements under each app directory (`PAXminer/`, `slackblast/slackblast/`, `qsignups/`, `migration/`, etc.). **Weaselbot Docker/pip updates are off** until cutover so they cannot rebuild the frozen image. Auto-merge and branch promotion are described under **Workflows** above and in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ### GitHub Environments
 

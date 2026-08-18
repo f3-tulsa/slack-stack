@@ -65,6 +65,10 @@ jobs:
             infra:
               - 'infra/**'
 
+      # Weaselbot image is frozen until cutover (#169). The running Lambda stays;
+      # do not sam build/deploy it. A rebuild currently fails (connectorx 0.4.3
+      # yanked). Force run_weaselbot=false for path changes, infra/**, and
+      # workflow_dispatch (stack=weaselbot|all). #169 deletes the job.
       - id: pick
         run: |
           set -euo pipefail
@@ -104,6 +108,9 @@ jobs:
               [[ "$qs" == "true" ]] && echo "run_qsignups=true" >> "$GITHUB_OUTPUT" || echo "run_qsignups=false" >> "$GITHUB_OUTPUT"
             fi
           fi
+          # Last write wins: never rebuild Weaselbot, even if the pick above set true.
+          echo "run_weaselbot=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::Weaselbot image is frozen until cutover; skipping rebuild."
 
   setup:
     runs-on: ubuntu-latest
@@ -169,7 +176,6 @@ jobs:
         run: |
           set -euo pipefail
           sam validate -t PAXminer/template.yaml --lint
-          sam validate -t weaselbot/template.yaml --lint
           sam validate -t slackblast/template.yaml --lint
           sam validate -t qsignups/template.yaml --lint
           sam validate -t infra/template.bootstrap.yaml --lint
@@ -214,7 +220,8 @@ jobs:
   deploy-weaselbot:
     runs-on: ubuntu-latest
     needs: [detect-changes, setup]
-    if: needs.detect-changes.outputs.run_weaselbot == 'true'
+    # Frozen until cutover (#169). Belt-and-suspenders with pick's run_weaselbot=false.
+    if: false
     environment: ${{ github.event.inputs.environment || github.ref_name }}
     env:
       SAM_S3_BUCKET: ${{ needs.setup.outputs.sam_s3_bucket }}
