@@ -578,3 +578,118 @@ def test_slack_function_stays_pandas_free():
             if isinstance(node, ast.ImportFrom) and node.module:
                 assert node.module.split(".")[0] != "pandas", name
                 assert node.module not in forbidden, f"{name} imports {node.module}"
+
+
+def test_operator_error_notice_includes_reason_without_log_channel():
+    from slack_app import operator_error_notice
+    from slack_sdk.errors import SlackApiError
+
+    missing = operator_error_notice(ModuleNotFoundError("No module named 'achievements'"))
+    assert "achievements" in missing
+    assert "paxminer_logs" not in missing.lower()
+
+    api = operator_error_notice(SlackApiError("fail", {"error": "invalid_blocks"}))
+    assert "invalid_blocks" in api
+    assert "paxminer_logs" not in api.lower()
+
+
+def test_handle_error_dms_reason_not_log_channel():
+    from slack_app import handle_error
+
+    client = MagicMock()
+    client.conversations_open.return_value = {"channel": {"id": "D1"}}
+    logger = MagicMock()
+    body = {"user": {"id": "U1"}}
+    handle_error(ModuleNotFoundError("No module named 'achievements'"), body, logger, client)
+
+    client.chat_postMessage.assert_called_once()
+    text = client.chat_postMessage.call_args.kwargs["text"]
+    assert "achievements" in text
+    assert "paxminer_logs" not in text.lower()
+
+
+def test_slack_dockerfile_copies_imported_achievement_modules():
+    """SlackFunction must ship pandas-free achievement helpers it imports at runtime."""
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    dockerfile = (root / "Dockerfile.slack").read_text(encoding="utf-8")
+    copied: set[str] = set()
+    for line in dockerfile.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("COPY "):
+            continue
+        src = stripped.split()[1]
+        if not src.startswith("PAXminer/"):
+            continue
+        rel = src[len("PAXminer/") :]
+        abs_src = root / rel
+        if rel.endswith("/") or abs_src.is_dir():
+            for path in abs_src.rglob("*"):
+                if path.is_file():
+                    copied.add(str(path.relative_to(root)))
+        else:
+            copied.add(rel)
+
+    forbidden_files = {
+        "achievements/runner.py",
+        "achievements/engine.py",
+        "achievements/attendance.py",
+        "achievements/leaderboard.py",
+        "achievements/announcements.py",
+    }
+    assert copied.isdisjoint(forbidden_files)
+
+    slack_py = [
+        rel
+        for rel in copied
+        if rel.endswith(".py") and not rel.startswith("achievements/")
+    ]
+    needed: set[str] = set()
+    to_scan = list(slack_py)
+    seen: set[str] = set()
+    while to_scan:
+        rel = to_scan.pop()
+        if rel in seen:
+            continue
+        seen.add(rel)
+        tree = ast.parse((root / rel).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or not node.module:
+                continue
+            if node.module != "achievements" and not node.module.startswith("achievements."):
+                continue
+            modules = [node.module]
+            if node.module == "achievements":
+                modules.extend(f"achievements.{alias.name}" for alias in node.names)
+            for mod in modules:
+                file_rel = mod.replace(".", "/") + ".py"
+                needed.add(file_rel)
+                needed.add("achievements/__init__.py")
+                if file_rel not in seen:
+                    to_scan.append(file_rel)
+
+    missing = sorted(path for path in needed if path not in copied)
+    assert missing == [], f"Dockerfile.slack missing {missing}"
+
+
+def test_copied_achievement_modules_stay_pandas_free():
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    forbidden = {"pandas", "numpy", "matplotlib"}
+    for name in ("achievements/activity.py", "achievements/versions.py", "achievements/__init__.py"):
+        tree = ast.parse((root / name).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert alias.name.split(".")[0] not in forbidden, name
+            if isinstance(node, ast.ImportFrom) and node.module:
+                assert node.module.split(".")[0] not in forbidden, name
+                assert not node.module.startswith("achievements.engine")
+                assert not node.module.startswith("achievements.runner")
+                assert not node.module.startswith("achievements.attendance")
+                assert not node.module.startswith("achievements.leaderboard")
+

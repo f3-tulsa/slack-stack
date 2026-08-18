@@ -17,5 +17,8 @@ COPY PAXminer/slack_http.py ./
 COPY PAXminer/slack_blocks.py ./
 COPY PAXminer/paxminer_db.py ./
 COPY PAXminer/common/ ./common/
+COPY PAXminer/achievements/__init__.py ./achievements/__init__.py
+COPY PAXminer/achievements/activity.py ./achievements/activity.py
+COPY PAXminer/achievements/versions.py ./achievements/versions.py
 
 CMD ["slack_app.handler"]
