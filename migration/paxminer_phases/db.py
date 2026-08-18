@@ -58,6 +58,17 @@ def _column_exists(cur, schema: str, table: str, column: str) -> bool:
     return int(cur.fetchone()["c"]) > 0
 
 
+def _index_exists(cur, schema: str, table: str, index_name: str) -> bool:
+    cur.execute(
+        """
+        SELECT COUNT(*) AS c FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s AND INDEX_NAME=%s
+        """,
+        (schema, table, index_name),
+    )
+    return int(cur.fetchone()["c"]) > 0
+
+
 def _table_exists(cur, schema: str, table: str) -> bool:
     cur.execute(
         """

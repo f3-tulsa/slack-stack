@@ -1,5 +1,5 @@
 # Standalone deps for weinkes/create_weinkes.py (use a venv; not part of Lambda bundle)
-boto3>=1.43.69,<2
+boto3>=1.43.72,<2
 cryptography>=50.0.0,<51
 dataframe-image>=0.2.7
 numpy>=2.5.2,<3

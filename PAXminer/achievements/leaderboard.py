@@ -8,7 +8,8 @@ from datetime import date
 import pandas as pd
 
 from achievements.attendance import attach_home_regions, filter_activity, load_nation_attendance, period_key
-from achievements.engine import awarded_period_bucket, evaluate_rule
+from achievements.engine import awarded_period_bucket
+from achievements.period import period_key_for_date
 from achievements.runner import resolve_achievement_channel
 from common.encryption import decrypt_field
 from slack_blocks import chunk_messages, chunk_sections, fallback_text, header, section
@@ -48,13 +49,8 @@ def _progress_for_rule(nation_df: pd.DataFrame, rule: dict, schema: str) -> pd.D
     return prog
 
 
-def period_bucket_for_today(period: str) -> int:
-    today = date.today()
-    if period == "week":
-        return today.isocalendar().week
-    if period == "month":
-        return today.month
-    return today.year
+def period_bucket_for_today(period: str) -> str:
+    return period_key_for_date(date.today(), period)
 
 
 def build_leaderboard_message(
@@ -161,14 +157,19 @@ def run_leaderboard_for_region(
             start, end = window
             cur.execute(
                 f"SELECT * FROM `{schema}`.`achievements_awarded` "
-                f"WHERE date_awarded BETWEEN %s AND %s",
-                (start.isoformat(), end.isoformat()),
+                f"WHERE (period_end IS NOT NULL AND period_end >= %s AND period_start <= %s) "
+                f"OR (period_end IS NULL AND date_awarded BETWEEN %s AND %s)",
+                (start.isoformat(), end.isoformat(), start.isoformat(), end.isoformat()),
             )
         else:
             year = date.today().year
+            year_start = date(year, 1, 1).isoformat()
+            year_end = date(year, 12, 31).isoformat()
             cur.execute(
-                f"SELECT * FROM `{schema}`.`achievements_awarded` WHERE YEAR(date_awarded)=%s",
-                (year,),
+                f"SELECT * FROM `{schema}`.`achievements_awarded` "
+                f"WHERE (period_end IS NOT NULL AND period_end >= %s AND period_start <= %s) "
+                f"OR (period_end IS NULL AND YEAR(date_awarded)=%s)",
+                (year_start, year_end, year),
             )
         awarded_rows = cur.fetchall()
         cur.execute(f"SELECT user_id, user_name FROM `{schema}`.`users`")

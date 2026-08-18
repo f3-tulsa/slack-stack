@@ -143,6 +143,17 @@ def mention(
     return "`unknown PAX`"
 
 
+def plain_name(user_id: Any = None, name: Any = None) -> str:
+    """Display name for operational logs: never a mention, never a Slack user id suffix."""
+    display = _clean_str(name)
+    if display:
+        return display
+    uid = _clean_str(user_id)
+    if uid and not is_slack_user_id(uid):
+        return uid
+    return "PAX"
+
+
 def post_message(
     client: WebClient,
     channel: str,
@@ -151,37 +162,71 @@ def post_message(
     blocks: list | None = None,
     add_reaction: bool = False,
     reaction: str = "fire",
+    unfurl_links: bool = False,
+    unfurl_media: bool = False,
+    max_retries: int = 5,
 ) -> None:
-    kwargs: dict = {"channel": channel, "text": text, "link_names": True}
+    kwargs: dict = {
+        "channel": channel,
+        "text": text,
+        "link_names": True,
+        "unfurl_links": unfurl_links,
+        "unfurl_media": unfurl_media,
+    }
     if blocks:
         kwargs["blocks"] = blocks
-    try:
-        response = client.chat_postMessage(**kwargs)
-        if add_reaction and response.get("ts"):
-            client.reactions_add(channel=channel, name=reaction, timestamp=response["ts"])
-    except SlackApiError as e:
-        if e.response.status_code == 429:
-            delay = int(e.response.headers.get("Retry-After", "1"))
-            logging.info("Slack rate limit; sleeping %ss", delay)
-            time.sleep(delay)
+    last_error: Exception | None = None
+    for attempt in range(max_retries):
+        try:
             response = client.chat_postMessage(**kwargs)
             if add_reaction and response.get("ts"):
                 client.reactions_add(channel=channel, name=reaction, timestamp=response["ts"])
-        elif e.response.get("error") == "not_in_channel":
-            try:
-                client.conversations_join(channel=channel)
-                post_message(
-                    client,
-                    channel,
-                    text,
-                    blocks=blocks,
-                    add_reaction=add_reaction,
-                    reaction=reaction,
-                )
-            except Exception:
-                logging.exception("Failed to join/post channel=%s", channel)
-        else:
+            return
+        except SlackApiError as e:
+            last_error = e
+            if e.response is not None and e.response.status_code == 429:
+                delay = int(e.response.headers.get("Retry-After", "1"))
+                logging.info("Slack rate limit; sleeping %ss (attempt %s)", delay, attempt + 1)
+                time.sleep(delay)
+                continue
+            if e.response.get("error") == "not_in_channel":
+                try:
+                    client.conversations_join(channel=channel)
+                    continue
+                except Exception:
+                    logging.exception("Failed to join/post channel=%s", channel)
+                    raise
             raise
+    if last_error:
+        raise last_error
+    raise RuntimeError(f"chat_postMessage failed after {max_retries} attempts channel={channel}")
+
+
+def post_messages(
+    client: WebClient,
+    channel: str,
+    items: list[tuple[str, list | None]],
+    *,
+    delay_s: float = 0.4,
+    add_reaction_first: bool = False,
+    reaction: str = "fire",
+) -> None:
+    """Post successive messages with a pause between them; retries 429s more than once."""
+    for i, item in enumerate(items):
+        if isinstance(item, tuple):
+            text, blocks = item[0], item[1] if len(item) > 1 else None
+        else:
+            text, blocks = str(item), None
+        if i:
+            time.sleep(delay_s)
+        post_message(
+            client,
+            channel,
+            text,
+            blocks=blocks,
+            add_reaction=add_reaction_first and i == 0,
+            reaction=reaction,
+        )
 
 
 def open_dm_channel(client: WebClient, user_id: str) -> str:

@@ -166,7 +166,7 @@ aws lambda invoke \
   /tmp/pm-schedule.json && cat /tmp/pm-schedule.json
 ```
 
-Admins can manually send Kotter (and other reports) from Slack via **`/config-paxminer` → Schedule → Run Now** (SlackFunction acks and async-invokes **ScheduleFunction** for that one schedule item; the worker DMs the admin the outcome). Slash commands and interactivity use **`SlackFunctionUrl`** from the PAXMiner manifest.
+Admins can manually send Kotter (and other reports) from Slack via **`/config-paxminer` → Schedule → Run Now** (SlackFunction acks and async-invokes **ScheduleFunction** for that one schedule item; the worker posts the outcome to `#paxminer_logs`). Slash commands and interactivity use **`SlackFunctionUrl`** from the PAXMiner manifest.
 
 With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if needed.
 
@@ -178,14 +178,14 @@ With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if nee
    - `/config-paxminer` — modal opens, **no** empty `""` ephemeral
    - **PAX Achievements** hub button — push modal works; Save persists
    - Channel fields are dropdowns (not raw IDs)
-   - **Schedule → Run Now** — runs immediately; admin receives a result DM
+   - **Schedule → Run Now** — runs immediately; outcome is posted to `#paxminer_logs`
 4. Confirm deploy smoke includes `paxminer-<stage>-paxminer-slack` warm ping (`statusCode: 200`).
 5. Re-apply the stage Slack app from **`PAXminer/manifest-<stage>.json`** after removing slash commands so Slack drops stale `/kotter-report`.
 
 ### Weaselbot → PAXMiner cutover checklist
 
 1. Deploy **PAXMiner** then **slackblast** (CI waits for PAXMiner when both run so **`AchievementsFunctionUrl`** is available).
-2. Run **`python migration/paxminer_migrate.py --env <stage> --all`** (weaselbot fold-in, scheduler tables/seed, drop legacy `regions` columns). Deploy updated application code **before** this step.
+2. Run **`python migration/paxminer_migrate.py --env <stage> --all`** (weaselbot fold-in, scheduler tables, **achievements versioning**, drop legacy `regions` columns). Deploy updated application code **before** the `drop-legacy-columns` phase. **Exception:** the `achievements` phase must run **before** shipping the PAXminer image that JOINs `achievement_versions` (`python migration/paxminer_migrate.py --env <stage> --phase achievements`). Slackblast and QSignups do not need a deploy for that phase.
 3. Update **PAXMiner** Slack app from **`PAXminer/manifest-<stage>.json`** (**`SlackFunctionUrl`**, `reactions:write`).
 4. Re-install or verify **slackblast** OAuth if needed; confirm achievement webhook env on slackblast Lambda.
 5. Configure **`/config-paxminer`**: achievement channel/toggles, then **Schedule** destinations (set channels for `specific_channels` rows; disable any unwanted fan-out).
@@ -303,8 +303,10 @@ aws s3 cp slackblast/assets/ s3://YOUR_IMAGE_BUCKET/ --recursive
 |----------|----------------|
 | **[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)** | Pull requests and pushes to **`main`**, **`test`**, and **`prod`**: **`requirements-sync`** (re-exports slackblast lockfile when drifted; pushes with the automation App token so Dependabot auto-merge gets a fresh CI run), SAM lint, Python tests, and **`pip-audit`**. No AWS credentials. |
 | **[`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)** | Pushes to **`test`** and **`prod`** only, plus manual *Run workflow*. **`main`** stays PR-only for merges. |
-| **[`.github/workflows/dependabot-automerge.yml`](../.github/workflows/dependabot-automerge.yml)** | Minor/patch → auto-merge to **`main`**; majors retarget to **`test`**. |
-| **[`.github/workflows/promote-main-to-prod.yml`](../.github/workflows/promote-main-to-prod.yml)** / **[`sync-prod-to-test.yml`](../.github/workflows/sync-prod-to-test.yml)** | After main merges: promote to prod, then sync to test via `chore/sync-prod-to-test` (auto-resolves dependency-pin conflicts preferring prod). |
+| **[`.github/workflows/dependabot-automerge.yml`](../.github/workflows/dependabot-automerge.yml)** | Minor/patch → auto-merge to **`main`**; majors retarget to **`test`**. **tzdata** is CalVer (`YYYY.N`); year bumps route to **`main`** like a minor, not to `test`. |
+| **[`.github/workflows/promote-main-to-prod.yml`](../.github/workflows/promote-main-to-prod.yml)** | After main merges: promote to prod (auto-merge when CI passes). |
+| **[`.github/workflows/sync-prod-to-test.yml`](../.github/workflows/sync-prod-to-test.yml)** | **Manual only** (*Actions → Sync prod to test → Run workflow*). Merges prod into test via `chore/sync-prod-to-test` (dep-file conflicts prefer prod). Not on push to prod while test is the Weaselbot fork; restore `push: branches: [prod]` after cutover. |
+| **[`.github/workflows/promote-major-to-main.yml`](../.github/workflows/promote-major-to-main.yml)** | **Paused** until Weaselbot cutover. Was: after a successful test deploy of a `dependency-major` PR, cherry-pick onto main. Restore `workflow_run` after cutover. |
 
 Manual deploy: *Actions → Deploy Slack Stack → Run workflow*. Choose **environment** (`test` / `prod`) and optional **stack** (`all` or a single app). On **push**, path-based detection is used (the stack input is ignored).
 
@@ -317,7 +319,7 @@ On **push** to `test` or `prod`, only apps whose paths changed are built and dep
 | PAXminer | `PAXminer/**`, `common/**` |
 | slackblast | `slackblast/**` |
 | qsignups | `qsignups/**` |
-| **All three** | `infra/**` |
+| **All three** | `infra/**` (bootstrap-related templates only; workflow file changes do **not** force a full deploy) |
 
 Bootstrap stack deployment is **not** automated in Actions; run `./deploy.sh --env <env> --bootstrap` locally when needed. CI still **lints** `infra/template.bootstrap.yaml` in the deploy **setup** job and in **`ci.yml`**.
 
