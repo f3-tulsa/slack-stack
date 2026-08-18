@@ -185,7 +185,7 @@ CREATE TABLE IF NOT EXISTS `{schema}`.`achievements_awarded` (
   PRIMARY KEY (`id`),
   KEY `achievement_id` (`achievement_id`),
   KEY `pax_id` (`pax_id`),
-  KEY `awarded_period_lookup` (`achievement_id`, `pax_id`, `period_key`),
+  UNIQUE KEY `uniq_award_period` (`achievement_id`, `pax_id`, `period_key`),
   CONSTRAINT `achievements_awarded_ibfk_1` FOREIGN KEY (`achievement_id`) REFERENCES `{schema}`.`achievements_list` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 """

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -240,6 +241,7 @@ def test_achievements_ddl_stays_additive_for_slackblast_orm():
         assert f"`{col}`" in ACHIEVEMENTS_AWARDED_DDL
     for col in AWARDED_PERIOD_COLUMNS:
         assert f"`{col}`" in ACHIEVEMENTS_AWARDED_DDL
+    assert "UNIQUE KEY `uniq_award_period`" in ACHIEVEMENTS_AWARDED_DDL
     sql_path = (
         _REPO
         / "slackblast"
@@ -251,6 +253,72 @@ def test_achievements_ddl_stays_additive_for_slackblast_orm():
     local = sql_path.read_text(encoding="utf-8")
     beatdowns = local.split("CREATE TABLE f3devregion.`beatdowns`")[1].split("CREATE TABLE")[0]
     assert "activity_type" not in beatdowns
+
+
+def test_award_unique_dedupes_keeping_lowest_id(caplog):
+    from paxminer_phases.achievements import _enforce_award_period_unique
+
+    cur = MagicMock()
+    cur.fetchone.return_value = {"c": 0}
+    cur.rowcount = 2
+
+    def index_exists(_c, _s, _t, name):
+        return name == "awarded_period_lookup"
+
+    with (
+        patch("paxminer_phases.achievements._index_exists", side_effect=index_exists),
+        caplog.at_level(logging.INFO),
+    ):
+        result = _enforce_award_period_unique(cur, "f3test")
+
+    sqls = [str(c.args[0]) for c in cur.execute.call_args_list]
+    delete_sql = next(s for s in sqls if "DELETE a FROM" in s)
+    assert "a.id > b.id" in delete_sql
+    assert "a.period_key = b.period_key" in delete_sql
+    alter_sql = next(s for s in sqls if "ADD UNIQUE KEY" in s)
+    assert "`uniq_award_period`" in alter_sql
+    assert "`achievement_id`, `pax_id`, `period_key`" in alter_sql
+    drop_sql = next(s for s in sqls if "DROP KEY" in s)
+    assert "awarded_period_lookup" in drop_sql
+    assert result["duplicates_deleted"] == 2
+    assert result["unique_added"] is True
+    assert result["null_period_key"] == 0
+    assert "Deleted 2 duplicate award row(s)" in caplog.text
+
+
+def test_award_unique_alter_skipped_when_key_exists():
+    from paxminer_phases.achievements import _enforce_award_period_unique
+
+    cur = MagicMock()
+    with patch("paxminer_phases.achievements._index_exists", return_value=True):
+        result = _enforce_award_period_unique(cur, "f3test")
+
+    assert result["unique_already_present"] is True
+    assert result["unique_added"] is False
+    cur.execute.assert_not_called()
+
+
+def test_award_unique_surfaces_null_period_key(caplog):
+    from paxminer_phases.achievements import _enforce_award_period_unique
+
+    cur = MagicMock()
+    cur.fetchone.return_value = {"c": 4}
+    cur.rowcount = 1
+
+    with (
+        patch("paxminer_phases.achievements._index_exists", return_value=False),
+        caplog.at_level(logging.WARNING),
+    ):
+        result = _enforce_award_period_unique(cur, "f3test")
+
+    sqls = [str(c.args[0]) for c in cur.execute.call_args_list]
+    assert any("period_key IS NULL" in s for s in sqls)
+    assert any("DELETE a FROM" in s for s in sqls)
+    assert not any("ADD UNIQUE KEY" in s for s in sqls)
+    assert result["null_period_key"] == 4
+    assert result["duplicates_deleted"] == 1
+    assert result["unique_added"] is False
+    assert "NULL period_key" in caplog.text
 
 
 def test_weaselbot_seed_update_is_cosmetic_only():
