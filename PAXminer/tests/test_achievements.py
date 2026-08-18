@@ -622,12 +622,85 @@ def test_run_achievements_grants_and_posts():
 
     assert result["grants"] == 1
     assert result["revokes"] == 0
-    insert_calls = [c for c in mock_cur.execute.call_args_list if "INSERT INTO" in str(c)]
+    insert_calls = [c for c in mock_cur.execute.call_args_list if "INSERT" in str(c)]
     assert insert_calls
+    assert "INSERT IGNORE" in str(insert_calls[0])
     assert mock_post.call_count >= 2  # channel + DM
     # Per-grant commit so a timeout mid-loop cannot re-announce uncommitted rows.
     assert mock_conn.commit.call_count >= 1
     mock_conn.commit.assert_called_once()
+
+
+def test_run_achievements_ignored_insert_does_not_announce():
+    """A racing second grant (INSERT IGNORE rowcount 0) must not clap or DM."""
+    from achievements.runner import run_achievements_for_region
+
+    rule = {
+        "id": 1,
+        "name": "Test",
+        "verb": "testing",
+        "metric": "posts",
+        "activity": "beatdown",
+        "period": "year",
+        "threshold": 1,
+    }
+    region_row = {
+        "send_achievements": 1,
+        "achievement_channel": "C1",
+        "slack_token": "enc",
+        "region": "test",
+    }
+    qual = pd.DataFrame(
+        {
+            "pax_id": ["U01ABCDEF23"],
+            "achievement_id": [1],
+            "date_awarded": [date(2026, 7, 1)],
+            "period_bucket": [2026],
+        }
+    )
+    nation = pd.DataFrame(
+        {
+            "email": ["a@b.c"],
+            "user_id": ["U01ABCDEF23"],
+            "user_name": ["Test PAX"],
+            "date": [date(2026, 7, 1)],
+            "region": ["f3test"],
+        }
+    )
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[rule], []]
+    mock_cur.rowcount = 0
+
+    with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
+        with patch("achievements.runner.slack_client"):
+            with patch(
+                "achievements.runner.workspace_user_ids", return_value={"U01ABCDEF23"}
+            ):
+                with patch("achievements.runner.load_nation_attendance", return_value=nation):
+                    with patch(
+                        "achievements.runner.attach_home_regions",
+                        side_effect=lambda _c, n, _s: n,
+                    ):
+                        with patch("achievements.runner.evaluate_rule", return_value=qual):
+                            with patch("achievements.runner.post_message") as mock_post:
+                                with patch("achievements.runner.open_dm_channel") as mock_dm:
+                                    result = run_achievements_for_region(
+                                        mock_conn,
+                                        pm_schema="paxminer_test",
+                                        regional_schema="f3test",
+                                        region_row=region_row,
+                                        dry_run=False,
+                                        emit_logs=False,
+                                    )
+
+    assert result["grants"] == 0
+    insert_calls = [c for c in mock_cur.execute.call_args_list if "INSERT IGNORE" in str(c)]
+    assert insert_calls
+    mock_post.assert_not_called()
+    mock_dm.assert_not_called()
 
 
 def test_announce_false_inserts_without_slack():
@@ -691,7 +764,7 @@ def test_announce_false_inserts_without_slack():
 
     assert result["grants"] == 1
     assert result["revokes"] == 0
-    insert_calls = [c for c in mock_cur.execute.call_args_list if "INSERT INTO" in str(c)]
+    insert_calls = [c for c in mock_cur.execute.call_args_list if "INSERT IGNORE" in str(c)]
     assert insert_calls
     delete_calls = [c for c in mock_cur.execute.call_args_list if "DELETE FROM" in str(c)]
     assert delete_calls == []

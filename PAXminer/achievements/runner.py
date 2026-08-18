@@ -437,10 +437,11 @@ def run_achievements_for_region(
                 f"DELETE FROM `{regional_schema}`.`achievements_awarded` WHERE id=%s",
                 (g["id"],),
             )
+        inserted = []
         for g in grants:
             cur.execute(
                 f"""
-                INSERT INTO `{regional_schema}`.`achievements_awarded`
+                INSERT IGNORE INTO `{regional_schema}`.`achievements_awarded`
                 (achievement_id, pax_id, date_awarded, achievement_version_id, period,
                  period_key, period_start, period_end, qualifying_count)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -457,8 +458,13 @@ def run_achievements_for_region(
                     g.get("qualifying_count"),
                 ),
             )
-            counts[g["pax_id"]][g["achievement_id"]] += 1
+            # Unique (achievement, pax, period) is the authority across overlapping
+            # Lambdas; _existing_keys is only a cheap in-process skip.
+            if cur.rowcount:
+                inserted.append(g)
+                counts[g["pax_id"]][g["achievement_id"]] += 1
         conn.commit()
+    grants = inserted
 
     duration_s = round(time.time() - started, 2)
     names = _name_map_from_nation(nation)
