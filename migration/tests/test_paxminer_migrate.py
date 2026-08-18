@@ -55,6 +55,10 @@ def test_all_runs_phases_in_order(mock_connect):
             "defaults_seeded": False,
         }
 
+    def _achievements(cur, stage):
+        call_order.append("achievements")
+        return {"regional_schemas": 0, "versions_seeded": 0}
+
     def _drop_legacy(cur, stage):
         call_order.append("drop-legacy-columns")
         return {"dropped": [], "skipped": list(DROPPED_COLUMNS)}
@@ -62,6 +66,7 @@ def test_all_runs_phases_in_order(mock_connect):
     with (
         patch("paxminer_migrate.run_weaselbot", side_effect=_weaselbot),
         patch("paxminer_migrate.run_scheduler", side_effect=_scheduler),
+        patch("paxminer_migrate.run_achievements", side_effect=_achievements),
         patch("paxminer_migrate.run_drop_legacy_columns", side_effect=_drop_legacy),
         patch("paxminer_migrate._load_env"),
         patch("paxminer_migrate._write_receipt", return_value=Path("/tmp/receipt.txt")),
@@ -71,8 +76,8 @@ def test_all_runs_phases_in_order(mock_connect):
         rc = main(["--env", "test", "--all"])
 
     assert rc == 0
-    assert call_order == ["weaselbot", "scheduler", "drop-legacy-columns"]
-    assert conn.commit.call_count == 3
+    assert call_order == ["weaselbot", "scheduler", "achievements", "drop-legacy-columns"]
+    assert conn.commit.call_count == 4
     conn.close.assert_called_once()
 
 
@@ -117,6 +122,7 @@ def test_all_stops_on_first_failure(mock_connect):
     with (
         patch("paxminer_migrate.run_weaselbot", side_effect=_weaselbot),
         patch("paxminer_migrate.run_scheduler", side_effect=_scheduler),
+        patch("paxminer_migrate.run_achievements"),
         patch("paxminer_migrate.run_drop_legacy_columns"),
         patch("paxminer_migrate._load_env"),
         patch("paxminer_migrate._write_receipt", return_value=Path("/tmp/receipt.txt")),
@@ -153,3 +159,115 @@ def test_single_phase_weaselbot(mock_connect):
     run_sched.assert_not_called()
     run_drop.assert_not_called()
     conn.commit.assert_called_once()
+
+
+def test_achievements_phase_seeds_version_one_and_is_idempotent():
+    from paxminer_phases.achievements import _seed_version_1
+
+    cur = MagicMock()
+    family = {
+        "id": 42,
+        "code": "six_pack",
+        "metric": "posts",
+        "activity": "beatdown",
+        "period": "week",
+        "threshold": 6,
+    }
+    cur.fetchall.return_value = [family]
+    cur.fetchone.return_value = None
+    cur.rowcount = 1
+    first = _seed_version_1(cur, "f3test")
+    assert first == 1
+    insert = next(c for c in cur.execute.call_args_list if "INSERT INTO" in str(c.args[0]))
+    assert insert.args[1][0] == 42
+    assert "WHERE NOT EXISTS" in insert.args[0]
+
+    cur.reset_mock()
+    cur.fetchall.return_value = [family]
+    cur.fetchone.return_value = {"1": 1}
+    assert _seed_version_1(cur, "f3test") == 0
+    assert not any("INSERT INTO" in str(c.args[0]) for c in cur.execute.call_args_list)
+
+
+def test_achievements_phase_classifies_null_activity_types():
+    from datetime import date
+
+    from paxminer_phases.achievements import _classify_activity_types
+
+    cur = MagicMock()
+    cur.fetchall.side_effect = [
+        [
+            {
+                "ao_id": "C1",
+                "bd_date": date(2026, 1, 1),
+                "q_user_id": "U1",
+                "backblast": "QSource lesson",
+                "json": None,
+                "ao": "the-goose",
+            }
+        ],
+        [],
+    ]
+    cur.rowcount = 1
+    with patch("paxminer_phases.achievements._column_exists", return_value=True):
+        updated = _classify_activity_types(cur, "f3test")
+    assert updated == 1
+    update = next(c for c in cur.execute.call_args_list if "SET activity_type" in str(c.args[0]))
+    assert update.args[1][0] == "qsource"
+
+
+def test_achievements_ddl_stays_additive_for_slackblast_orm():
+    from achievements.achievement_rules import (
+        ACHIEVEMENTS_AWARDED_DDL,
+        ACHIEVEMENTS_LIST_DDL,
+        AWARDED_PERIOD_COLUMNS,
+    )
+
+    for col in (
+        "id",
+        "name",
+        "description",
+        "verb",
+        "code",
+        "metric",
+        "activity",
+        "period",
+        "threshold",
+    ):
+        assert f"`{col}`" in ACHIEVEMENTS_LIST_DDL
+    assert "`enabled`" in ACHIEVEMENTS_LIST_DDL
+    for col in ("id", "achievement_id", "pax_id", "date_awarded", "created", "updated"):
+        assert f"`{col}`" in ACHIEVEMENTS_AWARDED_DDL
+    for col in AWARDED_PERIOD_COLUMNS:
+        assert f"`{col}`" in ACHIEVEMENTS_AWARDED_DDL
+    sql_path = (
+        _REPO
+        / "slackblast"
+        / "slackblast"
+        / "utilities"
+        / "database"
+        / "create_clear_local_db.sql"
+    )
+    local = sql_path.read_text(encoding="utf-8")
+    beatdowns = local.split("CREATE TABLE f3devregion.`beatdowns`")[1].split("CREATE TABLE")[0]
+    assert "activity_type" not in beatdowns
+
+
+def test_weaselbot_seed_update_is_cosmetic_only():
+    from paxminer_phases.weaselbot import ensure_regional_achievements
+
+    cur = MagicMock()
+    cur.fetchone.side_effect = [{"id": 1}] * 20
+    with (
+        patch("paxminer_phases.weaselbot._column_exists", return_value=True),
+        patch("paxminer_phases.weaselbot.ACHIEVEMENTS_VIEW_DDL", "SELECT 1"),
+    ):
+        ensure_regional_achievements(cur, "f3test", upsert_seeds=True)
+    updates = [
+        str(c.args[0])
+        for c in cur.execute.call_args_list
+        if c.args and str(c.args[0]).lstrip().startswith("UPDATE")
+    ]
+    assert updates
+    assert "SET name=%s, description=%s, verb=%s" in updates[0]
+    assert "metric=%s" not in updates[0]

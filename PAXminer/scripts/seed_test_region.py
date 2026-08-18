@@ -1165,18 +1165,13 @@ def ensure_achievement_tables(cur, schema: str) -> None:
             cur.execute(
                 f"""
                 UPDATE `{schema}`.`achievements_list`
-                SET name=%s, description=%s, verb=%s, metric=%s, activity=%s,
-                    period=%s, threshold=%s
+                SET name=%s, description=%s, verb=%s
                 WHERE code=%s
                 """,
                 (
                     seed["name"],
                     seed["description"],
                     seed["verb"],
-                    seed["metric"],
-                    seed["activity"],
-                    seed["period"],
-                    seed["threshold"],
                     seed["code"],
                 ),
             )
@@ -1198,6 +1193,12 @@ def ensure_achievement_tables(cur, schema: str) -> None:
                     seed["threshold"],
                 ),
             )
+    try:
+        from paxminer_phases.achievements import migrate_regional_schema
+
+        migrate_regional_schema(cur, schema)
+    except Exception:
+        LOG.warning("achievements versioning migrate skipped for %s", schema, exc_info=True)
 
 
 def load_achievement_catalog(cur, schema: str) -> list[dict]:

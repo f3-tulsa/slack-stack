@@ -14,6 +14,7 @@ import logging
 import os
 import sys
 import traceback
+from datetime import date
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -117,6 +118,23 @@ def achievements_handler(event, context):
             if not region_row:
                 return http_response(404, {"ok": False, "error": "Region not found"})
             try:
+                trigger_date = None
+                raw_date = body.get("bd_date")
+                if raw_date:
+                    try:
+                        trigger_date = date.fromisoformat(str(raw_date)[:10])
+                    except ValueError:
+                        trigger_date = None
+                trigger_ts = None
+                if ao_channel_id and trigger_date:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            f"SELECT timestamp FROM `{schema}`.`beatdowns` "
+                            "WHERE ao_id=%s AND bd_date=%s LIMIT 1",
+                            (ao_channel_id, trigger_date),
+                        )
+                        ts_row = cur.fetchone() or {}
+                        trigger_ts = ts_row.get("timestamp")
                 result = run_achievements_for_region(
                     conn,
                     pm_schema=pm,
@@ -125,6 +143,10 @@ def achievements_handler(event, context):
                     pax_user_ids=pax_ids or None,
                     post_to_ao=post_to_ao,
                     ao_channel_id=ao_channel_id,
+                    log_mode="webhook",
+                    trigger_ao_id=ao_channel_id,
+                    trigger_timestamp=trigger_ts,
+                    trigger_date=trigger_date,
                 )
             except Exception as exc:
                 logging.exception("achievements webhook run failed schema=%s", schema)
@@ -192,10 +214,44 @@ def schedule_handler(event, context):
     registry_db = _registry_database()
     dry_run = bool(event.get("dry_run")) or event.get("source") == "smoke"
 
+    if event.get("source") == "achievement_rule_backfill":
+        from achievements.runner import reconcile_rule_awards
+
+        conn = connect_from_env(registry_db)
+        try:
+            schema = event.get("schema") or ""
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT * FROM `{pm}`.`regions` WHERE schema_name=%s LIMIT 1",
+                    (schema,),
+                )
+                region_row = cur.fetchone()
+            if not region_row:
+                return {"statusCode": 404, "body": json.dumps({"ok": False, "error": "Region not found"})}
+            start = end = None
+            if event.get("start"):
+                start = date.fromisoformat(str(event["start"])[:10])
+            if event.get("end"):
+                end = date.fromisoformat(str(event["end"])[:10])
+            result = reconcile_rule_awards(
+                conn,
+                pm_schema=pm,
+                regional_schema=schema,
+                region_row=region_row,
+                achievement_id=int(event["achievement_id"]),
+                actor=event.get("actor"),
+                start=start,
+                end=end,
+            )
+            return {"statusCode": 200, "body": json.dumps({"ok": True, "result": result})}
+        except Exception:
+            logging.exception("achievement_rule_backfill failed")
+            return {"statusCode": 500, "body": json.dumps({"ok": False, "error": traceback.format_exc()})}
+        finally:
+            conn.close()
+
     # Fan-out / Run Now path
     if event.get("schedule_id") is not None:
-        from schedule_runner import notify_run_result
-
         notify_user = (event.get("notify_user") or "").strip()
         conn = connect_from_env(registry_db)
         try:
@@ -206,13 +262,6 @@ def schedule_handler(event, context):
                 )
                 row = cur.fetchone()
             if not row:
-                result = {
-                    "schedule_id": event.get("schedule_id"),
-                    "ok": False,
-                    "error": "not found",
-                }
-                if notify_user:
-                    notify_run_result(None, notify_user, result)
                 return {"statusCode": 404, "body": json.dumps({"ok": False, "error": "not found"})}
             result = run_one_schedule_item(
                 conn,
@@ -221,32 +270,12 @@ def schedule_handler(event, context):
                 dry_run=dry_run,
                 force=bool(event.get("force")),
                 manual=bool(notify_user),
+                notify_user=notify_user,
             )
-            if notify_user:
-                region = None
-                schema_name = row.get("schema_name") or ""
-                if schema_name:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            f"SELECT * FROM `{pm}`.`regions` WHERE schema_name=%s LIMIT 1",
-                            (schema_name,),
-                        )
-                        region = cur.fetchone()
-                notify_run_result(region, notify_user, result)
             return {"statusCode": 200, "body": json.dumps({"ok": True, "result": result})}
         except Exception:
             logging.exception("schedule item failed")
             err_body = {"ok": False, "error": traceback.format_exc()}
-            if notify_user:
-                notify_run_result(
-                    None,
-                    notify_user,
-                    {
-                        "schedule_id": event.get("schedule_id"),
-                        "ok": False,
-                        "error": "schedule item failed (see CloudWatch)",
-                    },
-                )
             return {"statusCode": 500, "body": json.dumps(err_body)}
         finally:
             conn.close()

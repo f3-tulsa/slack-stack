@@ -110,32 +110,27 @@ def test_paxminer_db_no_toplevel_pandas_import():
             raise AssertionError("top-level from pandas import breaks Slack Lambda")
 
 
-@pytest.mark.parametrize(
-    "pattern",
-    [att.QSOURCE_BB_RE, att.QSOURCE_AO_RE, att.BEATDOWN_EXCLUDE_AO_RE],
-)
-def test_attendance_regexes_compile(pattern):
-    re.compile(pattern)
+def test_attendance_regexes_compile():
+    from achievements.activity import QSOURCE_AO_RE, QSOURCE_BB_RE, RUCK_AO_RE
+
+    assert QSOURCE_BB_RE.search("Q1.1 study")
+    assert QSOURCE_AO_RE.search("ao-qsource-east")
+    assert RUCK_AO_RE.search("ruck-ao")
 
 
 def test_qsource_and_beatdown_masks():
-    frame = pd.DataFrame(
-        {
-            "backblast": [
-                "QSource at The Goose",
-                "Q1.1 study group",
-                "Backblast — The Goose",
-                "Ruck AO morning",
-            ],
-            "ao": ["the-goose", "qsource", "ao-copa", "ruck-ao"],
-        }
-    )
-    qs = att.qsource_mask(frame)
-    assert bool(qs.iloc[0]) is True
-    assert bool(qs.iloc[1]) is True
-    assert bool(qs.iloc[2]) is False
+    from achievements.activity import classify_activity_type
 
-    bd = att.beatdown_mask(frame)
-    assert bool(bd.iloc[2]) is True
-    assert bool(bd.iloc[0]) is False  # qsource backblast
-    assert bool(bd.iloc[3]) is False  # ruck AO
+    assert classify_activity_type(backblast="QSource at The Goose", ao_name="the-goose") == "qsource"
+    assert classify_activity_type(backblast="Q1.1 study group", ao_name="qsource") == "qsource"
+    assert classify_activity_type(backblast="Backblast — The Goose", ao_name="ao-copa") == "beatdown"
+    assert classify_activity_type(backblast="Ruck AO morning", ao_name="ruck-ao") == "rucking"
+    assert (
+        classify_activity_type(
+            json_blob='{"Event Type": "Bootcamp"}',
+            ao_name="ao-qsource",
+            backblast="QSource",
+        )
+        == "Bootcamp"
+    )
+    assert classify_activity_type(existing="keep-me", ao_name="ruck-ao") == "keep-me"

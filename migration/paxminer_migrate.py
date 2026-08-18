@@ -9,8 +9,9 @@ SELECT them will fail.
 Usage:
   python migration/paxminer_migrate.py --env test --phase weaselbot
   python migration/paxminer_migrate.py --env test --phase scheduler
-  python migration/paxminer_migrate.py --env test --phase drop-legacy-columns
-  python migration/paxminer_migrate.py --env test --all
+    python migration/paxminer_migrate.py --env test --phase drop-legacy-columns
+    python migration/paxminer_migrate.py --env test --phase achievements
+    python migration/paxminer_migrate.py --env test --all
   python migration/paxminer_migrate.py --env test --phase weaselbot --force
   python migration/paxminer_migrate.py --env prod --phase weaselbot --drop-weaselbot-schema
 
@@ -32,13 +33,14 @@ if str(_MIGRATION_DIR) not in sys.path:
     sys.path.insert(0, str(_MIGRATION_DIR))
 
 from paxminer_phases.db import _ListHandler, _connect, _load_env, _write_receipt  # noqa: E402
+from paxminer_phases.achievements import run_achievements  # noqa: E402
 from paxminer_phases.drop_legacy import run_drop_legacy_columns  # noqa: E402
 from paxminer_phases.scheduler import run_scheduler  # noqa: E402
 from paxminer_phases.weaselbot import run_weaselbot  # noqa: E402
 
 LOG = logging.getLogger(__name__)
 
-PHASE_ORDER = ("weaselbot", "scheduler", "drop-legacy-columns")
+PHASE_ORDER = ("weaselbot", "scheduler", "achievements", "drop-legacy-columns")
 PHASE_CHOICES = PHASE_ORDER
 
 
@@ -78,6 +80,13 @@ def _format_phase_summary(phase: str, result: dict) -> list[str]:
             f"  dropped: {', '.join(result.get('dropped') or []) or '(none)'}",
             f"  already absent: {', '.join(result.get('skipped') or []) or '(none)'}",
         ]
+    if phase == "achievements":
+        return [
+            f"  regional_schemas: {result.get('regional_schemas', 0)}",
+            f"  versions_seeded: {result.get('versions_seeded', 0)}",
+            f"  awards_backfilled: {result.get('awards_backfilled', 0)}",
+            f"  activity_type_classified: {result.get('activity_type_classified', 0)}",
+        ]
     return [f"  {result}"]
 
 
@@ -100,6 +109,8 @@ def _run_phase(
         return run_scheduler(cur, stage)
     if phase == "drop-legacy-columns":
         return run_drop_legacy_columns(cur, stage)
+    if phase == "achievements":
+        return run_achievements(cur, stage)
     raise ValueError(f"Unknown phase: {phase}")
 
 
@@ -110,7 +121,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--env", required=True, choices=("test", "prod"))
     phase_group = parser.add_mutually_exclusive_group(required=True)
     phase_group.add_argument("--phase", choices=PHASE_CHOICES)
-    phase_group.add_argument("--all", action="store_true", help="Run weaselbot → scheduler → drop-legacy-columns")
+    phase_group.add_argument(
+        "--all",
+        action="store_true",
+        help="Run weaselbot → scheduler → achievements → drop-legacy-columns",
+    )
     parser.add_argument(
         "--force",
         action="store_true",

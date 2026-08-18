@@ -166,7 +166,7 @@ aws lambda invoke \
   /tmp/pm-schedule.json && cat /tmp/pm-schedule.json
 ```
 
-Admins can manually send Kotter (and other reports) from Slack via **`/config-paxminer` → Schedule → Run Now** (SlackFunction acks and async-invokes **ScheduleFunction** for that one schedule item; the worker DMs the admin the outcome). Slash commands and interactivity use **`SlackFunctionUrl`** from the PAXMiner manifest.
+Admins can manually send Kotter (and other reports) from Slack via **`/config-paxminer` → Schedule → Run Now** (SlackFunction acks and async-invokes **ScheduleFunction** for that one schedule item; the worker posts the outcome to `#paxminer_logs`). Slash commands and interactivity use **`SlackFunctionUrl`** from the PAXMiner manifest.
 
 With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if needed.
 
@@ -178,14 +178,14 @@ With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if nee
    - `/config-paxminer` — modal opens, **no** empty `""` ephemeral
    - **PAX Achievements** hub button — push modal works; Save persists
    - Channel fields are dropdowns (not raw IDs)
-   - **Schedule → Run Now** — runs immediately; admin receives a result DM
+   - **Schedule → Run Now** — runs immediately; outcome is posted to `#paxminer_logs`
 4. Confirm deploy smoke includes `paxminer-<stage>-paxminer-slack` warm ping (`statusCode: 200`).
 5. Re-apply the stage Slack app from **`PAXminer/manifest-<stage>.json`** after removing slash commands so Slack drops stale `/kotter-report`.
 
 ### Weaselbot → PAXMiner cutover checklist
 
 1. Deploy **PAXMiner** then **slackblast** (CI waits for PAXMiner when both run so **`AchievementsFunctionUrl`** is available).
-2. Run **`python migration/paxminer_migrate.py --env <stage> --all`** (weaselbot fold-in, scheduler tables/seed, drop legacy `regions` columns). Deploy updated application code **before** this step.
+2. Run **`python migration/paxminer_migrate.py --env <stage> --all`** (weaselbot fold-in, scheduler tables, **achievements versioning**, drop legacy `regions` columns). Deploy updated application code **before** the `drop-legacy-columns` phase. **Exception:** the `achievements` phase must run **before** shipping the PAXminer image that JOINs `achievement_versions` (`python migration/paxminer_migrate.py --env <stage> --phase achievements`). Slackblast and QSignups do not need a deploy for that phase.
 3. Update **PAXMiner** Slack app from **`PAXminer/manifest-<stage>.json`** (**`SlackFunctionUrl`**, `reactions:write`).
 4. Re-install or verify **slackblast** OAuth if needed; confirm achievement webhook env on slackblast Lambda.
 5. Configure **`/config-paxminer`**: achievement channel/toggles, then **Schedule** destinations (set channels for `specific_channels` rows; disable any unwanted fan-out).

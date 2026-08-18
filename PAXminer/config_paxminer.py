@@ -12,15 +12,18 @@ LOG = logging.getLogger(__name__)
 CALLBACK_ID = "paxminer-config-id"
 ACHIEVEMENTS_LIST_CALLBACK_ID = "paxminer-achievements-list-id"
 ACHIEVEMENT_EDIT_CALLBACK_ID = "paxminer-achievement-edit-id"
+ACHIEVEMENT_DELETE_CALLBACK_ID = "paxminer-achievement-delete-id"
 
 ADD_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_add"
 EDIT_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_edit"
 DELETE_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_delete"
+BACKFILL_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_backfill"
 SELECT_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_select"
 
 METRICS = ("posts", "qs", "distinct_aos", "posts_at_single_ao")
-ACTIVITIES = ("beatdown", "qsource", "any")
 PERIODS = ("week", "month", "year")
+RANGE_MODES = ("going_forward", "all_previous", "custom")
+APPLY_MODES = ("going_forward", "retroactive")
 
 _CODE_RE = re.compile(r"^[a-z0-9_]+$")
 
@@ -77,9 +80,15 @@ def _with_initial(options: list[dict], value: str | None) -> dict:
 
 
 def _achievement_summary(row: dict) -> str:
+    from achievements.activity import activity_list_from_rule
+
+    activities = activity_list_from_rule(row)
+    activity_label = ", ".join(activities) if activities else "all activities"
+    version = row.get("version") or row.get("version_key") or "v?"
+    enabled = "on" if int(row.get("enabled") or 1) else "off"
     return (
-        f"*{row['name']}* (`{row['code']}`) — "
-        f"{row['metric']}/{row['activity']}/{row['period']} ≥ {row['threshold']}"
+        f"*{row['name']}* (`{row['code']}` {version}) — "
+        f"{row.get('metric')}/{row.get('period')} ≥ {row.get('threshold')} · {activity_label} · {enabled}"
     )
 
 
@@ -238,17 +247,13 @@ def _achievements_list_modal(
                     {
                         "type": "button",
                         "action_id": DELETE_ACHIEVEMENT_ACTION_ID,
-                        "text": {"type": "plain_text", "text": "Delete selected"},
+                        "text": {"type": "plain_text", "text": "Delete / disable"},
                         "style": "danger",
-                        "confirm": {
-                            "title": {"type": "plain_text", "text": "Delete achievement?"},
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": "This permanently removes the achievement rule. Awards already granted are not deleted.",
-                            },
-                            "confirm": {"type": "plain_text", "text": "Delete"},
-                            "deny": {"type": "plain_text", "text": "Cancel"},
-                        },
+                    },
+                    {
+                        "type": "button",
+                        "action_id": BACKFILL_ACHIEVEMENT_ACTION_ID,
+                        "text": {"type": "plain_text", "text": "Backfill / re-run"},
                     },
                 ],
             }
@@ -269,16 +274,42 @@ def _achievement_edit_modal(
     team_id: str,
     regional_schema: str,
     row: dict | None = None,
+    *,
+    activity_options: list[str] | None = None,
 ) -> dict:
+    from datetime import date as _date
+
+    from achievements.activity import BUILTIN_ACTIVITY_TYPES, activity_list_from_rule
+
     is_edit = row is not None
-    return {
-        "type": "modal",
-        "callback_id": ACHIEVEMENT_EDIT_CALLBACK_ID,
-        "private_metadata": _metadata(team_id, regional_schema, row["id"] if row else None),
-        "title": {"type": "plain_text", "text": "Edit achievement" if is_edit else "Add achievement"},
-        "submit": {"type": "plain_text", "text": "Save"},
-        "close": {"type": "plain_text", "text": "Cancel"},
-        "blocks": [
+    src = dict(row or {})
+    options = activity_options or list(BUILTIN_ACTIVITY_TYPES)
+    activity_opts = _select_options(tuple(options))
+    selected_activities = activity_list_from_rule(src)
+    initial_activities = [o for o in activity_opts if o["value"] in selected_activities]
+    enabled = int(src.get("enabled") or 1) == 1
+    range_mode = "going_forward" if not is_edit else "all_previous"
+    if src.get("effective_from") is None and is_edit:
+        range_mode = "all_previous"
+    elif src.get("effective_from"):
+        range_mode = "custom" if is_edit else "going_forward"
+    blocks: list[dict] = []
+    if is_edit:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"{_achievement_summary(src)}\n"
+                        "_Code is immutable. Changing metric/activity/period/threshold "
+                        "creates a new version; a rename of the concept should be a new code._"
+                    ),
+                },
+            }
+        )
+    blocks.extend(
+        [
             {
                 "type": "input",
                 "block_id": "name",
@@ -286,7 +317,7 @@ def _achievement_edit_modal(
                 "element": {
                     "type": "plain_text_input",
                     "action_id": "val",
-                    "initial_value": (row or {}).get("name") or "",
+                    "initial_value": src.get("name") or "",
                 },
             },
             {
@@ -296,7 +327,7 @@ def _achievement_edit_modal(
                 "element": {
                     "type": "plain_text_input",
                     "action_id": "val",
-                    "initial_value": (row or {}).get("description") or "",
+                    "initial_value": src.get("description") or "",
                 },
             },
             {
@@ -306,9 +337,21 @@ def _achievement_edit_modal(
                 "element": {
                     "type": "plain_text_input",
                     "action_id": "val",
-                    "initial_value": (row or {}).get("verb") or "",
+                    "initial_value": src.get("verb") or "",
                 },
             },
+        ]
+    )
+    if is_edit:
+        blocks.append(
+            {
+                "type": "section",
+                "block_id": "code",
+                "text": {"type": "mrkdwn", "text": f"*Code:* `{src.get('code')}`"},
+            }
+        )
+    else:
+        blocks.append(
             {
                 "type": "input",
                 "block_id": "code",
@@ -316,7 +359,32 @@ def _achievement_edit_modal(
                 "element": {
                     "type": "plain_text_input",
                     "action_id": "val",
-                    "initial_value": (row or {}).get("code") or "",
+                    "initial_value": "",
+                },
+            }
+        )
+    blocks.extend(
+        [
+            {
+                "type": "input",
+                "block_id": "enabled",
+                "optional": True,
+                "label": {"type": "plain_text", "text": "Enabled"},
+                "element": {
+                    "type": "checkboxes",
+                    "action_id": "val",
+                    "options": [
+                        {
+                            "text": {"type": "plain_text", "text": "Award this achievement"},
+                            "value": "1",
+                        }
+                    ],
+                    **({"initial_options": [
+                        {
+                            "text": {"type": "plain_text", "text": "Award this achievement"},
+                            "value": "1",
+                        }
+                    ]} if enabled else {}),
                 },
             },
             {
@@ -327,22 +395,19 @@ def _achievement_edit_modal(
                     "type": "static_select",
                     "action_id": "val",
                     "options": _select_options(METRICS),
-                    **_with_initial(
-                        _select_options(METRICS), (row or {}).get("metric") or "posts"
-                    ),
+                    **_with_initial(_select_options(METRICS), src.get("metric") or "posts"),
                 },
             },
             {
                 "type": "input",
                 "block_id": "activity",
-                "label": {"type": "plain_text", "text": "Activity"},
+                "optional": True,
+                "label": {"type": "plain_text", "text": "Activity types (empty = all)"},
                 "element": {
-                    "type": "static_select",
+                    "type": "multi_static_select",
                     "action_id": "val",
-                    "options": _select_options(ACTIVITIES),
-                    **_with_initial(
-                        _select_options(ACTIVITIES), (row or {}).get("activity") or "beatdown"
-                    ),
+                    "options": activity_opts,
+                    **({"initial_options": initial_activities} if initial_activities else {}),
                 },
             },
             {
@@ -353,9 +418,7 @@ def _achievement_edit_modal(
                     "type": "static_select",
                     "action_id": "val",
                     "options": _select_options(PERIODS),
-                    **_with_initial(
-                        _select_options(PERIODS), (row or {}).get("period") or "year"
-                    ),
+                    **_with_initial(_select_options(PERIODS), src.get("period") or "year"),
                 },
             },
             {
@@ -365,7 +428,166 @@ def _achievement_edit_modal(
                 "element": {
                     "type": "plain_text_input",
                     "action_id": "val",
-                    "initial_value": str((row or {}).get("threshold") or 1),
+                    "initial_value": str(src.get("threshold") or 1),
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "range_mode",
+                "label": {"type": "plain_text", "text": "Effective date range"},
+                "element": {
+                    "type": "static_select",
+                    "action_id": "val",
+                    "options": [
+                        {
+                            "text": {"type": "plain_text", "text": "Going forward only"},
+                            "value": "going_forward",
+                        },
+                        {
+                            "text": {"type": "plain_text", "text": "All previous attendance dates"},
+                            "value": "all_previous",
+                        },
+                        {
+                            "text": {"type": "plain_text", "text": "Custom range"},
+                            "value": "custom",
+                        },
+                    ],
+                    **_with_initial(
+                        [
+                            {"text": {"type": "plain_text", "text": "Going forward only"}, "value": "going_forward"},
+                            {"text": {"type": "plain_text", "text": "All previous attendance dates"}, "value": "all_previous"},
+                            {"text": {"type": "plain_text", "text": "Custom range"}, "value": "custom"},
+                        ],
+                        range_mode,
+                    ),
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "effective_from",
+                "optional": True,
+                "label": {"type": "plain_text", "text": "From (custom range)"},
+                "element": {
+                    "type": "datepicker",
+                    "action_id": "val",
+                    **(
+                        {"initial_date": str(src["effective_from"])[:10]}
+                        if src.get("effective_from")
+                        else {"initial_date": _date.today().isoformat()}
+                    ),
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "effective_to",
+                "optional": True,
+                "label": {"type": "plain_text", "text": "Through (optional)"},
+                "element": {"type": "datepicker", "action_id": "val"},
+            },
+        ]
+    )
+    if is_edit:
+        blocks.append(
+            {
+                "type": "input",
+                "block_id": "apply_mode",
+                "label": {"type": "plain_text", "text": "If earning rules change"},
+                "element": {
+                    "type": "static_select",
+                    "action_id": "val",
+                    "options": [
+                        {
+                            "text": {"type": "plain_text", "text": "Going forward only"},
+                            "value": "going_forward",
+                        },
+                        {
+                            "text": {
+                                "type": "plain_text",
+                                "text": "Apply to previous (queue backfill)",
+                            },
+                            "value": "retroactive",
+                        },
+                    ],
+                    **_with_initial(
+                        [
+                            {"text": {"type": "plain_text", "text": "Going forward only"}, "value": "going_forward"},
+                            {
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": "Apply to previous (queue backfill)",
+                                },
+                                "value": "retroactive",
+                            },
+                        ],
+                        "going_forward",
+                    ),
+                },
+            }
+        )
+    return {
+        "type": "modal",
+        "callback_id": ACHIEVEMENT_EDIT_CALLBACK_ID,
+        "private_metadata": _metadata(team_id, regional_schema, src["id"] if is_edit else None),
+        "title": {"type": "plain_text", "text": "Edit achievement" if is_edit else "Add achievement"},
+        "submit": {"type": "plain_text", "text": "Save"},
+        "close": {"type": "plain_text", "text": "Cancel"},
+        "blocks": blocks,
+    }
+
+
+def _achievement_delete_modal(team_id: str, regional_schema: str, row: dict, award_count: int) -> dict:
+    name = row.get("name") or "this achievement"
+    text = (
+        f"This achievement has {award_count} award(s). Deleting it will also delete those "
+        f"{award_count} awards permanently. To stop awarding it while keeping PAX history, "
+        f"disable it instead."
+    )
+    if award_count == 0:
+        text = f"Delete *{name}*? It has no awards, so only the rule will be removed."
+    return {
+        "type": "modal",
+        "callback_id": ACHIEVEMENT_DELETE_CALLBACK_ID,
+        "private_metadata": _metadata(team_id, regional_schema, row["id"]),
+        "title": {"type": "plain_text", "text": "Delete or disable"},
+        "submit": {"type": "plain_text", "text": "Confirm"},
+        "close": {"type": "plain_text", "text": "Cancel"},
+        "blocks": [
+            {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+            {
+                "type": "input",
+                "block_id": "delete_action",
+                "label": {"type": "plain_text", "text": "What should happen?"},
+                "element": {
+                    "type": "static_select",
+                    "action_id": "val",
+                    "options": [
+                        {
+                            "text": {
+                                "type": "plain_text",
+                                "text": f"Disable and keep {award_count} award(s)",
+                            },
+                            "value": "disable",
+                        },
+                        {
+                            "text": {
+                                "type": "plain_text",
+                                "text": f"Delete achievement and all {award_count} award(s)",
+                            },
+                            "value": "delete",
+                        },
+                    ],
+                    **_with_initial(
+                        [
+                            {
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": f"Disable and keep {award_count} award(s)",
+                                },
+                                "value": "disable",
+                            }
+                        ],
+                        "disable" if award_count else "delete",
+                    ),
                 },
             },
         ],
@@ -395,43 +617,64 @@ def _parse_achievement_form(payload: dict) -> dict:
     state = payload.get("view", {}).get("state", {}).get("values", {})
 
     def _text(block_id: str) -> str:
-        return state.get(block_id, {}).get("val", {}).get("value", "").strip()
+        return (state.get(block_id, {}).get("val", {}) or {}).get("value", "") or ""
+        # strip below
 
     def _select(block_id: str) -> str:
-        sel = state.get(block_id, {}).get("val", {}).get("selected_option") or {}
-        return sel.get("value", "").strip()
+        sel = (state.get(block_id, {}).get("val", {}) or {}).get("selected_option") or {}
+        return (sel.get("value") or "").strip()
 
-    raw_threshold = _text("threshold")
+    def _multi(block_id: str) -> list[str]:
+        opts = (state.get(block_id, {}).get("val", {}) or {}).get("selected_options") or []
+        return [str(o.get("value")).strip() for o in opts if o.get("value")]
+
+    def _date(block_id: str) -> str | None:
+        return (state.get(block_id, {}).get("val", {}) or {}).get("selected_date")
+
+    def _checked(block_id: str) -> bool:
+        opts = (state.get(block_id, {}).get("val", {}) or {}).get("selected_options") or []
+        return any(o.get("value") == "1" for o in opts)
+
+    raw_threshold = _text("threshold").strip()
     if not raw_threshold:
         threshold = 1
     else:
-        # None signals non-numeric input for _validate_achievement.
         threshold = _to_int(raw_threshold, None)
 
+    enabled_state = state.get("enabled")
+    if enabled_state is None:
+        enabled = 1
+    else:
+        enabled = 1 if _checked("enabled") else 0
+
     return {
-        "name": _text("name"),
-        "description": _text("description"),
-        "verb": _text("verb"),
-        "code": _text("code"),
+        "name": _text("name").strip(),
+        "description": _text("description").strip(),
+        "verb": _text("verb").strip(),
+        "code": _text("code").strip(),
         "metric": _select("metric") or "posts",
-        "activity": _select("activity") or "beatdown",
+        "activity_list": _multi("activity"),
         "period": _select("period") or "year",
         "threshold": threshold,
+        "enabled": enabled,
+        "range_mode": _select("range_mode") or "going_forward",
+        "effective_from": _date("effective_from"),
+        "effective_to": _date("effective_to"),
+        "apply_mode": _select("apply_mode") or "going_forward",
     }
 
 
-def _validate_achievement(values: dict) -> dict[str, str]:
+def _validate_achievement(values: dict, *, require_code: bool = True) -> dict[str, str]:
     errors: dict[str, str] = {}
     if not values["name"]:
         errors["name"] = "Name is required"
-    if not values["code"]:
-        errors["code"] = "Code is required"
-    elif not _CODE_RE.match(values["code"]):
-        errors["code"] = "Use lowercase letters, numbers, and underscores"
+    if require_code:
+        if not values["code"]:
+            errors["code"] = "Code is required"
+        elif not _CODE_RE.match(values["code"]):
+            errors["code"] = "Use lowercase letters, numbers, and underscores"
     if values["metric"] not in METRICS:
         errors["metric"] = "Invalid metric"
-    if values["activity"] not in ACTIVITIES:
-        errors["activity"] = "Invalid activity"
     if values["period"] not in PERIODS:
         errors["period"] = "Invalid period"
     if values["threshold"] is None:
@@ -442,13 +685,81 @@ def _validate_achievement(values: dict) -> dict[str, str]:
 
 
 def _load_achievements(cur, schema: str) -> list[dict]:
-    cur.execute(f"SELECT * FROM `{schema}`.`achievements_list` ORDER BY name")
-    return list(cur.fetchall() or [])
+    cur.execute(
+        f"""
+        SELECT a.*, v.version, v.version_key, v.metric AS version_metric,
+               v.activity AS version_activity, v.period AS version_period,
+               v.threshold AS version_threshold, v.effective_from, v.effective_to
+        FROM `{schema}`.`achievements_list` a
+        LEFT JOIN `{schema}`.`achievement_versions` v
+          ON v.achievement_id = a.id AND v.superseded_at IS NULL
+        ORDER BY a.name
+        """
+    )
+    rows = list(cur.fetchall() or [])
+    for row in rows:
+        if row.get("version_metric"):
+            row["metric"] = row["version_metric"]
+        if row.get("version_period"):
+            row["period"] = row["version_period"]
+        if row.get("version_threshold") is not None:
+            row["threshold"] = row["version_threshold"]
+        if row.get("version_activity") is not None:
+            row["activity"] = row["version_activity"]
+        if row.get("version"):
+            row["version"] = f"v{row['version']}"
+    return rows
 
 
 def _load_achievement(cur, schema: str, achievement_id: int) -> dict | None:
-    cur.execute(f"SELECT * FROM `{schema}`.`achievements_list` WHERE id=%s", (achievement_id,))
-    return cur.fetchone()
+    cur.execute(
+        f"""
+        SELECT a.*, v.version, v.version_key, v.metric AS version_metric,
+               v.activity AS version_activity, v.period AS version_period,
+               v.threshold AS version_threshold, v.effective_from, v.effective_to
+        FROM `{schema}`.`achievements_list` a
+        LEFT JOIN `{schema}`.`achievement_versions` v
+          ON v.achievement_id = a.id AND v.superseded_at IS NULL
+        WHERE a.id=%s
+        """,
+        (achievement_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    if row.get("version_metric"):
+        row["metric"] = row["version_metric"]
+    if row.get("version_period"):
+        row["period"] = row["version_period"]
+    if row.get("version_threshold") is not None:
+        row["threshold"] = row["version_threshold"]
+    if row.get("version_activity") is not None:
+        row["activity"] = row["version_activity"]
+    if row.get("version"):
+        row["version"] = f"v{row['version']}"
+    return row
+
+
+def _load_activity_options(cur, schema: str) -> list[str]:
+    from achievements.activity import BUILTIN_ACTIVITY_TYPES
+
+    found: list[str] = []
+    try:
+        cur.execute(
+            f"""
+            SELECT DISTINCT activity_type FROM `{schema}`.`beatdowns`
+            WHERE activity_type IS NOT NULL AND activity_type != ''
+            ORDER BY activity_type
+            """
+        )
+        found = [str(r["activity_type"]) for r in (cur.fetchall() or []) if r.get("activity_type")]
+    except Exception:
+        found = []
+    seen: list[str] = []
+    for item in [*found, *BUILTIN_ACTIVITY_TYPES]:
+        if item and item not in seen:
+            seen.append(item)
+    return seen[:100]
 
 
 def _selected_achievement_id(payload: dict) -> int | None:
