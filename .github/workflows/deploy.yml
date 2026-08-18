@@ -47,6 +47,9 @@ jobs:
         id: filter
         if: github.event_name == 'push'
         with:
+          # Compare to the previous tip of this branch, not the merge commit's
+          # empty first-parent diff. Otherwise main→prod merge commits skip every stack.
+          base: ${{ github.event.before }}
           filters: |
             paxminer:
               - 'PAXminer/**'

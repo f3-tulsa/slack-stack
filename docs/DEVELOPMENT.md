@@ -17,9 +17,9 @@ CI’s **`requirements-sync`** job re-exports the slackblast lockfile export whe
 
 ## Dependabot automation (overview)
 
-Minor/patch Dependabot PRs auto-merge to **`main`**, then **`main` → `prod` → `test`**. Majors retarget to **`test`** first. The prod→test sync uses branch `chore/sync-prod-to-test` (not `head=prod`) so dependency-pin conflicts can be auto-resolved preferring prod.
+Minor/patch Dependabot PRs auto-merge to **`main`**, then **`main` → `prod`**. Majors retarget to **`test`** first. **tzdata** year bumps are treated as minor (CalVer) and stay on **`main`**. Prod is **not** auto-merged into test (that fought the Weaselbot fork and redeployed test after every patch). To copy prod onto test by hand: *Actions → Sync prod to test → Run workflow*. After cutover, the push-to-prod trigger can be restored on that workflow. Cherry-pick of `dependency-major` PRs from test onto main (`promote-major-to-main.yml`) is **paused** until cutover.
 
-See [`.github/workflows/dependabot-automerge.yml`](../.github/workflows/dependabot-automerge.yml), [`promote-main-to-prod.yml`](../.github/workflows/promote-main-to-prod.yml), and [`sync-prod-to-test.yml`](../.github/workflows/sync-prod-to-test.yml).
+See [`.github/workflows/dependabot-automerge.yml`](../.github/workflows/dependabot-automerge.yml), [`promote-main-to-prod.yml`](../.github/workflows/promote-main-to-prod.yml), [`sync-prod-to-test.yml`](../.github/workflows/sync-prod-to-test.yml), and [`promote-major-to-main.yml`](../.github/workflows/promote-major-to-main.yml).
 
 **Tests (mirrors `ci.yml`):** use a separate venv per app to avoid conflicting pins. Set `DB_ENCRYPTION_KEY` to any string ≥16 chars where handlers import encryption:
 
