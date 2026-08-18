@@ -82,12 +82,27 @@ def log_request(logger, body, next):
     return next()
 
 
+def operator_error_notice(error: BaseException) -> str:
+    """Short operator-facing reason for an unhandled Bolt error. No log-channel pointer."""
+    reason = ""
+    if isinstance(error, SlackApiError):
+        resp = error.response
+        if resp is not None and hasattr(resp, "get"):
+            reason = str(resp.get("error") or "").strip()
+    if not reason:
+        reason = str(error).strip() or type(error).__name__
+    reason = " ".join(reason.split())
+    if len(reason) > 200:
+        reason = reason[:197] + "..."
+    return f"Something went wrong: {reason}"
+
+
 @app.error
 def handle_error(error, body, logger, client):
     logger.exception("Unhandled Slack Bolt error: %s", error)
     user_id = body.get("user_id") or (body.get("user") or {}).get("id")
     channel_id = body.get("channel_id") or (body.get("channel") or {}).get("id")
-    notice = "Something went wrong — try again. If it keeps happening, check #paxminer_logs."
+    notice = operator_error_notice(error)
     if user_id and channel_id:
         try:
             client.chat_postEphemeral(
