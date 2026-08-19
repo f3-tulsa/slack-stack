@@ -17,6 +17,7 @@ LOG = logging.getLogger(__name__)
 CALLBACK_ID = "paxminer-config-id"
 ACHIEVEMENTS_LIST_CALLBACK_ID = "paxminer-achievements-list-id"
 ACHIEVEMENT_EDIT_CALLBACK_ID = "paxminer-achievement-edit-id"
+ACHIEVEMENT_RANGE_CONFIRM_CALLBACK_ID = "paxminer-achievement-range-confirm-id"
 ADD_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_add"
 EDIT_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_edit"
 DELETE_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_delete"
@@ -32,8 +33,6 @@ ACHIEVEMENTS_PAGE_NEXT_ACTION_ID = "paxminer_achievements_page_next"
 
 METRICS = ("posts", "qs", "distinct_aos", "posts_at_single_ao")
 PERIODS = ("week", "month", "year")
-RANGE_MODES = ("going_forward", "all_previous", "custom")
-APPLY_MODES = ("going_forward", "retroactive")
 
 _CODE_RE = re.compile(r"^[a-z0-9_]+$")
 
@@ -406,11 +405,31 @@ def _achievement_edit_modal(
     selected_activities = map_activities_to_options(activity_list_from_rule(src), options)
     initial_activities = [o for o in activity_opts if o["value"] in selected_activities]
     enabled = int(src.get("enabled") or 0) == 1 if is_edit else True
-    range_mode = "going_forward" if not is_edit else "all_previous"
-    if src.get("effective_from") is None and is_edit:
-        range_mode = "all_previous"
-    elif src.get("effective_from"):
-        range_mode = "custom" if is_edit else "going_forward"
+    from achievements.range import (
+        RANGE_FROM_CREATED,
+        display_start,
+        iso_date,
+        normalize_range_mode,
+        range_mode_options,
+    )
+
+    range_mode = (
+        RANGE_FROM_CREATED
+        if not is_edit
+        else normalize_range_mode(src.get("range_mode"), effective_from=src.get("effective_from"))
+    )
+    today = _date.today().isoformat()
+    start_display = display_start(
+        range_mode,
+        first_created=src.get("first_created"),
+        version_created=src.get("version_created"),
+        custom_from=src.get("effective_from"),
+        earliest_beatdown=src.get("earliest_beatdown"),
+        today=today,
+    )
+    no_end = src.get("effective_to") is None
+    end_display = iso_date(src.get("effective_to"))
+    range_opts = range_mode_options()
     blocks: list[dict] = []
     if is_edit:
         blocks.append(
@@ -556,42 +575,57 @@ def _achievement_edit_modal(
                 "element": {
                     "type": "static_select",
                     "action_id": "val",
-                    "options": [
-                        {
-                            "text": {"type": "plain_text", "text": "Going forward only"},
-                            "value": "going_forward",
-                        },
-                        {
-                            "text": {"type": "plain_text", "text": "All previous attendance dates"},
-                            "value": "all_previous",
-                        },
-                        {
-                            "text": {"type": "plain_text", "text": "Custom range"},
-                            "value": "custom",
-                        },
-                    ],
-                    **_with_initial(
-                        [
-                            {"text": {"type": "plain_text", "text": "Going forward only"}, "value": "going_forward"},
-                            {"text": {"type": "plain_text", "text": "All previous attendance dates"}, "value": "all_previous"},
-                            {"text": {"type": "plain_text", "text": "Custom range"}, "value": "custom"},
-                        ],
-                        range_mode,
-                    ),
+                    "options": range_opts,
+                    **_with_initial(range_opts, range_mode),
                 },
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": (
+                            "Start and end dates are set automatically unless you choose Custom."
+                        ),
+                    }
+                ],
             },
             {
                 "type": "input",
                 "block_id": "effective_from",
                 "optional": True,
-                "label": {"type": "plain_text", "text": "From (custom range)"},
+                "label": {"type": "plain_text", "text": "Start date"},
                 "element": {
                     "type": "datepicker",
                     "action_id": "val",
+                    "initial_date": start_display,
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "no_end_date",
+                "optional": True,
+                "label": {"type": "plain_text", "text": "End date"},
+                "element": {
+                    "type": "checkboxes",
+                    "action_id": "val",
+                    "options": [
+                        {
+                            "text": {"type": "plain_text", "text": "No end date"},
+                            "value": "1",
+                        }
+                    ],
                     **(
-                        {"initial_date": str(src["effective_from"])[:10]}
-                        if src.get("effective_from")
-                        else {"initial_date": _date.today().isoformat()}
+                        {
+                            "initial_options": [
+                                {
+                                    "text": {"type": "plain_text", "text": "No end date"},
+                                    "value": "1",
+                                }
+                            ]
+                        }
+                        if no_end
+                        else {}
                     ),
                 },
             },
@@ -599,49 +633,15 @@ def _achievement_edit_modal(
                 "type": "input",
                 "block_id": "effective_to",
                 "optional": True,
-                "label": {"type": "plain_text", "text": "Through (optional)"},
-                "element": {"type": "datepicker", "action_id": "val"},
+                "label": {"type": "plain_text", "text": "End date"},
+                "element": {
+                    "type": "datepicker",
+                    "action_id": "val",
+                    **({"initial_date": end_display} if end_display else {}),
+                },
             },
         ]
     )
-    if is_edit:
-        blocks.append(
-            {
-                "type": "input",
-                "block_id": "apply_mode",
-                "label": {"type": "plain_text", "text": "If earning rules change"},
-                "element": {
-                    "type": "static_select",
-                    "action_id": "val",
-                    "options": [
-                        {
-                            "text": {"type": "plain_text", "text": "Going forward only"},
-                            "value": "going_forward",
-                        },
-                        {
-                            "text": {
-                                "type": "plain_text",
-                                "text": "Apply to previous (re-evaluate awards)",
-                            },
-                            "value": "retroactive",
-                        },
-                    ],
-                    **_with_initial(
-                        [
-                            {"text": {"type": "plain_text", "text": "Going forward only"}, "value": "going_forward"},
-                            {
-                                "text": {
-                                    "type": "plain_text",
-                                    "text": "Apply to previous (re-evaluate awards)",
-                                },
-                                "value": "retroactive",
-                            },
-                        ],
-                        "going_forward",
-                    ),
-                },
-            }
-        )
     is_edit = bool(row and row.get("id"))
     if is_edit:
         aid = str(row["id"])
@@ -747,14 +747,23 @@ def _parse_achievement_form(payload: dict) -> dict:
         "period": _select("period") or "year",
         "threshold": threshold,
         "enabled": enabled,
-        "range_mode": _select("range_mode") or "going_forward",
+        "range_mode": _select("range_mode") or "from_created",
         "effective_from": _date("effective_from"),
         "effective_to": _date("effective_to"),
-        "apply_mode": _select("apply_mode") or "going_forward",
+        "no_end_date": _checked("no_end_date"),
     }
 
 
-def _validate_achievement(values: dict, *, require_code: bool = True) -> dict[str, str]:
+def _validate_achievement(
+    values: dict,
+    *,
+    require_code: bool = True,
+    first_created=None,
+    version_created=None,
+    earliest_beatdown=None,
+) -> dict[str, str]:
+    from achievements.range import range_validation_errors
+
     errors: dict[str, str] = {}
     if not values["name"]:
         errors["name"] = "Name is required"
@@ -771,6 +780,14 @@ def _validate_achievement(values: dict, *, require_code: bool = True) -> dict[st
         errors["threshold"] = "Enter a whole number"
     elif values["threshold"] < 1:
         errors["threshold"] = "Threshold must be at least 1"
+    errors.update(
+        range_validation_errors(
+            values,
+            first_created=first_created,
+            version_created=version_created,
+            earliest_beatdown=earliest_beatdown,
+        )
+    )
     return errors
 
 
@@ -779,7 +796,8 @@ def _load_achievements(cur, schema: str) -> list[dict]:
         f"""
         SELECT a.*, v.version, v.version_key, v.metric AS version_metric,
                v.activity AS version_activity, v.period AS version_period,
-               v.threshold AS version_threshold, v.effective_from, v.effective_to
+               v.threshold AS version_threshold, v.effective_from, v.effective_to,
+               v.range_mode, v.created AS version_created
         FROM `{schema}`.`achievements_list` a
         LEFT JOIN `{schema}`.`achievement_versions` v
           ON v.achievement_id = a.id AND v.superseded_at IS NULL
@@ -806,10 +824,14 @@ def _load_achievement(cur, schema: str, achievement_id: int) -> dict | None:
         f"""
         SELECT a.*, v.version, v.version_key, v.metric AS version_metric,
                v.activity AS version_activity, v.period AS version_period,
-               v.threshold AS version_threshold, v.effective_from, v.effective_to
+               v.threshold AS version_threshold, v.effective_from, v.effective_to,
+               v.range_mode, v.created AS version_created,
+               v1.created AS first_created
         FROM `{schema}`.`achievements_list` a
         LEFT JOIN `{schema}`.`achievement_versions` v
           ON v.achievement_id = a.id AND v.superseded_at IS NULL
+        LEFT JOIN `{schema}`.`achievement_versions` v1
+          ON v1.achievement_id = a.id AND v1.version = 1
         WHERE a.id=%s
         """,
         (achievement_id,),
@@ -1008,4 +1030,48 @@ def earliest_beatdown_date(cur, schema: str) -> str | None:
         return str(d)[:10] if d else None
     except Exception:
         return None
+
+
+def _hydrate_range_row(cur, schema: str, row: dict | None) -> dict | None:
+    """Attach earliest beatdown so the edit modal can prefill All attendance dates."""
+    if row is None:
+        return None
+    row["earliest_beatdown"] = earliest_beatdown_date(cur, schema)
+    return row
+
+
+def _achievement_range_confirm_modal(
+    team_id: str,
+    regional_schema: str,
+    *,
+    achievement_id: int,
+    values: dict,
+    award_count: int,
+    pax_count: int,
+) -> dict:
+    from achievements.range import range_confirm_text
+
+    return {
+        "type": "modal",
+        "callback_id": ACHIEVEMENT_RANGE_CONFIRM_CALLBACK_ID,
+        "private_metadata": _metadata(
+            team_id,
+            regional_schema,
+            achievement_id,
+            pending_values=values,
+            range_confirmed=True,
+        ),
+        "title": {"type": "plain_text", "text": "Confirm range change"},
+        "submit": {"type": "plain_text", "text": "Revoke and save"},
+        "close": {"type": "plain_text", "text": "Back"},
+        "blocks": [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": range_confirm_text(award_count, pax_count),
+                },
+            }
+        ],
+    }
 

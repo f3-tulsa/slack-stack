@@ -87,6 +87,12 @@ def _ensure_list_and_awarded_columns(cur, schema: str) -> dict:
         "enabled": _add_column(
             cur, schema, "achievements_list", "enabled", "TINYINT NOT NULL DEFAULT 1"
         ),
+        "reeval_queued_at": _add_column(
+            cur, schema, "achievements_list", "reeval_queued_at", "DATETIME DEFAULT NULL"
+        ),
+        "range_mode": _add_column(
+            cur, schema, "achievement_versions", "range_mode", "VARCHAR(24) DEFAULT NULL"
+        ),
     }
     typedefs = {
         "achievement_version_id": "INT DEFAULT NULL",
@@ -335,7 +341,10 @@ def _refresh_view(cur, schema: str) -> bool:
 def migrate_regional_schema(cur, schema: str) -> dict:
     _ensure_tables(cur, schema)
     added = _ensure_list_and_awarded_columns(cur, schema)
+    from achievements.range import backfill_range_mode
+
     versions = _seed_version_1(cur, schema)
+    range_modes = backfill_range_mode(cur, schema)
     awards = _backfill_award_periods(cur, schema)
     unique = _enforce_award_period_unique(cur, schema)
     classified = _classify_activity_types(cur, schema)
@@ -348,6 +357,7 @@ def migrate_regional_schema(cur, schema: str) -> dict:
         "award_unique": unique,
         "activity_type_classified": classified,
         "view_ok": view_ok,
+        "range_modes_backfilled": range_modes,
     }
 
 

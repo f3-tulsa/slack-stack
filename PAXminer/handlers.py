@@ -242,6 +242,7 @@ def schedule_handler(event, context):
                 actor=event.get("actor"),
                 start=start,
                 end=end,
+                automatic=bool(event.get("automatic")),
             )
             return {"statusCode": 200, "body": json.dumps({"ok": True, "result": result})}
         except Exception:

@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS `{schema}`.`achievements_list` (
   `period` varchar(16) NOT NULL DEFAULT 'year',
   `threshold` int NOT NULL DEFAULT 1,
   `enabled` tinyint NOT NULL DEFAULT 1,
+  `reeval_queued_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `code` (`code`),
   KEY `enabled` (`enabled`)
@@ -76,6 +77,7 @@ CREATE TABLE IF NOT EXISTS `{schema}`.`achievement_versions` (
   `threshold` int NOT NULL DEFAULT 1,
   `effective_from` date DEFAULT NULL,
   `effective_to` date DEFAULT NULL,
+  `range_mode` varchar(24) DEFAULT NULL,
   `superseded_at` datetime DEFAULT NULL,
   `created_by` varchar(255) DEFAULT NULL,
   `created` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -297,6 +297,7 @@ def run_summary_line(
     duration_s: float | None,
     actor: str | None = None,
     achievement_name: str | None = None,
+    automatic: bool = False,
 ) -> str:
     held_bits = []
     if held_grandfathered:
@@ -314,8 +315,13 @@ def run_summary_line(
             f"{start.isoformat() if start else 'all-time'} to {end.isoformat() if end else 'present'}"
         )
         unchanged = held
+        header = (
+            "Achievement re-evaluate ran automatically after a rule change"
+            if automatic
+            else f"Achievement re-evaluate triggered by {who}"
+        )
         return format_log_message(
-            f"Achievement re-evaluate triggered by {who}",
+            header,
             status="success",
             duration_s=duration_s,
             fields=[
