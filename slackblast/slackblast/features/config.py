@@ -1,4 +1,5 @@
 import copy
+import os
 import json
 from logging import Logger
 
@@ -12,7 +13,7 @@ from utilities.helper_functions import (
     safe_get,
     update_local_region_records,
 )
-from utilities.slack import actions, forms
+from utilities.slack import actions, forms, orm
 
 
 def build_config_form(body: dict, client: WebClient, logger: Logger, context: dict, region_record: Region):
@@ -22,6 +23,8 @@ def build_config_form(body: dict, client: WebClient, logger: Logger, context: di
 
     if user_info_dict["user"]["is_admin"]:
         config_form = copy.deepcopy(forms.CONFIG_FORM)
+        team_id = context.get("team_id") or safe_get(body, "team_id") or safe_get(body, "team", "id")
+        attach_paxminer_settings_button(config_form, region_record, team_id=team_id)
     else:
         config_form = copy.deepcopy(forms.CONFIG_NO_PERMISSIONS_FORM)
 
@@ -152,3 +155,37 @@ def handle_config_general_post(body: dict, client: WebClient, logger: Logger, co
     )
     update_local_region_records(context["team_id"])
     logger.info(json.dumps({"event_type": "successful_config_update", "team_name": region_record.workspace_name}))
+
+
+def attach_paxminer_settings_button(config_form, region_record, *, team_id: str | None = None) -> bool:
+    """Add a PAXMiner Settings deep-link when the workspace is linked and PM_SLACK_APP_ID is set.
+
+    Returns True when the button replaced the `/config-paxminer` context line.
+    """
+    if not getattr(region_record, "paxminer_schema", None):
+        return False
+    app_id = (os.environ.get("PM_SLACK_APP_ID") or "").strip()
+    if not app_id:
+        return False
+    url = f"https://slack.com/app_redirect?app={app_id}&tab=home"
+    if team_id:
+        url += f"&team={team_id}"
+    for block in config_form.blocks:
+        elements = getattr(block, "elements", None)
+        if elements is not None:
+            elements.append(
+                orm.ButtonElement(
+                    label=":pick: PAXMiner Settings",
+                    action=actions.CONFIG_PAXMINER_SETTINGS,
+                    url=url,
+                )
+            )
+            break
+    else:
+        return False
+    config_form.blocks = [
+        b
+        for b in config_form.blocks
+        if "/config-paxminer" not in str(getattr(getattr(b, "element", None), "initial_value", "") or "")
+    ]
+    return True

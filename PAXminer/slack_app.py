@@ -54,7 +54,7 @@ from config_paxminer import (
     uniquify_achievement_code,
 )
 from paxminer_db import connect_from_env, paxminer_schema_from_env
-from slack_http import is_http_request, is_slack_admin, notify_admin_required
+from slack_http import ADMIN_REQUIRED_TEXT, is_http_request, is_slack_admin, notify_admin_required
 
 LOCAL_DEVELOPMENT = not os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
 
@@ -182,7 +182,7 @@ def handle_config_command(ack, body, client, logger, respond):
     trigger_id = body.get("trigger_id", "")
 
     if not is_slack_admin(user_id, client=client):
-        ack(text="Workspace admin required.", response_type="ephemeral")
+        ack(text=ADMIN_REQUIRED_TEXT, response_type="ephemeral")
         return
 
     pm = paxminer_schema_from_env()
@@ -916,38 +916,81 @@ from slack_schedule import register_schedule_listeners  # noqa: E402
 register_schedule_listeners(app)
 
 
+HOME_OPEN_SETTINGS_ACTION_ID = "paxminer_home_open_settings"
+
+
+def _home_view(*, admin: bool) -> dict:
+    """App Home for every user; Settings control is admin-only."""
+    blocks: list[dict] = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": "PAXMiner"},
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "_Home dashboard charts coming soon._",
+            },
+        },
+    ]
+    if admin:
+        blocks.append(
+            {
+                "type": "actions",
+                "block_id": "home_settings",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": HOME_OPEN_SETTINGS_ACTION_ID,
+                        "text": {"type": "plain_text", "text": "PAXMiner Settings"},
+                        "style": "primary",
+                    }
+                ],
+            }
+        )
+    return {"type": "home", "blocks": blocks}
+
+
 @app.event("app_home_opened")
 def handle_app_home_opened(client, event, logger):
-    """Minimal Home tab stub (full dashboard is a later plan)."""
+    """Publish Home for every user; Settings button is admin-only."""
     user_id = event.get("user")
     if not user_id:
         return
     try:
-        client.views_publish(
-            user_id=user_id,
-            view={
-                "type": "home",
-                "blocks": [
-                    {
-                        "type": "header",
-                        "text": {"type": "plain_text", "text": "PAXMiner"},
-                    },
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": (
-                                "Configure reports and schedules with `/config-paxminer` "
-                                "(workspace admins).\n\n"
-                                "_Home dashboard charts coming soon._"
-                            ),
-                        },
-                    },
-                ],
-            },
-        )
+        admin = is_slack_admin(user_id, client=client)
+        client.views_publish(user_id=user_id, view=_home_view(admin=admin))
     except Exception:
         logger.exception("app_home_opened views.publish failed")
+
+
+def handle_home_open_settings(ack, body, client, logger):
+    """Named listener for the Home Settings button — importable for unit tests."""
+    user_id = (body.get("user") or {}).get("id", "")
+    ack()
+    if not is_slack_admin(user_id, client=client):
+        notify_admin_required(client, body)
+        return
+    team_id = (body.get("team") or {}).get("id") or body.get("team_id") or ""
+    trigger_id = body.get("trigger_id") or ""
+    pm = paxminer_schema_from_env()
+    conn = connect_from_env(_registry_db())
+    try:
+        with conn.cursor() as cur:
+            region = _region_for_team(cur, pm, team_id)
+        if not region or not trigger_id:
+            return
+        region = dict(region)
+        region["team_id"] = team_id
+        _open_config_modal(client, trigger_id, region, logger)
+    except Exception:
+        logger.exception("home settings open failed")
+    finally:
+        conn.close()
+
+
+app.action(HOME_OPEN_SETTINGS_ACTION_ID)(handle_home_open_settings)
 
 
 def handler(event, context):

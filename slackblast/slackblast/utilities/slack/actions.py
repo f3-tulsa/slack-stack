@@ -64,6 +64,7 @@ CONFIG_GENERAL_CALLBACK_ID = "config-general-id"
 CONFIG_EMAIL = "email"
 CONFIG_EMAIL_CALLBACK_ID = "config-email-id"
 CONFIG_WELCOME_MESSAGE = "welcome_message"
+CONFIG_PAXMINER_SETTINGS = "config_paxminer_settings"
 
 WELCOME_MESSAGE_CONFIG_CALLBACK_ID = "welcome-message-config-id"
 WELCOME_DM_TEMPLATE = "welcome-dm-template"

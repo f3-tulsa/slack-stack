@@ -75,7 +75,60 @@ def test_config_command_non_admin_acks_ephemeral_once():
         handle_config_command(ack, body, client, logger, respond)
 
     assert ack.call_count == 1
-    assert "admin" in ack.call_args.kwargs.get("text", "").lower()
+    text = ack.call_args.kwargs.get("text", "")
+    assert "admin" in text.lower()
+    assert "PAXMiner settings" in text
+    client.views_open.assert_not_called()
+
+
+def test_home_view_settings_button_is_admin_only():
+    from slack_app import HOME_OPEN_SETTINGS_ACTION_ID, _home_view
+
+    guest = _home_view(admin=False)
+    assert guest["type"] == "home"
+    assert all(b.get("block_id") != "home_settings" for b in guest["blocks"])
+    assert HOME_OPEN_SETTINGS_ACTION_ID not in str(guest)
+
+    admin = _home_view(admin=True)
+    actions = next(b for b in admin["blocks"] if b.get("block_id") == "home_settings")
+    assert actions["elements"][0]["action_id"] == HOME_OPEN_SETTINGS_ACTION_ID
+
+
+def test_home_open_settings_opens_hub_for_admin():
+    from slack_app import handle_home_open_settings
+
+    ack = MagicMock()
+    client = MagicMock()
+    logger = MagicMock()
+    body = {"user": {"id": "U1"}, "team": {"id": "T1"}, "trigger_id": "trig"}
+    region = {"region": "tulsa", "schema_name": "f3tulsa_test"}
+
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch("slack_app.connect_from_env") as mock_conn:
+            mock_cur = MagicMock()
+            mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+            mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+            with patch("slack_app._region_for_team", return_value=region):
+                handle_home_open_settings(ack, body, client, logger)
+
+    ack.assert_called_once_with()
+    client.views_open.assert_called_once()
+
+
+def test_home_open_settings_rejects_non_admin():
+    from slack_app import handle_home_open_settings
+
+    ack = MagicMock()
+    client = MagicMock()
+    logger = MagicMock()
+    body = {"user": {"id": "U1"}, "team": {"id": "T1"}, "trigger_id": "trig"}
+
+    with patch("slack_app.is_slack_admin", return_value=False):
+        with patch("slack_app.notify_admin_required") as notice:
+            handle_home_open_settings(ack, body, client, logger)
+
+    ack.assert_called_once_with()
+    notice.assert_called_once()
     client.views_open.assert_not_called()
 
 
