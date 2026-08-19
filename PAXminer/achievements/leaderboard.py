@@ -58,11 +58,16 @@ def build_leaderboard_message(
     users: pd.DataFrame,
     *,
     known_ids: set[str] | None = None,
+    title: str | None = None,
+    empty: str | None = None,
+    top_n: int | None = None,
 ) -> tuple[str, list[dict]]:
-    title = "*Achievement leaderboard (YTD)*"
+    heading = (title or "Achievement leaderboard").strip() or "Achievement leaderboard"
+    empty_text = empty or "No awards yet."
+    limit = int(top_n or CAP)
     if awarded.empty:
-        text = f"{title}\n\nNo awards yet this year."
-        return text, [header("Achievement leaderboard (YTD)"), section("No awards yet this year.")]
+        text = f"*{heading}*\n\n{empty_text}"
+        return text, [header(heading[:150]), section(empty_text)]
     counts = awarded.groupby("pax_id", as_index=False).agg(cnt=("id", "count"))
     if not users.empty:
         users_df = users.rename(columns={"user_name": "display_name", "user_id": "pax_id"})
@@ -70,14 +75,14 @@ def build_leaderboard_message(
         counts["display_name"] = counts["display_name"].fillna(counts["pax_id"])
     else:
         counts["display_name"] = counts["pax_id"]
-    counts = counts.sort_values(["cnt", "display_name", "pax_id"], ascending=[False, True, True]).head(CAP)
+    counts = counts.sort_values(["cnt", "display_name", "pax_id"], ascending=[False, True, True]).head(max(limit, 1))
     body_lines = [
         f"\n- {mention(row['pax_id'], row['display_name'], known_ids=known_ids)}: "
         f"{int(row['cnt'])} awards"
         for _, row in counts.iterrows()
     ]
-    text = title + "\n" + "".join(body_lines)
-    blocks = [header("Achievement leaderboard (YTD)")]
+    text = f"*{heading}*\n" + "".join(body_lines)
+    blocks = [header(heading[:150])]
     blocks.extend(chunk_sections(["".join(body_lines).lstrip("\n")]))
     return text, blocks
 
@@ -90,6 +95,8 @@ def build_almost_there_message(
     users: pd.DataFrame,
     *,
     known_ids: set[str] | None = None,
+    title: str | None = None,
+    top_n: int | None = None,
 ) -> tuple[str, list[dict]]:
     candidates: list[tuple[int, str, str]] = []
     awarded_keys = set()
@@ -126,23 +133,24 @@ def build_almost_there_message(
             )
 
     candidates.sort(key=lambda x: (x[0], x[1]))
-    candidates = candidates[:CAP]
+    candidates = candidates[: max(int(top_n or CAP), 1)]
+    heading = (title or "Almost there").strip() or "Almost there"
     if not candidates:
         return "", []
     body_lines = [f"\n- {line}" for _, _, line in candidates]
-    text = "\n\n*Almost there*\n" + "".join(body_lines)
-    blocks = [section("*Almost there*")]
+    text = f"\n\n*{heading}*\n" + "".join(body_lines)
+    blocks = [section(f"*{heading}*")]
     blocks.extend(chunk_sections(["".join(body_lines).lstrip("\n")]))
     return text, blocks
 
 
-def run_leaderboard_for_region(
+def _load_region_award_inputs(
     conn,
     pm_schema: str,
     region_row: dict,
     *,
-    dry_run: bool = False,
     window: tuple[date, date] | None = None,
+    load_nation: bool = False,
 ) -> dict:
     schema = region_row.get("schema_name")
     channel = resolve_achievement_channel(conn, pm_schema, schema or "", region_row)
@@ -175,41 +183,129 @@ def run_leaderboard_for_region(
         cur.execute(f"SELECT user_id, user_name FROM `{schema}`.`users`")
         users = pd.DataFrame(cur.fetchall())
 
-    # Single-region only; cross-region / down-range attendance needs the F3 Nation API.
-    schemas = [schema]
-    awarded = pd.DataFrame(awarded_rows) if awarded_rows else pd.DataFrame(columns=["pax_id", "id", "achievement_id"])
-    nation = load_nation_attendance(conn, schemas)
-    nation = attach_home_regions(conn, nation, schemas)
-
-    known_ids = None
-    if not dry_run and token_enc:
-        known_ids = workspace_user_ids(slack_client(decrypt_field(token_enc)))
-
-    text, blocks = build_leaderboard_message(awarded, users, known_ids=known_ids)
-    almost_text, almost_blocks = build_almost_there_message(
-        nation, rules, awarded, schema, users, known_ids=known_ids
+    awarded = (
+        pd.DataFrame(awarded_rows)
+        if awarded_rows
+        else pd.DataFrame(columns=["pax_id", "id", "achievement_id"])
     )
+    nation = None
+    if load_nation:
+        # Single-region only; cross-region / down-range attendance needs the F3 Nation API.
+        nation = attach_home_regions(conn, load_nation_attendance(conn, [schema]), [schema])
+    return {
+        "schema": schema,
+        "channel": channel,
+        "token_enc": token_enc,
+        "rules": rules,
+        "awarded": awarded,
+        "users": users,
+        "nation": nation,
+    }
 
-    result: dict = {}
-    if window is not None:
-        result["window_start"] = window[0].isoformat()
-        result["window_end"] = window[1].isoformat()
 
+def _post_or_preview(
+    *,
+    token_enc: str,
+    channel: str,
+    text: str,
+    blocks: list[dict],
+    dry_run: bool,
+    extra: dict,
+) -> dict:
     if dry_run:
-        return {
-            **result,
-            "chars": len(text) + len(almost_text),
-            "dry_run": True,
-            "text": text + almost_text,
-            "blocks": list(blocks) + list(almost_blocks),
-        }
-
+        return {**extra, "chars": len(text), "dry_run": True, "text": text, "blocks": list(blocks)}
     token = decrypt_field(token_enc)
     client = slack_client(token)
-    all_blocks = list(blocks) + list(almost_blocks)
-    for chunk in chunk_messages(all_blocks):
+    for chunk in chunk_messages(list(blocks)):
         post_message(client, channel, fallback_text(chunk), blocks=chunk)
-    return {**result, "posted": True, "text": text + almost_text, "blocks": all_blocks}
+    return {**extra, "posted": True, "text": text, "blocks": list(blocks)}
+
+
+def run_leaderboard_for_region(
+    conn,
+    pm_schema: str,
+    region_row: dict,
+    *,
+    dry_run: bool = False,
+    window: tuple[date, date] | None = None,
+    title: str | None = None,
+    top_n: int | None = None,
+) -> dict:
+    loaded = _load_region_award_inputs(conn, pm_schema, region_row, window=window)
+    if loaded.get("skipped"):
+        return loaded
+
+    known_ids = None
+    if not dry_run and loaded["token_enc"]:
+        known_ids = workspace_user_ids(slack_client(decrypt_field(loaded["token_enc"])))
+
+    empty = "No awards yet."
+    if window is not None:
+        from scheduling import format_window_label
+
+        empty = f"No awards in {format_window_label(*window)}."
+    text, blocks = build_leaderboard_message(
+        loaded["awarded"],
+        loaded["users"],
+        known_ids=known_ids,
+        title=title,
+        empty=empty,
+        top_n=top_n,
+    )
+    extra: dict = {}
+    if window is not None:
+        extra["window_start"] = window[0].isoformat()
+        extra["window_end"] = window[1].isoformat()
+    return _post_or_preview(
+        token_enc=loaded["token_enc"],
+        channel=loaded["channel"],
+        text=text,
+        blocks=blocks,
+        dry_run=dry_run,
+        extra=extra,
+    )
+
+
+def run_almost_there_for_region(
+    conn,
+    pm_schema: str,
+    region_row: dict,
+    *,
+    dry_run: bool = False,
+    title: str | None = None,
+    top_n: int | None = None,
+) -> dict:
+    loaded = _load_region_award_inputs(
+        conn, pm_schema, region_row, load_nation=True
+    )
+    if loaded.get("skipped"):
+        return loaded
+
+    known_ids = None
+    if not dry_run and loaded["token_enc"]:
+        known_ids = workspace_user_ids(slack_client(decrypt_field(loaded["token_enc"])))
+
+    text, blocks = build_almost_there_message(
+        loaded["nation"],
+        loaded["rules"],
+        loaded["awarded"],
+        loaded["schema"],
+        loaded["users"],
+        known_ids=known_ids,
+        title=title,
+        top_n=top_n,
+    )
+    if not text:
+        text = f"*{title or 'Almost there'}*\n\nNobody is within striking distance."
+        blocks = [section(text)]
+    return _post_or_preview(
+        token_enc=loaded["token_enc"],
+        channel=loaded["channel"],
+        text=text,
+        blocks=blocks,
+        dry_run=dry_run,
+        extra={},
+    )
 
 
 def run_leaderboard(conn, pm_schema: str, *, dry_run: bool = False) -> list[dict]:

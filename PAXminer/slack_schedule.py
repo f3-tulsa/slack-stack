@@ -25,6 +25,7 @@ from config_schedule import (
     OPEN_REPORTS_ACTION_ID,
     OPEN_SCHEDULE_ACTION_ID,
     REPORT_EDIT_CALLBACK_ID,
+    REPORT_TEMPLATE_ACTION_ID,
     REPORT_WINDOW_ACTION_ID,
     REPORTS_LIST_CALLBACK_ID,
     REPORTS_PAGE_NEXT_ACTION_ID,
@@ -1015,6 +1016,19 @@ def register_schedule_listeners(app) -> None:
         finally:
             conn.close()
 
+    @app.action(REPORT_TEMPLATE_ACTION_ID)
+    def report_template_change(ack, body, client, logger):
+        if not _admin_ack(ack, body, client):
+            return
+        team_id, regional_schema, region = _ctx(body)
+        meta = _parse_metadata((body.get("view") or {}).get("private_metadata"))
+        state = body.get("view", {}).get("state", {}).get("values", {})
+        draft = draft_from_report_state(state, meta.get("draft"))
+        client.views_update(
+            view_id=body["view"]["id"],
+            view=_report_edit_modal(team_id, regional_schema, None, draft=draft),
+        )
+
     @app.view(REPORTS_LIST_CALLBACK_ID)
     def reports_list_submit(ack, body, client, logger):
         user_id = (body.get("user") or {}).get("id", "")
@@ -1070,7 +1084,7 @@ def register_schedule_listeners(app) -> None:
                             f"""
                             UPDATE `{pm}`.`region_report_definitions`
                             SET name=%s, time_window_type=%s, window_days=%s,
-                                window_start=%s, window_end=%s, is_customized=%s
+                                window_start=%s, window_end=%s, top_n=%s, is_customized=%s
                             WHERE id=%s AND schema_name=%s
                             """,
                             (
@@ -1079,6 +1093,7 @@ def register_schedule_listeners(app) -> None:
                                 values.get("window_days"),
                                 values.get("window_start"),
                                 values.get("window_end"),
+                                values.get("top_n"),
                                 is_customized,
                                 values["definition_id"],
                                 regional_schema,
@@ -1118,12 +1133,13 @@ def register_schedule_listeners(app) -> None:
                             (schema_name, code, name, report_type, is_builtin, is_customized,
                              kind, source, fields, metric, group_by, top_n, time_window_type,
                              window_days, window_start, window_end)
-                            VALUES (%s,%s,%s,'custom_report',0,0,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                            VALUES (%s,%s,%s,%s,0,0,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                             """,
                             (
                                 regional_schema,
                                 values["code"],
                                 values["name"],
+                                values.get("report_type") or "custom_report",
                                 values["kind"],
                                 values["source"],
                                 fields_json,

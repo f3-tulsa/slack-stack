@@ -28,7 +28,6 @@ if str(_PAX_ROOT) not in sys.path:
 from scheduling import (  # noqa: E402
     default_chart_window,
     format_window_label,
-    is_calendar_month,
     window_file_tag,
 )
 
@@ -42,6 +41,8 @@ def run_region_leaderboard(
     plot_dir: str | Path = "/tmp/paxminer_plots",
     destinations: list[str] | None = None,
     window: tuple[date, date] | None = None,
+    title: str | None = None,
+    top_n: int = 20,
 ) -> dict:
     plot_base = Path(plot_dir) / schema
     plot_base.mkdir(parents=True, exist_ok=True)
@@ -53,7 +54,9 @@ def run_region_leaderboard(
     start, end = window or default_chart_window()
     label = format_window_label(start, end)
     tag = window_file_tag(start, end)
-    include_ytd = is_calendar_month(start, end)
+    heading = title or f"Leaderboard - {label}"
+    limit = max(1, int(top_n or 20))
+    include_ytd = False
     total_graphs = 0
     channels = list(destinations) if destinations else ([firstf] if firstf else [])
     posted_channels: list[dict] = []
@@ -81,9 +84,9 @@ def run_region_leaderboard(
         where Date BETWEEN %s AND %s
         group by PAX
         order by count(1) desc
-        limit 20
+        limit %s
         """
-            val = (start.isoformat(), end.isoformat())
+            val = (start.isoformat(), end.isoformat(), limit)
             cursor.execute(sql, val)
             posts = cursor.fetchall()
             posts_df = pd.DataFrame(posts, columns=["PAX", "UniqueAOs", "Posts"])
@@ -92,28 +95,20 @@ def run_region_leaderboard(
 
     if not posts_df.empty:
         posts_df.plot.bar(x="PAX", color={"UniqueAOs": "blue", "Posts": "orange"})
-        plt.title("Leaderboard - " + label)
+        plt.title(heading)
         plt.xlabel("")
         plt.ylabel("# Posts for " + label)
         out_m = plot_base / f"PAX_Leaderboard_{region}{tag}.jpg"
         plt.savefig(str(out_m), bbox_inches="tight")
-        if include_ytd:
-            comment = (
-                "Hey "
-                + region
-                + "! Check out the current posting leaderboards for "
-                + label
-                + " as well as for Year to Date (includes all beatdowns, rucks, Qsource, etc.). "
-                "Here are the top 20 posters! T-CLAPS to these HIMs."
-            )
-        else:
-            comment = (
-                "Hey "
-                + region
-                + "! Check out the current posting leaderboards for "
-                + label
-                + ". Here are the top 20 posters! T-CLAPS to these HIMs."
-            )
+        comment = (
+            "Hey "
+            + region
+            + "! Check out "
+            + heading
+            + ". Here are the top "
+            + str(limit)
+            + " posters! T-CLAPS to these HIMs."
+        )
         for ch in channels:
             try:
                 try:
