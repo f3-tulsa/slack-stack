@@ -92,8 +92,8 @@ def display_start(
     custom_from=None,
     earliest_beatdown=None,
     today: str | None = None,
-) -> str:
-    """Datepicker prefill — never empty."""
+) -> str | None:
+    """Human-facing start for helper text. Pickers stay empty unless Custom."""
     stored = computed_start(
         mode,
         first_created=first_created,
@@ -103,7 +103,37 @@ def display_start(
     )
     if stored:
         return stored
-    return iso_date(earliest_beatdown) or (today or _today())
+    if mode == RANGE_ALL_ATTENDANCE:
+        return iso_date(earliest_beatdown)
+    return today or _today()
+
+
+def range_mode_hint(
+    mode: str,
+    *,
+    first_created=None,
+    version_created=None,
+    earliest_beatdown=None,
+    today: str | None = None,
+) -> str:
+    """Context under the mode picker. Dates themselves live in Custom pickers only."""
+    mode = normalize_range_mode(mode)
+    shown = display_start(
+        mode,
+        first_created=first_created,
+        version_created=version_created,
+        earliest_beatdown=earliest_beatdown,
+        today=today,
+    )
+    if mode == RANGE_CUSTOM:
+        return "Start date is required. Leave End date empty for no end date."
+    if mode == RANGE_ALL_ATTENDANCE:
+        if shown:
+            return f"Awards count from all attendance dates (earliest on record: {shown})."
+        return "Awards count from all attendance dates."
+    if mode == RANGE_SINCE_RULES_CHANGED:
+        return f"Awards count from {shown} (when the earning rules last changed)."
+    return f"Awards count from {shown} (when this achievement was created)."
 
 
 def range_mode_options() -> list[dict]:
@@ -124,35 +154,18 @@ def range_validation_errors(
     earliest_beatdown=None,
     today: str | None = None,
 ) -> dict[str, str]:
-    """Validate submitted pickers against the selected mode."""
-    today = today or _today()
+    """Validate Custom pickers. Non-custom modes ignore leftover picker values."""
     mode = normalize_range_mode(values.get("range_mode"), effective_from=values.get("effective_from"))
     errors: dict[str, str] = {}
     if mode not in RANGE_MODES:
         errors["range_mode"] = "Choose an effective date range"
         return errors
     submitted_from = iso_date(values.get("effective_from"))
-    no_end = bool(values.get("no_end_date"))
-    submitted_to = None if no_end else iso_date(values.get("effective_to"))
-    expected_display = display_start(
-        mode,
-        first_created=first_created,
-        version_created=version_created,
-        custom_from=submitted_from,
-        earliest_beatdown=earliest_beatdown,
-        today=today,
-    )
-    if mode == RANGE_CUSTOM:
-        if not submitted_from:
-            errors["effective_from"] = "Start date is required for a custom range"
-    elif submitted_from and submitted_from != expected_display:
-        errors["effective_from"] = (
-            "This start date is set by the selected range. Choose Custom to pick your own."
-        )
-    if mode != RANGE_CUSTOM and submitted_to:
-        errors["effective_to"] = (
-            "End date is automatic unless you choose Custom. Check No end date, or switch to Custom."
-        )
+    submitted_to = iso_date(values.get("effective_to"))
+    if mode != RANGE_CUSTOM:
+        return errors
+    if not submitted_from:
+        errors["effective_from"] = "Start date is required for a custom range"
     if submitted_from and submitted_to and submitted_to < submitted_from:
         errors["effective_to"] = "End date must be on or after the start date"
     return errors
@@ -169,8 +182,10 @@ def resolve_stored_range(
     """Return ``(range_mode, effective_from, effective_to)`` to persist."""
     today = today or _today()
     mode = normalize_range_mode(values.get("range_mode"), effective_from=values.get("effective_from"))
-    no_end = bool(values.get("no_end_date"))
-    to_date = None if no_end else iso_date(values.get("effective_to"))
+    if mode == RANGE_CUSTOM:
+        to_date = iso_date(values.get("effective_to"))
+    else:
+        to_date = None
     if mode == RANGE_SINCE_RULES_CHANGED and minting:
         from_date = today
     else:
