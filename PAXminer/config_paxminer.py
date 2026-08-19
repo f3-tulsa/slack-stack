@@ -955,11 +955,22 @@ def restore_achievement_defaults(cur, schema: str) -> int:
 
 
 def delete_all_achievements(cur, schema: str) -> dict[str, int]:
+    """Wipe awards, versions, and rules. Counts awards/PAX before the delete."""
+    cur.execute(
+        f"SELECT COUNT(*) AS awards, COUNT(DISTINCT pax_id) AS pax "
+        f"FROM `{schema}`.`achievements_awarded`"
+    )
+    row = cur.fetchone() or {}
+    awards = int(row.get("awards") or 0)
+    pax = int(row.get("pax") or 0)
     cur.execute(f"DELETE FROM `{schema}`.`achievements_awarded`")
-    awards = int(cur.rowcount or 0)
     cur.execute(f"DELETE FROM `{schema}`.`achievement_versions`")
     cur.execute(f"DELETE FROM `{schema}`.`achievements_list`")
-    return {"awards": awards, "achievements": int(cur.rowcount or 0)}
+    return {
+        "awards": awards,
+        "pax": pax,
+        "achievements": int(cur.rowcount or 0),
+    }
 
 
 def achievement_delete_confirm_text(code: str, award_count: int, pax_count: int) -> str:
