@@ -304,8 +304,8 @@ def register_schedule_listeners(app) -> None:
         try:
             with conn.cursor() as cur:
                 defs = load_definitions(cur, pm, regional_schema)
-            client.views_push(
-                trigger_id=body["trigger_id"],
+            client.views_update(
+                view_id=body["view"]["id"],
                 view=_schedule_edit_modal(
                     team_id,
                     regional_schema,
@@ -349,7 +349,7 @@ def register_schedule_listeners(app) -> None:
                     schedule=sched,
                     timezone_name=region.get("timezone") or "America/Chicago",
                 )
-            client.views_push(trigger_id=body["trigger_id"], view=view)
+            client.views_update(view_id=body["view"]["id"], view=view)
         except Exception:
             logger.exception("edit_schedule failed sid=%s", sid)
             _refresh_schedule_list(
@@ -748,8 +748,8 @@ def register_schedule_listeners(app) -> None:
         team_id, regional_schema, region = _ctx(body)
         if not region or not regional_schema:
             return
-        client.views_push(
-            trigger_id=body["trigger_id"],
+        client.views_update(
+            view_id=body["view"]["id"],
             view=_report_edit_modal(team_id, regional_schema, None),
         )
 
@@ -778,8 +778,8 @@ def register_schedule_listeners(app) -> None:
                     client, body, team_id, regional_schema, notice="Report not found."
                 )
                 return
-            client.views_push(
-                trigger_id=body["trigger_id"],
+            client.views_update(
+                view_id=body["view"]["id"],
                 view=_report_edit_modal(team_id, regional_schema, row),
             )
         finally:
