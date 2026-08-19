@@ -42,6 +42,7 @@ def run_pax_charter(
     log_to_file: bool = False,
     user_ids: list[str] | None = None,
     window: tuple[date, date] | None = None,
+    title: str | None = None,
 ) -> dict:
     """
     Build per-PAX attendance charts and DM via Slack (v2) or legacy channel upload (v1).
@@ -188,7 +189,9 @@ def run_pax_charter(
                     message = (
                         "Hey "
                         + pax
-                        + "! Here is your posting summary for "
+                        + "! Here is "
+                        + (title or "your posting summary")
+                        + " for "
                         + label
                         + ". \nPush yourself, get those bars higher every month! SYITG!"
                     )

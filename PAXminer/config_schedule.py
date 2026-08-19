@@ -14,6 +14,7 @@ from scheduling import (
     FREQUENCY_TYPES,
     MONTH_DAY_MODES,
     REPORT_KINDS,
+    REPORT_TEMPLATES,
     TIME_WINDOW_TYPES,
     VALID_DESTINATIONS,
     destination_valid_for_report,
@@ -21,6 +22,7 @@ from scheduling import (
     format_schedule_summary,
     parse_time_of_day,
     snap_time_to_tick,
+    template_has,
     time_of_day_options,
 )
 
@@ -55,6 +57,7 @@ DELETE_REPORT_ACTION_ID = "paxminer_report_delete"
 DUPLICATE_REPORT_ACTION_ID = "paxminer_report_duplicate"
 SELECT_REPORT_ACTION_ID = "paxminer_report_select"
 REPORT_WINDOW_ACTION_ID = "paxminer_report_window"
+REPORT_TEMPLATE_ACTION_ID = "paxminer_report_template"
 LOAD_DEFAULTS_ACTION_ID = "paxminer_load_defaults"
 DUPLICATE_SCHEDULE_ACTION_ID = "paxminer_schedule_duplicate"
 DELETE_ALL_REPORTS_ACTION_ID = "paxminer_reports_delete_all"
@@ -74,6 +77,7 @@ CODE_RENDERED_REPORT_TYPES = frozenset(
         "region_leaderboard",
         "ao_leaderboard",
         "achievement_leaderboard",
+        "achievement_almost_there",
         "award_achievements",
         "kotter",
     }
@@ -85,11 +89,8 @@ def is_code_rendered(report_type: str | None) -> bool:
 
 
 def supports_time_window(report_type: str | None) -> bool:
-    """Kotter and Award Achievements use their own engine windows, not a report window."""
-    return is_code_rendered(report_type) and report_type not in (
-        "kotter",
-        "award_achievements",
-    )
+    """True when the template declares a time window field."""
+    return template_has(report_type, "window")
 
 TIMEZONE_OPTIONS = [
     "America/New_York",
@@ -227,7 +228,9 @@ def action_row_id(payload: dict) -> int | None:
 
 
 _WINDOW_LABELS = {
+    "relative_days": "Last N days",
     "last_month": "Last month",
+    "this_month": "This month",
     "ytd": "YTD",
     "custom": "Custom",
 }
@@ -1073,8 +1076,26 @@ def _report_edit_modal(
 
     code_rendered = is_code_rendered(report_type)
     show_window = supports_time_window(report_type) or not code_rendered
+    is_add = not bool(row and row.get("id"))
 
-    blocks: list[dict] = [
+    blocks: list[dict] = []
+    if is_add:
+        tpl_opts = [_opt(key, spec.get("label")) for key, spec in REPORT_TEMPLATES.items()]
+        blocks.append(
+            {
+                "type": "input",
+                "block_id": "report_type",
+                "dispatch_action": True,
+                "label": {"type": "plain_text", "text": "Template"},
+                "element": {
+                    "type": "static_select",
+                    "action_id": REPORT_TEMPLATE_ACTION_ID,
+                    "options": tpl_opts,
+                    **_with_initial(tpl_opts, report_type),
+                },
+            }
+        )
+    blocks.append(
         {
             "type": "input",
             "block_id": "name",
@@ -1085,9 +1106,9 @@ def _report_edit_modal(
                 "initial_value": draft.get("name") or "",
             },
         },
-    ]
+    )
 
-    if not code_rendered:
+    if not code_rendered or is_add:
         # New custom reports (and edits of customs) expose the full builder + code.
         blocks.append(
             {
@@ -1196,8 +1217,23 @@ def _report_edit_modal(
             ]
         )
 
+    if code_rendered and template_has(report_type, "top_n"):
+        default_n = REPORT_TEMPLATES.get(report_type, {}).get("default_top_n") or 10
+        blocks.append(
+            {
+                "type": "input",
+                "block_id": "top_n",
+                "label": {"type": "plain_text", "text": "Top N"},
+                "element": {
+                    "type": "plain_text_input",
+                    "action_id": "val",
+                    "initial_value": str(draft.get("top_n") or default_n),
+                },
+            }
+        )
+
     if show_window:
-        window_opts = _select_options(TIME_WINDOW_TYPES)
+        window_opts = [_opt(v, _WINDOW_LABELS.get(v)) for v in TIME_WINDOW_TYPES]
         wtype = draft.get("time_window_type") or "last_month"
         blocks.append(
             {
@@ -1341,6 +1377,9 @@ def draft_from_report_state(state: dict, meta_draft: dict | None = None) -> dict
     w = _state_selected(state, "time_window_type", REPORT_WINDOW_ACTION_ID)
     if w:
         draft["time_window_type"] = w
+    tmpl = _state_selected(state, "report_type", REPORT_TEMPLATE_ACTION_ID)
+    if tmpl:
+        draft["report_type"] = tmpl
     fields = state.get("fields", {}).get("val", {}).get("selected_options") or []
     if fields:
         draft["fields"] = [o["value"] for o in fields]
@@ -1379,7 +1418,7 @@ def parse_report_form(payload: dict) -> dict:
         "top_n": top_n,
         "time_window_type": (
             None
-            if report_type in ("kotter", "award_achievements")
+            if not template_has(report_type, "window")
             else (draft.get("time_window_type") or "last_month")
         ),
         "window_days": window_days,
@@ -1398,7 +1437,13 @@ def validate_report_form(values: dict) -> dict[str, str]:
     if not values.get("name"):
         errors["name"] = "Name is required"
     code_rendered = values.get("code_rendered") or is_code_rendered(values.get("report_type"))
-    if not code_rendered:
+    if not values.get("definition_id"):
+        code = values.get("code") or ""
+        if not code:
+            errors["code"] = "Code is required"
+        elif not re.match(r"^[a-z0-9_]+$", code):
+            errors["code"] = "Use lowercase letters, numbers, underscores"
+    elif not code_rendered:
         code = values.get("code") or ""
         if not code:
             errors["code"] = "Code is required"
@@ -1408,7 +1453,7 @@ def validate_report_form(values: dict) -> dict[str, str]:
             errors["kind"] = "Invalid output"
         if values.get("source") not in ALLOWED_SOURCES:
             errors["source"] = "Invalid source"
-    if values.get("report_type") in ("kotter", "award_achievements"):
+    if not template_has(values.get("report_type"), "window"):
         return errors
     if values.get("time_window_type") == "custom":
         if not values.get("window_start"):

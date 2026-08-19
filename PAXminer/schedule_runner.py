@@ -15,9 +15,12 @@ from paxminer_db import connect_from_env
 from scheduling import (
     destination_descriptor,
     format_iso_range,
+    format_report_title,
     is_due_now,
     region_local_now,
     resolve_time_window,
+    template_for,
+    template_has,
 )
 from slack_util import (
     is_slack_user_id,
@@ -759,10 +762,20 @@ def _dispatch_report(
             }
 
         window = None
-        if report_type not in ("kotter", "award_achievements"):
+        if template_has(report_type, "window"):
             window = resolve_time_window(
                 definition, timezone_name=region.get("timezone")
             )
+        title = format_report_title(
+            definition.get("name"),
+            window if template_has(report_type, "window") else None,
+        )
+        default_n = int(template_for(report_type).get("default_top_n") or 20)
+        try:
+            top_n = int(definition.get("top_n") or default_n)
+        except (TypeError, ValueError):
+            top_n = default_n
+        top_n = max(1, top_n)
 
         if report_type == "pax_charts":
             from monthly_charts.PAXcharter import run_pax_charter
@@ -775,6 +788,7 @@ def _dispatch_report(
                 plot_dir=plot_dir,
                 user_ids=user_ids,
                 window=window,
+                title=title,
             )
             if isinstance(result, dict):
                 return _apply_delivery_result(result, attempted_users=len(user_ids))
@@ -792,6 +806,7 @@ def _dispatch_report(
                 destinations=channel_ids,
                 post_per_ao=(dest_type == "all_ao_channels"),
                 window=window,
+                title=title,
             )
             if isinstance(result, dict):
                 return _apply_delivery_result(result, attempted_channels=len(channel_ids))
@@ -809,6 +824,8 @@ def _dispatch_report(
                 plot_dir=plot_dir,
                 destinations=channel_ids,
                 window=window,
+                title=title,
+                top_n=top_n,
             )
             if isinstance(result, dict):
                 return _apply_delivery_result(result, attempted_channels=len(channel_ids))
@@ -826,6 +843,8 @@ def _dispatch_report(
                 destinations=channel_ids,
                 post_per_ao=(dest_type == "all_ao_channels"),
                 window=window,
+                title=title,
+                top_n=top_n,
             )
             if isinstance(result, dict):
                 return _apply_delivery_result(result, attempted_channels=len(channel_ids))
@@ -837,7 +856,12 @@ def _dispatch_report(
             if channel_ids:
                 region["achievement_channel"] = channel_ids[0]
             result = run_leaderboard_for_region(
-                registry_conn, pm_schema, region, window=window
+                registry_conn,
+                pm_schema,
+                region,
+                window=window,
+                title=title,
+                top_n=top_n,
             )
             client = slack_client(token)
             posted_channels: list[dict] = []
@@ -852,6 +876,40 @@ def _dispatch_report(
                         LOG.exception("extra achievement_leaderboard post failed channel=%s", cid)
                         failed_channels.append(
                             {"ao": "achievement-lb", "channel_id": cid, "reason": str(exc)[:200]}
+                        )
+            if isinstance(result, dict):
+                result = dict(result)
+                if posted_channels or failed_channels:
+                    result["posted_channels"] = posted_channels
+                    result["failed_channels"] = failed_channels
+                return _apply_delivery_result(result, attempted_channels=len(channel_ids))
+            return result
+        if report_type == "achievement_almost_there":
+            from achievements.leaderboard import run_almost_there_for_region
+
+            region = dict(region)
+            if channel_ids:
+                region["achievement_channel"] = channel_ids[0]
+            result = run_almost_there_for_region(
+                registry_conn,
+                pm_schema,
+                region,
+                title=title,
+                top_n=top_n,
+            )
+            client = slack_client(token)
+            posted_channels = []
+            failed_channels = []
+            if result.get("text") and channel_ids:
+                for cid in channel_ids:
+                    try:
+                        if cid != channel_ids[0]:
+                            post_message(client, cid, result["text"], blocks=result.get("blocks"))
+                        posted_channels.append({"ao": "almost-there", "channel_id": cid})
+                    except Exception as exc:
+                        LOG.exception("extra achievement_almost_there post failed channel=%s", cid)
+                        failed_channels.append(
+                            {"ao": "almost-there", "channel_id": cid, "reason": str(exc)[:200]}
                         )
             if isinstance(result, dict):
                 result = dict(result)

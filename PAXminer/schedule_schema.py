@@ -213,13 +213,14 @@ def upsert_builtin_definitions(
                 f"""
                 UPDATE `{pm_schema}`.`region_report_definitions`
                 SET name=%s, report_type=%s, is_builtin=1, is_customized=0,
-                    time_window_type=%s
+                    time_window_type=%s, top_n=%s
                 WHERE id=%s
                 """,
                 (
                     d["name"],
                     d["report_type"],
                     d.get("time_window_type"),
+                    d.get("top_n"),
                     existing["id"],
                 ),
             )
@@ -229,8 +230,8 @@ def upsert_builtin_definitions(
                 f"""
                 INSERT INTO `{pm_schema}`.`region_report_definitions`
                   (schema_name, code, name, report_type, is_builtin, is_customized,
-                   time_window_type)
-                VALUES (%s, %s, %s, %s, 1, 0, %s)
+                   time_window_type, top_n)
+                VALUES (%s, %s, %s, %s, 1, 0, %s, %s)
                 """,
                 (
                     regional_schema,
@@ -238,6 +239,7 @@ def upsert_builtin_definitions(
                     d["name"],
                     d["report_type"],
                     d.get("time_window_type"),
+                    d.get("top_n"),
                 ),
             )
             cur.execute(

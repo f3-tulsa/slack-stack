@@ -212,6 +212,7 @@ def test_leaderboard_tie_break_by_display_name():
     assert text.index("<@U01AAAAAAA2>") < text.index("<@U01AAAAAAA3>") < text.index("<@U01AAAAAAA1>")
     assert blocks
     assert any(b.get("type") == "header" for b in blocks)
+    assert "YTD" not in text
 
 
 def test_almost_there_excludes_awarded_and_caps_gap():
@@ -1117,11 +1118,7 @@ def test_leaderboard_loads_only_regional_schema():
     mock_cur = MagicMock()
     mock_conn.cursor.return_value.__enter__.return_value = mock_cur
     mock_conn.cursor.return_value.__exit__.return_value = False
-    mock_cur.fetchall.side_effect = [
-        [],  # achievements_list
-        [],  # achievements_awarded
-        [],  # users
-    ]
+    mock_cur.fetchall.return_value = []
 
     with patch.object(lb_mod, "load_nation_attendance", return_value=pd.DataFrame()) as mock_nation:
         with patch.object(lb_mod, "attach_home_regions", side_effect=lambda _c, n, _s: n):
@@ -1130,8 +1127,12 @@ def test_leaderboard_loads_only_regional_schema():
                     result = lb_mod.run_leaderboard_for_region(
                         mock_conn, "paxminer_test", region_row, dry_run=True
                     )
+                    almost = lb_mod.run_almost_there_for_region(
+                        mock_conn, "paxminer_test", region_row, dry_run=True
+                    )
 
     assert result.get("dry_run") is True
+    assert almost.get("dry_run") is True
     mock_nation.assert_called_once()
     assert mock_nation.call_args.args[1] == ["f3ttown_test"]
 

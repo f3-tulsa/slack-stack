@@ -19,21 +19,32 @@
       "name": "Region leaderboard",
       "report_type": "region_leaderboard",
       "is_builtin": 1,
-      "time_window_type": "last_month"
+      "time_window_type": "last_month",
+      "top_n": 20
     },
     {
       "code": "ao_leaderboard",
       "name": "AO leaderboard",
       "report_type": "ao_leaderboard",
       "is_builtin": 1,
-      "time_window_type": "last_month"
+      "time_window_type": "last_month",
+      "top_n": 20
     },
     {
       "code": "achievement_leaderboard",
       "name": "Achievement leaderboard",
       "report_type": "achievement_leaderboard",
       "is_builtin": 1,
-      "time_window_type": "ytd"
+      "time_window_type": "ytd",
+      "top_n": 10
+    },
+    {
+      "code": "achievement_almost_there",
+      "name": "Almost there",
+      "report_type": "achievement_almost_there",
+      "is_builtin": 1,
+      "time_window_type": null,
+      "top_n": 10
     },
     {
       "code": "award_achievements",
@@ -85,6 +96,14 @@
     },
     {
       "code": "achievement_leaderboard",
+      "destination_type": "specific_channels",
+      "frequency_type": "monthly",
+      "month_day_mode": "first",
+      "time_of_day": "07:00:00",
+      "enabled": true
+    },
+    {
+      "code": "achievement_almost_there",
       "destination_type": "specific_channels",
       "frequency_type": "monthly",
       "month_day_mode": "first",
