@@ -309,11 +309,20 @@ def test_resolve_time_window_last_month_and_ytd():
     assert start == date(2026, 1, 1)
     assert end == region_local_now("America/Chicago", utc_now=utc).date()
 
+    start, end = resolve_time_window(
+        {"time_window_type": "this_month"},
+        timezone_name="America/Chicago",
+        utc_now=utc,
+    )
+    assert start == date(2026, 7, 1)
+    assert end == region_local_now("America/Chicago", utc_now=utc).date()
+
 
 def test_destination_constraints():
     assert destination_valid_for_report("pax_charts", "dm_all_pax")
     assert not destination_valid_for_report("pax_charts", "all_ao_channels")
     assert destination_valid_for_report("kotter", "specific_channels")
+    assert destination_valid_for_report("achievement_almost_there", "specific_channels")
 
 
 def test_parse_and_snap_time():
@@ -738,9 +747,10 @@ def test_report_defaults_json_consistency():
     from scheduling import BUILTIN_DEFINITIONS, DEFAULT_SCHEDULES, VALID_DESTINATIONS
 
     codes = {d["code"] for d in BUILTIN_DEFINITIONS}
-    assert len(BUILTIN_DEFINITIONS) == 7
-    assert len(DEFAULT_SCHEDULES) == 7
+    assert len(BUILTIN_DEFINITIONS) == 8
+    assert len(DEFAULT_SCHEDULES) == 8
     assert "award_achievements" in codes
+    assert "achievement_almost_there" in codes
     assert {s["code"] for s in DEFAULT_SCHEDULES} == codes
     for s in DEFAULT_SCHEDULES:
         assert s.get("enabled") is True
@@ -1110,6 +1120,35 @@ def test_report_edit_modal_code_rendered_vs_custom():
     assert "code" in custom_ids
     assert "source" in custom_ids
     assert "kind" in custom_ids
+    assert "report_type" in custom_ids
+
+
+def test_report_edit_modal_template_fields_and_almost_there():
+    from config_schedule import REPORT_TEMPLATE_ACTION_ID, _report_edit_modal
+
+    add = _report_edit_modal("T1", "f3test", None)
+    assert add["callback_id"]
+    add_ids = [b.get("block_id") for b in add["blocks"] if b.get("block_id")]
+    assert "report_type" in add_ids
+    tpl = next(b for b in add["blocks"] if b.get("block_id") == "report_type")
+    assert tpl["element"]["action_id"] == REPORT_TEMPLATE_ACTION_ID
+
+    almost = _report_edit_modal(
+        "T1",
+        "f3test",
+        {
+            "id": 9,
+            "name": "Almost there",
+            "code": "achievement_almost_there",
+            "report_type": "achievement_almost_there",
+            "is_builtin": 1,
+        },
+    )
+    almost_ids = [b.get("block_id") for b in almost["blocks"] if b.get("block_id")]
+    assert "name" in almost_ids
+    assert "top_n" in almost_ids
+    assert "time_window_type" not in almost_ids
+    assert "report_type" not in almost_ids
 
 
 def test_reports_list_has_pencil_not_duplicate():
@@ -1616,4 +1655,35 @@ def test_achievement_defaults_json_matches_seeds():
     assert catalog == ACHIEVEMENT_SEEDS
     assert len(catalog) == 14
     assert {s["code"] for s in catalog} == {s["code"] for s in ACHIEVEMENT_SEEDS}
+
+
+def test_this_month_and_report_title_contract():
+    from scheduling import (
+        REPORT_TEMPLATES,
+        format_report_title,
+        template_has,
+    )
+
+    assert "this_month" in __import__("scheduling", fromlist=["TIME_WINDOW_TYPES"]).TIME_WINDOW_TYPES
+    assert "achievement_almost_there" in REPORT_TEMPLATES
+    assert template_has("achievement_leaderboard", "window")
+    assert not template_has("achievement_almost_there", "window")
+    assert template_has("achievement_almost_there", "top_n")
+    heading = format_report_title("Achievement leaderboard", (date(2026, 8, 1), date(2026, 8, 18)))
+    assert "Achievement leaderboard" in heading
+    assert "YTD" not in heading
+    assert "YTD" not in format_report_title("Region leaderboard", (date(2026, 7, 1), date(2026, 7, 31)))
+
+
+def test_region_leaderboard_drops_bonus_ytd_and_honors_top_n():
+    import inspect
+
+    from monthly_charts.Leaderboard_Charter import run_region_leaderboard
+    from schedule_schema import upsert_builtin_definitions
+
+    src = inspect.getsource(run_region_leaderboard)
+    assert "include_ytd = False" in src
+    assert "top_n" in src
+    assert "title" in src
+    assert "top_n" in inspect.getsource(upsert_builtin_definitions)
 

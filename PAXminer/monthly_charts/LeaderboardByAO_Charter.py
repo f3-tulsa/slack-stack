@@ -47,6 +47,8 @@ def run_ao_leaderboard(
     destinations: list[str] | None = None,
     post_per_ao: bool = True,
     window: tuple[date, date] | None = None,
+    title: str | None = None,
+    top_n: int = 20,
 ) -> dict:
     _ = region, firstf
     plot_base = Path(plot_dir) / schema
@@ -59,7 +61,9 @@ def run_ao_leaderboard(
     start, end = window or default_chart_window()
     label = format_window_label(start, end)
     tag = window_file_tag(start, end)
-    include_ytd = is_calendar_month(start, end)
+    heading = title or f"Leaderboard - {label}"
+    limit = max(1, int(top_n or 20))
+    include_ytd = False
     total_graphs = 0
     fallback_channels = list(destinations) if destinations else []
     posted_channels: list[dict] = []
@@ -106,9 +110,9 @@ def run_ao_leaderboard(
             AND ao= %s
             group by PAX
             order by count(1) desc
-            limit 20
+            limit %s
             """
-                val = (start.isoformat(), end.isoformat(), ao)
+                val = (start.isoformat(), end.isoformat(), ao, limit)
                 cursor.execute(sql, val)
                 posts = cursor.fetchall()
                 posts_df = pd.DataFrame(posts, columns=["PAX", "Posts"])
@@ -119,28 +123,20 @@ def run_ao_leaderboard(
             skipped_no_data.append({"ao": ao, "channel_id": channel_id})
         else:
             posts_df.plot.bar(x="PAX", color={"Posts": "orange"})
-            plt.title("Leaderboard - " + label)
+            plt.title(heading)
             plt.xlabel("")
             plt.ylabel("# Posts for " + label)
             out_m = plot_base / f"PAX_Leaderboard_{ao}{tag}.jpg"
             plt.savefig(str(out_m), bbox_inches="tight")
-            if include_ytd:
-                comment = (
-                    "Hey "
-                    + ao
-                    + "! Here are the posting leaderboards for "
-                    + label
-                    + " as well as for Year to Date (includes all beatdowns, rucks, Qsource, etc.) "
-                    "with the top 20 posters! T-CLAPS to these HIMs."
-                )
-            else:
-                comment = (
-                    "Hey "
-                    + ao
-                    + "! Here are the posting leaderboards for "
-                    + label
-                    + " with the top 20 posters! T-CLAPS to these HIMs."
-                )
+            comment = (
+                "Hey "
+                + ao
+                + "! Here is "
+                + heading
+                + " with the top "
+                + str(limit)
+                + " posters! T-CLAPS to these HIMs."
+            )
             for ch in upload_channels:
                 max_attempts = 5
                 for attempt in range(max_attempts):

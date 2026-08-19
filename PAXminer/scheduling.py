@@ -21,6 +21,7 @@ REPORT_TYPES = (
     "region_leaderboard",
     "ao_leaderboard",
     "achievement_leaderboard",
+    "achievement_almost_there",
     "award_achievements",
     "kotter",
     "custom_report",
@@ -35,7 +36,7 @@ DESTINATION_TYPES = (
 
 FREQUENCY_TYPES = ("hourly", "daily", "weekly", "monthly", "custom")
 MONTH_DAY_MODES = ("first", "last", "specific")
-TIME_WINDOW_TYPES = ("relative_days", "last_month", "ytd", "custom")
+TIME_WINDOW_TYPES = ("relative_days", "last_month", "this_month", "ytd", "custom")
 REPORT_KINDS = ("chart", "table")
 ALLOWED_SOURCES = ("bd_attendance", "beatdowns", "attendance_view")
 
@@ -46,9 +47,65 @@ VALID_DESTINATIONS: dict[str, tuple[str, ...]] = {
     "region_leaderboard": ("specific_channels", "all_ao_channels"),
     "ao_leaderboard": ("all_ao_channels", "specific_channels"),
     "achievement_leaderboard": ("specific_channels", "all_ao_channels"),
+    "achievement_almost_there": ("specific_channels", "all_ao_channels"),
     "award_achievements": ("specific_channels",),
     "kotter": ("specific_channels",),
     "custom_report": DESTINATION_TYPES,
+}
+
+# Template id == report_type (existing rows keep working). Declares output and
+# which definition columns the Add/Edit form and dispatcher should honor.
+REPORT_TEMPLATES: dict[str, dict[str, Any]] = {
+    "achievement_leaderboard": {
+        "label": "Achievement leaderboard",
+        "output": "blocks",
+        "fields": ("name", "window", "top_n"),
+        "default_top_n": 10,
+    },
+    "achievement_almost_there": {
+        "label": "Almost there",
+        "output": "blocks",
+        "fields": ("name", "top_n"),
+        "default_top_n": 10,
+    },
+    "custom_report": {
+        "label": "Custom report",
+        "output": "custom",
+        "fields": ("name", "code", "kind", "source", "fields", "metric", "group_by", "window", "top_n"),
+        "default_top_n": 20,
+    },
+    "pax_charts": {
+        "label": "PAX charts",
+        "output": "png",
+        "fields": ("name", "window"),
+    },
+    "q_charts": {
+        "label": "Q charts",
+        "output": "png",
+        "fields": ("name", "window"),
+    },
+    "region_leaderboard": {
+        "label": "Region leaderboard",
+        "output": "png",
+        "fields": ("name", "window", "top_n"),
+        "default_top_n": 20,
+    },
+    "ao_leaderboard": {
+        "label": "AO leaderboard",
+        "output": "png",
+        "fields": ("name", "window", "top_n"),
+        "default_top_n": 20,
+    },
+    "kotter": {
+        "label": "Kotter",
+        "output": "blocks",
+        "fields": ("name",),
+    },
+    "award_achievements": {
+        "label": "Award achievements",
+        "output": "blocks",
+        "fields": ("name",),
+    },
 }
 
 # Human labels + expansion for logs, the Schedule picker, and list summary.
@@ -101,6 +158,22 @@ def destination_descriptor(destination_type: str | None) -> dict[str, str]:
 
 def destination_label(destination_type: str | None) -> str:
     return destination_descriptor(destination_type)["label"]
+
+
+def template_for(report_type: str | None) -> dict[str, Any]:
+    return REPORT_TEMPLATES.get(report_type or "") or REPORT_TEMPLATES["custom_report"]
+
+
+def template_has(report_type: str | None, field: str) -> bool:
+    return field in template_for(report_type).get("fields", ())
+
+
+def format_report_title(name: str | None, window: tuple[date, date] | None = None) -> str:
+    """Slack header / PNG title: definition name plus window label. Never a literal YTD."""
+    base = (name or "").strip() or "Report"
+    if window:
+        return f"{base} ({format_window_label(*window)})"
+    return base
 
 
 def destination_expansion(destination_type: str | None) -> str:
@@ -362,6 +435,8 @@ def resolve_time_window(
         return today - timedelta(days=max(days, 1) - 1), today
     if wtype == "ytd":
         return date(today.year, 1, 1), today
+    if wtype == "this_month":
+        return date(today.year, today.month, 1), today
     if wtype == "custom":
         start = definition.get("window_start")
         end = definition.get("window_end")

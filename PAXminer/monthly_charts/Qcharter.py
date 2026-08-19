@@ -43,6 +43,7 @@ def run_q_charter(
     destinations: list[str] | None = None,
     post_per_ao: bool = True,
     window: tuple[datetime.date, datetime.date] | None = None,
+    title: str | None = None,
 ) -> dict:
     """
     Generate per-AO and region-wide Q charts and upload to Slack.
@@ -222,7 +223,7 @@ def run_q_charter(
                 comment = (
                     "Hey "
                     + region
-                    + "! Here is a look at who has been stepping up to Q across all AOs for the month. "
+                    + f"! Here is {title or 'a look at who has been stepping up to Q across all AOs'} for {label}. "
                     "Is your name on this list? Remember Core Principle #4 - F3 is peer led in a rotating "
                     "fashion. Exercise your leadership muscles. Sign up to Q!"
                 )
