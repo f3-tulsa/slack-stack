@@ -19,6 +19,16 @@ import time
 import logging
 import json
 
+try:
+    from slack_util import format_log_message
+except ImportError:
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from slack_util import format_log_message
+
+
 def user_lookback(firsttime_run):
         SECONDS_PER_DAY = 86400
         LOOKBACK_DAYS = 7
@@ -175,7 +185,16 @@ def database_slack_user_update(region_db, key, firsttime_run, mydb, log_channel=
         try:
             slack.chat_postMessage(
                 channel=(log_channel or "").strip() or "paxminer_logs",
-                text=f" - User sync ({region_db}): {new_count} new PAX records, {updated_count} updated",
+                text=format_log_message(
+                    "The *User sync* job was run as scheduled",
+                    status="success",
+                    fields=[
+                        (
+                            "Results",
+                            f"{region_db}: {new_count} new PAX records, {updated_count} updated",
+                        )
+                    ],
+                ),
             )
         except Exception as log_exc:
             logging.debug("paxminer_logs summary notify failed: %s", log_exc, exc_info=True)
