@@ -616,7 +616,7 @@ def _achievement_edit_modal(
                         {
                             "text": {
                                 "type": "plain_text",
-                                "text": "Apply to previous (queue backfill)",
+                                "text": "Apply to previous (re-evaluate awards)",
                             },
                             "value": "retroactive",
                         },
@@ -627,7 +627,7 @@ def _achievement_edit_modal(
                             {
                                 "text": {
                                     "type": "plain_text",
-                                    "text": "Apply to previous (queue backfill)",
+                                    "text": "Apply to previous (re-evaluate awards)",
                                 },
                                 "value": "retroactive",
                             },

@@ -735,18 +735,10 @@ def _effective_range(values: dict, *, inherit_from=None):
 
 
 def _log_actor_name(client, user_id: str) -> str:
-    """Display name for paxminer_logs; never a mention."""
-    if not user_id:
-        return "admin"
-    try:
-        user = client.users_info(user=user_id).get("user") or {}
-        if not isinstance(user, dict):
-            return user_id
-        profile = user.get("profile") or {}
-        name = profile.get("display_name") or user.get("real_name") or user_id
-        return str(name)
-    except Exception:
-        return user_id
+    """Display name for paxminer_logs; never a mention or Slack user ID."""
+    from slack_util import resolve_display_name
+
+    return resolve_display_name(client, user_id)
 
 
 def _post_achievement_admin_notice(region: dict, channel_text: str, log_text: str) -> None:
