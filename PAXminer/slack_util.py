@@ -191,6 +191,18 @@ def resolve_display_name(client, user_id: str, *, fallback: str = "admin") -> st
     return name.strip()
 
 
+def strip_leading_log_dashes(text: str) -> str:
+    """Drop the legacy `` - `` / ``- `` prefix from each line of a log blob."""
+    lines = []
+    for line in (text or "").splitlines():
+        if line.startswith(" - "):
+            line = line[3:]
+        elif line.startswith("- "):
+            line = line[2:]
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def format_log_message(
     header: str,
     *,
@@ -198,12 +210,13 @@ def format_log_message(
     duration_s: float | None = None,
     detail: str | None = None,
     fields: list[tuple[str, str]] | None = None,
+    body: str | None = None,
     message_count: int | None = None,
     destinations: str | None = None,
 ) -> str:
-    """Shared paxminer_logs envelope: header, Status, optional labeled fields, optional footer.
+    """Shared paxminer_logs envelope: header, Status, optional fields, optional body, optional footer.
 
-    Schedule runs and achievement re-evaluate both pass fields into this helper.
+    Schedule runs, achievement re-evaluate, and miner/sync jobs use this helper.
     """
     status_bit = str(status)
     if duration_s is not None:
@@ -212,6 +225,7 @@ def format_log_message(
     if detail and status != "success":
         lines.append(str(detail))
     labeled = [(k, v) for k, v in (fields or []) if v]
+    extra = strip_leading_log_dashes(body).strip() if body else ""
     footer: list[str] = []
     if message_count is not None:
         footer.append(f"Number of Messages: {message_count}")
@@ -220,6 +234,9 @@ def format_log_message(
     if labeled:
         lines.append("")
         lines.extend(f"{k}: {v}" for k, v in labeled)
+    if extra:
+        lines.append("")
+        lines.append(extra)
     if footer:
         lines.append("")
         lines.extend(footer)

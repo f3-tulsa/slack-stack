@@ -10,6 +10,7 @@ from slack_util import (
     is_slack_user_id,
     mention,
     resolve_display_name,
+    strip_leading_log_dashes,
     ticked_display_name,
     workspace_user_ids,
 )
@@ -165,3 +166,33 @@ def test_format_log_message_reeval_omits_destination_footer():
     assert "Number of Messages" not in text
     assert "Destination(s)" not in text
     assert "U0AMXC36W4X" not in text
+
+
+def test_strip_leading_log_dashes():
+    raw = " - Backblast imported\n- Channel missing\nplain line"
+    cleaned = strip_leading_log_dashes(raw)
+    assert not any(line.startswith("-") or line.startswith(" -") for line in cleaned.splitlines())
+    assert "Backblast imported" in cleaned
+    assert "Channel missing" in cleaned
+    assert "plain line" in cleaned
+
+
+def test_format_log_message_body_and_failed_status():
+    text = format_log_message(
+        "The *PAXminer hourly* job was run as scheduled",
+        status="success",
+        duration_s=1.5,
+        body=" - Backblast imported for AO: <#C1>",
+    )
+    assert text.startswith("The *PAXminer hourly* job was run as scheduled")
+    assert "Status: success (1.5s)" in text
+    assert "Backblast imported for AO: <#C1>" in text
+    assert " - Backblast" not in text
+
+    failed = format_log_message(
+        "The *Achievements* job was run as scheduled",
+        status="failed",
+        detail="boom",
+    )
+    assert "Status: failed" in failed
+    assert failed.splitlines()[-1] == "boom"

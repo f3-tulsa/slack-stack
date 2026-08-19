@@ -306,17 +306,7 @@ def run_summary_line(
     if held_out_of_range:
         held_bits.append(f"{held_out_of_range} out of range")
     held_detail = f" ({', '.join(held_bits)})" if held_bits else ""
-    window = ""
     span = format_iso_range(start, end)
-    if span:
-        window = f" | {span}"
-    dest = ""
-    if channel:
-        dest = f" | posted {channel}"
-        if dms or dm_failed:
-            fail = f" ({dm_failed} failed)" if dm_failed else ""
-            dest += f", {dms} DMs{fail}"
-    dur = f" ({duration_s:.1f}s)" if duration_s is not None else ""
     if kind == "backfill":
         who = ticked_display_name(actor, fallback="admin")
         name = achievement_name or "achievement"
@@ -335,9 +325,25 @@ def run_summary_line(
             ],
         )
 
-    return (
-        f"Achievements {kind}: {granted} granted, {revoked} revoked, "
-        f"{held} held{held_detail} | {rules} rules{window}{dest}{dur}"
+    results = (
+        f"{rules} rules, {granted} granted, {revoked} revoked, "
+        f"{held} held{held_detail}"
+    )
+    dest_parts = []
+    if channel:
+        dest_parts.append(channel)
+    if dms or dm_failed:
+        fail = f" ({dm_failed} failed)" if dm_failed else ""
+        dest_parts.append(f"{dms} DMs{fail}")
+    return format_log_message(
+        f"The *Achievements ({kind})* job was run as scheduled",
+        status="success",
+        duration_s=duration_s,
+        fields=[
+            ("Results", results),
+            ("Period", span or ""),
+        ],
+        destinations=", ".join(dest_parts) if dest_parts else None,
     )
 
 

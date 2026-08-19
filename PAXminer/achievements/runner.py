@@ -26,6 +26,7 @@ from achievements.engine import awarded_period_bucket, evaluate_rule, period_in_
 from achievements.period import period_bounds
 from common.encryption import decrypt_field
 from slack_util import (
+    format_log_message,
     is_slack_user_id,
     open_dm_channel,
     post_log,
@@ -741,6 +742,14 @@ def _post_achievement_failure_log(region_row: dict, exc: Exception) -> None:
     try:
         token = decrypt_field(token_enc)
         client = slack_client(token)
-        post_log(client, f"Achievements FAILED - {exc}", region=region_row)
+        post_log(
+            client,
+            format_log_message(
+                "The *Achievements* job was run as scheduled",
+                status="failed",
+                detail=str(exc)[:500],
+            ),
+            region=region_row,
+        )
     except Exception:
         LOG.debug("achievement failure log skipped", exc_info=True)
