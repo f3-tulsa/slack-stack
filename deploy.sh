@@ -257,6 +257,8 @@ run_setup_github() {
   gh variable set F3_REGION_SLACK_TEAM_ID --env "$STAGE" --body "$F3_REGION_SLACK_TEAM_ID" -R "$repo"
   gh variable set SB_SLACK_CLIENT_ID --env "$STAGE" --body "$SB_SLACK_CLIENT_ID" -R "$repo"
   gh variable set QS_SLACK_CLIENT_ID --env "$STAGE" --body "$QS_SLACK_CLIENT_ID" -R "$repo"
+  [[ -n "${PM_SLACK_APP_ID:-}" ]] && \
+    gh variable set PM_SLACK_APP_ID --env "$STAGE" --body "$PM_SLACK_APP_ID" -R "$repo"
   echo "Set GitHub Actions variables for environment '$STAGE'."
 
   gh secret set AWS_ROLE_ARN --env "$STAGE" --body "$role_arn" -R "$repo"
@@ -515,6 +517,7 @@ deploy_slackblast() {
       "PaxminerSchema=${PAXMINER_SCHEMA}_${STAGE}" \
       "PmAchievementsUrl=${achievements_url}" \
       "PmAchievementsWebhookSecret=${PM_ACHIEVEMENTS_WEBHOOK_SECRET}" \
+      "PmSlackAppId=${PM_SLACK_APP_ID:-}" \
       "SlackToken=${SB_SLACK_TOKEN}" \
       "SlackSigningSecret=${SB_SLACK_SIGNING_SECRET}" \
       "SlackClientSecret=${SB_SLACK_CLIENT_SECRET}" \

@@ -69,7 +69,10 @@ def is_slack_admin(user_id: str, client=None) -> bool:
         return False
 
 
-def notify_admin_required(client, body, *, text: str = "Workspace admin required.") -> None:
+ADMIN_REQUIRED_TEXT = "You must be a Slack admin to access your PAXMiner settings."
+
+
+def notify_admin_required(client, body, *, text: str = ADMIN_REQUIRED_TEXT) -> None:
     """Best-effort ephemeral or DM when a non-admin hits an admin-only control."""
     user_id = (body.get("user") or {}).get("id") or body.get("user_id")
     channel_id = (body.get("channel") or {}).get("id") or body.get("channel_id")

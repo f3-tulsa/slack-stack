@@ -63,7 +63,7 @@ Award grant/revoke, leaderboards, Kotter, and charts are all schedule-driven. Aw
 |---------|---------|-------|
 | `/config-paxminer` hub | slash | admin-only; timezone on Save; hub buttons for Achievements rules / Reports / Kotter thresholds / Schedule |
 | Schedule / Reports modals | hub buttons | editable builtins + custom builder; Duplicate; Load/Restore defaults; Delete All; Run Now (logs outcome) |
-| App Home | `app_home_opened` | minimal stub; full dashboard later |
+| App Home | `app_home_opened` | published for everyone; admin-only **PAXMiner Settings** opens the same hub as `/config-paxminer` |
 
 ## Lambdas (four functions)
 
