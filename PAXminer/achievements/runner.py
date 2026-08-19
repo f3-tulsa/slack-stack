@@ -602,110 +602,122 @@ def reconcile_rule_awards(
     actor: str | None = None,
     start: date | None = None,
     end: date | None = None,
+    automatic: bool = False,
 ) -> dict:
     """Re-evaluate one family across its range; silent on T-claps/DMs, one channel summary."""
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT a.name, v.effective_from, v.effective_to
-            FROM `{regional_schema}`.`achievements_list` a
-            JOIN `{regional_schema}`.`achievement_versions` v
-              ON v.achievement_id = a.id AND v.superseded_at IS NULL
-            WHERE a.id=%s
-            """,
-            (achievement_id,),
-        )
-        meta = cur.fetchone() or {}
-        if start is None:
-            start = meta.get("effective_from")
-        if start is None:
-            cur.execute(f"SELECT MIN(bd_date) AS d FROM `{regional_schema}`.`beatdowns`")
-            row = cur.fetchone() or {}
-            start = row.get("d")
-        if end is None:
-            end = meta.get("effective_to") or date.today()
-    if start is None:
-        start = date(date.today().year, 1, 1)
-    if hasattr(start, "date") and callable(start.date):
-        start = start.date()
-    if hasattr(end, "date") and callable(end.date):
-        end = end.date()
+    from achievements.range import clear_reeval_lock
 
-    totals = {"grants": 0, "revokes": 0, "held": 0}
-    last_result: dict = {}
-    for year, chunk_start, chunk_end in iter_year_windows(start, end):
-        result = run_achievements_for_region(
-            conn,
-            pm_schema=pm_schema,
-            regional_schema=regional_schema,
-            region_row=region_row,
-            pax_user_ids=None,
-            dry_run=False,
-            announce=False,
-            start=chunk_start,
-            end=chunk_end,
-            log_mode="backfill",
-            achievement_id=achievement_id,
-            actor=actor,
-            allow_revoke=True,
-            period_year=year,
-            emit_logs=False,
-        )
-        last_result = result
-        if result.get("skipped"):
-            continue
-        totals["grants"] += int(result.get("grants") or 0)
-        totals["revokes"] += int(result.get("revokes") or 0)
-        totals["held"] += int(result.get("held") or 0)
-
-    token_enc = region_row.get("slack_token")
-    channel = resolve_achievement_channel(conn, pm_schema, regional_schema, region_row)
-    name = meta.get("name") or "achievement"
-    if token_enc and channel:
-        try:
-            client = slack_client(decrypt_field(token_enc))
-            # Public "was corrected" is false when nothing was granted or revoked.
-            if totals["grants"] or totals["revokes"]:
-                post_message(
-                    client,
-                    channel,
-                    reconcile_channel_line(
-                        name, totals["grants"], totals["revokes"], totals["held"]
-                    ),
-                )
-            post_log(
-                client,
-                run_summary_line(
-                    kind="backfill",
-                    granted=totals["grants"],
-                    revoked=totals["revokes"],
-                    held=totals["held"],
-                    held_grandfathered=0,
-                    held_older_version=0,
-                    held_out_of_range=0,
-                    rules=1,
-                    start=start,
-                    end=end,
-                    channel=None,
-                    dms=0,
-                    dm_failed=0,
-                    duration_s=None,
-                    actor=resolve_display_name(client, actor),
-                    achievement_name=name,
-                ),
-                region=region_row,
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT a.name, v.effective_from, v.effective_to
+                FROM `{regional_schema}`.`achievements_list` a
+                JOIN `{regional_schema}`.`achievement_versions` v
+                  ON v.achievement_id = a.id AND v.superseded_at IS NULL
+                WHERE a.id=%s
+                """,
+                (achievement_id,),
             )
-        except Exception:
-            LOG.exception("reconcile channel summary failed schema=%s", regional_schema)
-    return {
-        "grants": totals["grants"],
-        "revokes": totals["revokes"],
-        "held": totals["held"],
-        "reconcile": True,
-        "achievement_id": achievement_id,
-        "skipped": last_result.get("skipped"),
-    }
+            meta = cur.fetchone() or {}
+            if start is None:
+                start = meta.get("effective_from")
+            if start is None:
+                cur.execute(f"SELECT MIN(bd_date) AS d FROM `{regional_schema}`.`beatdowns`")
+                row = cur.fetchone() or {}
+                start = row.get("d")
+            if end is None:
+                end = meta.get("effective_to") or date.today()
+        if start is None:
+            start = date(date.today().year, 1, 1)
+        if hasattr(start, "date") and callable(start.date):
+            start = start.date()
+        if hasattr(end, "date") and callable(end.date):
+            end = end.date()
 
+        totals = {"grants": 0, "revokes": 0, "held": 0}
+        last_result: dict = {}
+        for year, chunk_start, chunk_end in iter_year_windows(start, end):
+            result = run_achievements_for_region(
+                conn,
+                pm_schema=pm_schema,
+                regional_schema=regional_schema,
+                region_row=region_row,
+                pax_user_ids=None,
+                dry_run=False,
+                announce=False,
+                start=chunk_start,
+                end=chunk_end,
+                log_mode="backfill",
+                achievement_id=achievement_id,
+                actor=actor,
+                allow_revoke=True,
+                period_year=year,
+                emit_logs=False,
+            )
+            last_result = result
+            if result.get("skipped"):
+                continue
+            totals["grants"] += int(result.get("grants") or 0)
+            totals["revokes"] += int(result.get("revokes") or 0)
+            totals["held"] += int(result.get("held") or 0)
+
+        token_enc = region_row.get("slack_token")
+        channel = resolve_achievement_channel(conn, pm_schema, regional_schema, region_row)
+        name = meta.get("name") or "achievement"
+        if token_enc and channel:
+            try:
+                client = slack_client(decrypt_field(token_enc))
+                # Public "was corrected" is false when nothing was granted or revoked.
+                if totals["grants"] or totals["revokes"]:
+                    post_message(
+                        client,
+                        channel,
+                        reconcile_channel_line(
+                            name, totals["grants"], totals["revokes"], totals["held"]
+                        ),
+                    )
+                post_log(
+                    client,
+                    run_summary_line(
+                        kind="backfill",
+                        granted=totals["grants"],
+                        revoked=totals["revokes"],
+                        held=totals["held"],
+                        held_grandfathered=0,
+                        held_older_version=0,
+                        held_out_of_range=0,
+                        rules=1,
+                        start=start,
+                        end=end,
+                        channel=None,
+                        dms=0,
+                        dm_failed=0,
+                        duration_s=None,
+                        actor=resolve_display_name(client, actor),
+                        achievement_name=name,
+                        automatic=automatic,
+                    ),
+                    region=region_row,
+                )
+            except Exception:
+                LOG.exception("reconcile channel summary failed schema=%s", regional_schema)
+        return {
+            "grants": totals["grants"],
+            "revokes": totals["revokes"],
+            "held": totals["held"],
+            "reconcile": True,
+            "achievement_id": achievement_id,
+            "skipped": last_result.get("skipped"),
+        }
+
+    finally:
+        try:
+            with conn.cursor() as cur:
+                clear_reeval_lock(cur, regional_schema, int(achievement_id))
+            conn.commit()
+        except Exception:
+            LOG.debug("clear reeval lock skipped schema=%s id=%s", regional_schema, achievement_id)
 
 def run_daily(conn, pm_schema: str, *, dry_run: bool = False, announce: bool = True) -> list[dict]:
     results = []

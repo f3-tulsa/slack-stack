@@ -19,6 +19,7 @@ from slack_sdk.errors import SlackApiError
 
 from config_paxminer import (
     ACHIEVEMENT_EDIT_CALLBACK_ID,
+    ACHIEVEMENT_RANGE_CONFIRM_CALLBACK_ID,
     ACHIEVEMENTS_LIST_CALLBACK_ID,
     ACHIEVEMENTS_PAGE_NEXT_ACTION_ID,
     ACHIEVEMENTS_PAGE_PREV_ACTION_ID,
@@ -34,6 +35,7 @@ from config_paxminer import (
     RESTORE_ACHIEVEMENTS_ACTION_ID,
     SELECT_ACHIEVEMENT_ACTION_ID,
     _achievement_edit_modal,
+    _achievement_range_confirm_modal,
     _achievements_list_modal,
     _config_modal,
     _load_achievement,
@@ -48,6 +50,7 @@ from config_paxminer import (
     _selected_achievement_id,
     _validate_achievement,
     achievement_award_impact,
+    _hydrate_range_row,
     delete_all_achievements,
     earliest_beatdown_date,
     restore_achievement_defaults,
@@ -242,7 +245,8 @@ def handle_add_achievement(ack, body, client, logger):
     try:
         with conn.cursor() as cur:
             options = _load_activity_options(cur, regional_schema)
-        view = _achievement_edit_modal(team_id, regional_schema, None, activity_options=options)
+            draft = _hydrate_range_row(cur, regional_schema, {})
+        view = _achievement_edit_modal(team_id, regional_schema, draft, activity_options=options)
         client.views_update(view_id=body["view"]["id"], view=view)
     finally:
         conn.close()
@@ -338,6 +342,7 @@ def handle_edit_achievement(ack, body, client, logger):
                 )
                 row["award_count"] = awards
                 row["pax_count"] = pax
+                _hydrate_range_row(cur, regional_schema, row)
         if not row:
             _refresh_achievements_list(
                 client, body, team_id, regional_schema, "Achievement not found."
@@ -435,16 +440,49 @@ def handle_backfill_achievement(ack, body, client, logger):
         )
         return
     start, end = _reeval_dates_from_payload(body)
+    from achievements.range import (
+        clear_reeval_lock,
+        ensure_achievement_range_columns,
+        try_acquire_reeval_lock,
+    )
     from slack_schedule import queue_achievement_backfill
 
+    conn = connect_from_env(_registry_db())
     try:
-        queue_achievement_backfill(
-            schema=regional_schema,
-            achievement_id=selected_id,
-            actor=user_id,
-            start=start,
-            end=end,
-        )
+        with conn.cursor() as cur:
+            ensure_achievement_range_columns(cur, regional_schema)
+            ok, lock_msg = try_acquire_reeval_lock(cur, regional_schema, int(selected_id))
+            conn.commit()
+            if not ok:
+                _refresh_achievements_list(
+                    client,
+                    body,
+                    team_id,
+                    regional_schema,
+                    lock_msg or "A re-evaluate is already running for this achievement.",
+                    selected_id=selected_id,
+                    reeval_from=start,
+                    reeval_to=end,
+                )
+                return
+        try:
+            queue_achievement_backfill(
+                schema=regional_schema,
+                achievement_id=selected_id,
+                actor=user_id,
+                start=start,
+                end=end,
+                automatic=False,
+            )
+        except Exception:
+            logger.exception("queue achievement backfill failed")
+            with conn.cursor() as cur:
+                clear_reeval_lock(cur, regional_schema, int(selected_id))
+                conn.commit()
+            _refresh_achievements_list(
+                client, body, team_id, regional_schema, "Could not queue re-evaluate."
+            )
+            return
         range_s = f"{start or '…'} to {end or '…'}"
         _refresh_achievements_list(
             client,
@@ -461,6 +499,8 @@ def handle_backfill_achievement(ack, body, client, logger):
         _refresh_achievements_list(
             client, body, team_id, regional_schema, "Could not queue re-evaluate."
         )
+    finally:
+        conn.close()
 
 
 app.action(BACKFILL_ACHIEVEMENT_ACTION_ID)(handle_backfill_achievement)
@@ -499,6 +539,7 @@ def handle_duplicate_achievement(ack, body, client, logger):
                 cur, regional_schema, row.get("code") or "achievement"
             )
             draft["name"] = duplicate_name(row.get("name"), row.get("code"))
+            _hydrate_range_row(cur, regional_schema, draft)
         client.views_update(
             view_id=body["view"]["id"],
             view=_achievement_edit_modal(
@@ -725,13 +766,10 @@ def handle_config_submit(ack, body, client, logger):
 app.view(CALLBACK_ID)(handle_config_submit)
 
 
-def _effective_range(values: dict, *, inherit_from=None):
-    mode = values.get("range_mode") or "going_forward"
-    if mode == "all_previous":
-        return inherit_from, values.get("effective_to") or None
-    if mode == "custom":
-        return values.get("effective_from") or inherit_from, values.get("effective_to") or None
-    return date.today().isoformat(), values.get("effective_to") or None
+def _reeval_window(from_date, to_date, earliest) -> tuple[str | None, str | None]:
+    start = from_date or earliest
+    end = to_date or date.today().isoformat()
+    return start, end
 
 
 def _log_actor_name(client, user_id: str) -> str:
@@ -761,7 +799,22 @@ def _post_achievement_admin_notice(region: dict, channel_text: str, log_text: st
 def handle_achievement_edit_submit(ack, body, client, logger):
     """Named listener for achievement add/edit save — importable for unit tests."""
     from achievements.activity import activity_legacy_mirror
-    from achievements.versions import insert_version, mirror_list_params, params_changed, supersede_and_insert
+    from achievements.range import (
+        clear_reeval_lock,
+        count_awards_outside_range,
+        ensure_achievement_range_columns,
+        range_changed,
+        resolve_stored_range,
+        should_auto_queue,
+        try_acquire_reeval_lock,
+        window_narrowed,
+    )
+    from achievements.versions import (
+        insert_version,
+        params_changed,
+        supersede_and_insert,
+        update_current_range,
+    )
     from slack_schedule import queue_achievement_backfill
 
     user_id = (body.get("user") or {}).get("id", "")
@@ -775,24 +828,39 @@ def handle_achievement_edit_submit(ack, body, client, logger):
 
     meta = _parse_metadata((body.get("view") or {}).get("private_metadata"))
     achievement_id = meta.get("achievement_id")
-    values = _parse_achievement_form(body)
+    if achievement_id not in (None, ""):
+        try:
+            achievement_id = int(achievement_id)
+        except (TypeError, ValueError):
+            achievement_id = None
+    range_confirmed = bool(meta.get("range_confirmed"))
+    values = meta.get("pending_values") or _parse_achievement_form(body)
     if achievement_id:
         values["code"] = values.get("code") or ""
-    errors = _validate_achievement(values, require_code=not bool(achievement_id))
-    if errors:
-        ack(response_action="errors", errors=errors)
-        return
 
     try:
         conn = connect_from_env(_registry_db())
-    except Exception as exc:
+    except Exception as extra:
         logger.exception("achievement edit connect failed")
-        ack(response_action="errors", errors={"name": f"Save failed: {str(exc)[:120]}"})
+        ack(response_action="errors", errors={"name": f"Save failed: {str(extra)[:120]}"})
         return
-    queued_backfill = False
-    from_date = to_date = None
+
+    notice = None
     try:
         with conn.cursor() as cur:
+            ensure_achievement_range_columns(cur, regional_schema)
+            earliest = earliest_beatdown_date(cur, regional_schema)
+            existing = _load_achievement(cur, regional_schema, achievement_id) if achievement_id else None
+            errors = _validate_achievement(
+                values,
+                require_code=not bool(achievement_id),
+                first_created=(existing or {}).get("first_created"),
+                version_created=(existing or {}).get("version_created"),
+                earliest_beatdown=earliest,
+            )
+            if errors:
+                ack(response_action="errors", errors=errors)
+                return
             if not achievement_id:
                 cur.execute(
                     f"SELECT id FROM `{regional_schema}`.`achievements_list` WHERE code=%s",
@@ -801,7 +869,47 @@ def handle_achievement_edit_submit(ack, body, client, logger):
                 if cur.fetchone():
                     ack(response_action="errors", errors={"code": "Code already in use"})
                     return
-            existing = _load_achievement(cur, regional_schema, achievement_id) if achievement_id else None
+
+            params_did_change = bool(existing) and params_changed(existing, values)
+            first_created = (existing or {}).get("first_created")
+            version_created = (existing or {}).get("version_created")
+            if not existing:
+                first_created = version_created = date.today().isoformat()
+            mode, from_date, to_date = resolve_stored_range(
+                values,
+                first_created=first_created,
+                version_created=version_created,
+                minting=params_did_change,
+            )
+            range_did_change = range_changed(existing, mode, from_date, to_date)
+
+            if (
+                existing
+                and not range_confirmed
+                and window_narrowed(
+                    existing.get("effective_from"),
+                    existing.get("effective_to"),
+                    from_date,
+                    to_date,
+                )
+            ):
+                awards, pax = count_awards_outside_range(
+                    cur, regional_schema, int(achievement_id), from_date, to_date
+                )
+                if awards:
+                    ack(
+                        response_action="push",
+                        view=_achievement_range_confirm_modal(
+                            team_id,
+                            regional_schema,
+                            achievement_id=int(achievement_id),
+                            values=values,
+                            award_count=awards,
+                            pax_count=pax,
+                        ),
+                    )
+                    return
+
             if achievement_id and existing:
                 values["code"] = existing.get("code") or values["code"]
                 cur.execute(
@@ -818,13 +926,7 @@ def handle_achievement_edit_submit(ack, body, client, logger):
                         achievement_id,
                     ),
                 )
-                if params_changed(existing, values):
-                    inherit = existing.get("effective_from")
-                    if values.get("apply_mode") == "retroactive":
-                        from_date, to_date = inherit, values.get("effective_to")
-                        queued_backfill = True
-                    else:
-                        from_date, to_date = date.today().isoformat(), values.get("effective_to")
+                if params_did_change:
                     supersede_and_insert(
                         cur,
                         regional_schema,
@@ -837,12 +939,18 @@ def handle_achievement_edit_submit(ack, body, client, logger):
                         effective_from=from_date,
                         effective_to=to_date,
                         created_by=user_id,
+                        range_mode=mode,
                     )
                 else:
-                    # Cosmetic only: keep versions; still mirror if list columns drifted.
-                    pass
+                    update_current_range(
+                        cur,
+                        regional_schema,
+                        int(achievement_id),
+                        effective_from=from_date,
+                        effective_to=to_date,
+                        range_mode=mode,
+                    )
             else:
-                from_date, to_date = _effective_range(values)
                 cur.execute(
                     f"""
                     INSERT INTO `{regional_schema}`.`achievements_list`
@@ -875,32 +983,58 @@ def handle_achievement_edit_submit(ack, body, client, logger):
                     effective_to=to_date,
                     created_by=user_id,
                     version=1,
+                    range_mode=mode,
                 )
-                if values.get("range_mode") in ("all_previous", "custom"):
-                    queued_backfill = True
+
+            should_queue = should_auto_queue(
+                is_new=not bool(existing),
+                params_changed=params_did_change,
+                range_changed=range_did_change,
+                mode=mode,
+            )
+            queued = False
+            lock_msg = None
+            if should_queue and achievement_id:
+                ok, lock_msg = try_acquire_reeval_lock(
+                    cur, regional_schema, int(achievement_id)
+                )
+                queued = ok
             conn.commit()
-            if queued_backfill and achievement_id:
+            queue_start, queue_end = _reeval_window(from_date, to_date, earliest)
+            if should_queue and queued and achievement_id:
                 try:
                     queue_achievement_backfill(
                         schema=regional_schema,
                         achievement_id=int(achievement_id),
                         actor=user_id,
-                        start=from_date,
-                        end=to_date,
+                        start=queue_start,
+                        end=queue_end,
+                        automatic=True,
+                    )
+                    notice = (
+                        f"Re-evaluate queued for {queue_start or '…'} to {queue_end or '…'}."
                     )
                 except Exception:
                     logger.exception("queue backfill after edit failed")
+                    clear_reeval_lock(cur, regional_schema, int(achievement_id))
+                    conn.commit()
+                    notice = "Saved, but re-evaluate could not be queued."
+            elif should_queue and lock_msg:
+                notice = f"Saved. {lock_msg}"
             achievements = _load_achievements(cur, regional_schema)
-            view = _achievements_list_modal(team_id, regional_schema, achievements)
+            view = _achievements_list_modal(
+                team_id, regional_schema, achievements, notice=notice
+            )
             ack(response_action="update", view=view)
-    except Exception as exc:
+    except Exception as extra:
         logger.exception("achievement edit submit failed")
-        ack(response_action="errors", errors={"name": f"Save failed: {str(exc)[:120]}"})
+        ack(response_action="errors", errors={"name": f"Save failed: {str(extra)[:120]}"})
     finally:
         conn.close()
 
 
 app.view(ACHIEVEMENT_EDIT_CALLBACK_ID)(handle_achievement_edit_submit)
+app.view(ACHIEVEMENT_RANGE_CONFIRM_CALLBACK_ID)(handle_achievement_edit_submit)
 
 
 # Schedule / PAX Reports / Kotter config listeners

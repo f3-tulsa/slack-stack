@@ -1340,6 +1340,36 @@ def test_run_summary_line_non_backfill_uses_envelope():
     assert "<@" not in text
 
 
+def test_run_summary_line_automatic_backfill_header():
+    from datetime import date
+
+    from achievements.announcements import run_summary_line
+
+    text = run_summary_line(
+        kind="backfill",
+        granted=1,
+        revoked=2,
+        held=3,
+        held_grandfathered=0,
+        held_older_version=0,
+        held_out_of_range=0,
+        rules=1,
+        start=date(2026, 1, 1),
+        end=date(2026, 8, 19),
+        channel=None,
+        dms=0,
+        dm_failed=0,
+        duration_s=None,
+        actor="admin",
+        achievement_name="Six Pack",
+        automatic=True,
+    )
+    assert "ran automatically after a rule change" in text
+    assert "triggered by" not in text
+    assert "Achievement: Six Pack" in text
+    assert "Results: 1 granted, 2 revoked, 3 unchanged" in text
+
+
 def test_achievements_emit_per_event_paxminer_logs():
     """Grant and revoke each emit a paxminer_logs line."""
     from achievements import runner as runner_mod

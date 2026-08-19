@@ -1487,6 +1487,26 @@ def test_queue_achievement_backfill_serializes_dates():
         "end": "2026-08-18",
     }
 
+
+def test_queue_achievement_backfill_marks_automatic():
+    import json
+    from unittest.mock import MagicMock, patch
+
+    import slack_schedule
+
+    mock_client = MagicMock()
+    with patch.dict("os.environ", {"SCHEDULE_FUNCTION_NAME": "paxminer-test-schedule"}):
+        with patch("boto3.client", return_value=mock_client):
+            slack_schedule.queue_achievement_backfill(
+                schema="f3test",
+                achievement_id=4,
+                actor="U1",
+                automatic=True,
+            )
+    payload = json.loads(mock_client.invoke.call_args.kwargs["Payload"].decode("utf-8"))
+    assert payload["automatic"] is True
+    assert payload["source"] == "achievement_rule_backfill"
+
 class _CatchApp:
     def __init__(self):
         self.actions = {}

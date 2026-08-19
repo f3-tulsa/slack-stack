@@ -21,5 +21,6 @@ COPY PAXminer/common/ ./common/
 COPY PAXminer/achievements/__init__.py ./achievements/__init__.py
 COPY PAXminer/achievements/activity.py ./achievements/activity.py
 COPY PAXminer/achievements/versions.py ./achievements/versions.py
+COPY PAXminer/achievements/range.py ./achievements/range.py
 
 CMD ["slack_app.handler"]

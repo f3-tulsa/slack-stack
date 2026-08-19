@@ -119,6 +119,7 @@ def queue_achievement_backfill(
     actor: str,
     start: str | None = None,
     end: str | None = None,
+    automatic: bool = False,
 ) -> None:
     """Ack-friendly async invoke of reconcile_rule_awards via ScheduleFunction."""
     import boto3
@@ -138,6 +139,8 @@ def queue_achievement_backfill(
         payload["start"] = start_s
     if end_s:
         payload["end"] = end_s
+    if automatic:
+        payload["automatic"] = True
     boto3.client("lambda").invoke(
         FunctionName=fn,
         InvocationType="Event",
