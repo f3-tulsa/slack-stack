@@ -1079,6 +1079,8 @@ def test_format_window_label_and_calendar_month():
     start2, end2 = date(2026, 6, 1), date(2026, 7, 15)
     assert not is_calendar_month(start2, end2)
     assert "Jun 01" in format_window_label(start2, end2)
+    assert " to " in format_window_label(start2, end2)
+    assert " - " not in format_window_label(start2, end2)
 
     # last_month default matches calendar prior month
     from datetime import datetime, timezone
@@ -1725,3 +1727,11 @@ def test_region_leaderboard_drops_bonus_ytd_and_honors_top_n():
     assert "title" in src
     assert "top_n" in inspect.getsource(upsert_builtin_definitions)
 
+
+
+def test_pax_chart_dm_text_mentions_slack_user():
+    from monthly_charts.PAXcharter import pax_chart_dm_text
+
+    text = pax_chart_dm_text("U01ABCDEF12", "Nacho", None, "July 2026")
+    assert text.startswith("Hey <@U01ABCDEF12>")
+    assert "July 2026" in text

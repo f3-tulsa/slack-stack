@@ -77,7 +77,7 @@ def build_leaderboard_message(
         counts["display_name"] = counts["pax_id"]
     counts = counts.sort_values(["cnt", "display_name", "pax_id"], ascending=[False, True, True]).head(max(limit, 1))
     body_lines = [
-        f"\n- {mention(row['pax_id'], row['display_name'], known_ids=known_ids)}: "
+        f"\n{mention(row['pax_id'], row['display_name'], known_ids=known_ids)}: "
         f"{int(row['cnt'])} awards"
         for _, row in counts.iterrows()
     ]
@@ -137,7 +137,7 @@ def build_almost_there_message(
     heading = (title or "Almost there").strip() or "Almost there"
     if not candidates:
         return "", []
-    body_lines = [f"\n- {line}" for _, _, line in candidates]
+    body_lines = [f"\n{line}" for _, _, line in candidates]
     text = f"\n\n*{heading}*\n" + "".join(body_lines)
     blocks = [section(f"*{heading}*")]
     blocks.extend(chunk_sections(["".join(body_lines).lstrip("\n")]))

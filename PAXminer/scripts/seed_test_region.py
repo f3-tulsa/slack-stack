@@ -365,7 +365,7 @@ def _dates_in_period(today: date, period: str, n: int) -> list[date]:
 
 def _midpoint_date(lo: date, hi: date) -> date:
     if hi < lo:
-        raise ValueError(f"Empty date window: {lo} .. {hi}")
+        raise ValueError(f"Empty date window: {lo} to {hi}")
     return lo + timedelta(days=(hi - lo).days // 2)
 
 
@@ -661,7 +661,7 @@ def _plan_kotter(
         plan.expected_outcome = (
             f"Appear on Kotter MIA list (last post {bd_date.isoformat()})"
         )
-        plan.notes.append(f"MIA window {lo} .. {hi}")
+        plan.notes.append(f"MIA window {lo} to {hi}")
         return plan
 
     if kind == "low-q":
@@ -708,7 +708,7 @@ def _plan_kotter(
             f"Appear on Kotter low-Q list (last Q {q_date.isoformat()}, "
             f"recent post {recent.isoformat()})"
         )
-        plan.notes.append(f"low-q Q window {lo} .. {hi}")
+        plan.notes.append(f"low-q Q window {lo} to {hi}")
         return plan
 
     # never-q
@@ -745,7 +745,7 @@ def _plan_kotter(
         f"Appear on Kotter never-Q list (posts {old_post.isoformat()} / "
         f"{recent.isoformat()}, never Q)"
     )
-    plan.notes.append(f"never-q post window {lo} .. {hi}")
+    plan.notes.append(f"never-q post window {lo} to {hi}")
     return plan
 
 

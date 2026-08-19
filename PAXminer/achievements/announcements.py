@@ -5,8 +5,9 @@ from __future__ import annotations
 from datetime import date
 
 from achievements.period import backblast_archive_url, format_date_label, spoken_period
+from scheduling import format_iso_range
 from slack_blocks import chunk_messages, chunk_sections, fallback_text, section
-from slack_util import is_slack_user_id, mention, ordinal_suffix, plain_name
+from slack_util import mention, ordinal_suffix, plain_name
 
 
 def _as_date(value) -> date | None:
@@ -57,8 +58,8 @@ def _family_label(rule: dict) -> str:
     name = rule.get("name") or "achievement"
     verb = rule.get("verb") or ""
     if verb:
-        return f"{name} for {verb}"
-    return str(name)
+        return f"*{name}* for {verb}"
+    return f"*{name}*"
 
 
 def channel_grant_messages(
@@ -146,7 +147,7 @@ def dm_grant_messages(
             )
         else:
             bullets = [
-                f"- {_family_label(g['rule'])}, earned {_earned_at(g)}" for g in group
+                f"{_family_label(g['rule'])}, earned {_earned_at(g)}" for g in group
             ]
             text = (
                 f"Hey {tag} you just earned {len(group)} achievements! Keep up the good work!\n"
@@ -166,9 +167,7 @@ def _revoke_backblast_link(row: dict, *, webhook: bool) -> str | None:
     d = row.get("trigger_date") or row.get("date_awarded")
     if not (ao_id and ts and d):
         return None
-    label = f"this Backblast on {format_date_label(_as_date(d))}" if webhook else (
-        f"this event on {format_date_label(_as_date(d))}"
-    )
+    label = format_date_label(_as_date(d))
     return date_link(d, ao_id, ts, label=label)
 
 
@@ -185,12 +184,12 @@ def channel_revoke_message(
     link = _revoke_backblast_link(row, webhook=webhook)
     if link:
         text = (
-            f"Correction: {tag}'s award for {name} during period {period} "
-            f"was revoked after attendance was updated for {link}."
+            f"Correction: {tag}'s award for *{name}* during period {period} "
+            f"was revoked after attendance was updated on {link}."
         )
     else:
         text = (
-            f"Correction: {tag}'s award for {name} during period {period} "
+            f"Correction: {tag}'s award for *{name}* during period {period} "
             f"was revoked after attendance was updated."
         )
     return text, [section(text)]
@@ -216,12 +215,12 @@ def dm_revoke_messages(
             link = _revoke_backblast_link(row, webhook=webhook)
             if link:
                 lines.append(
-                    f"your award for {name} during period {period} was revoked "
+                    f"your award for *{name}* during period {period} was revoked "
                     f"after attendance was updated for {link}"
                 )
             else:
                 lines.append(
-                    f"your award for {name} during period {period} was revoked "
+                    f"your award for *{name}* during period {period} was revoked "
                     f"after attendance was updated"
                 )
         if len(lines) == 1:
@@ -230,7 +229,7 @@ def dm_revoke_messages(
                 f"Keep showing up and you'll get it back!"
             )
         else:
-            bullets = "\n".join(f"- {line}" for line in lines)
+            bullets = "\n".join(lines)
             text = (
                 f"Correction: Hey {tag}, just letting you know that {len(lines)} awards "
                 f"were revoked after attendance was updated. Keep showing up and you'll get them back!\n"
@@ -246,11 +245,11 @@ def grant_log_line(grant: dict, display_name: str | None) -> str:
         grant.get("period_start"), grant.get("period_end"), grant.get("period") or "year"
     )
     d = _as_date(grant.get("date_awarded"))
-    label = f"this event on {format_date_label(d)}" if d else "this event"
+    label = format_date_label(d) if d else "this event"
     link = date_link(grant.get("date_awarded"), grant.get("ao_id"), grant.get("timestamp"), label=label)
     who = plain_name(grant.get("pax_id"), display_name)
     return (
-        f"- Achievement `{name}` was granted to `{who}` for period {period} "
+        f"Achievement *{name}* was granted to `{who}` for period {period} "
         f"after posting at {link}"
     )
 
@@ -268,16 +267,16 @@ def revoke_log_line(
     ao_id = row.get("trigger_ao_id") or row.get("ao_id")
     ts = row.get("trigger_timestamp") or row.get("timestamp")
     if webhook:
-        label = f"this event on {format_date_label(d)}" if d else "this event"
+        label = format_date_label(d) if d else "this event"
         link = date_link(d, ao_id, ts, label=label) if (ao_id and ts) else None
-        suffix = f" after an edit of {link}" if link else " after an edit"
+        suffix = f" after an edit on {link}" if link else " after an edit"
     elif ao_id and ts and d:
-        label = f"this event on {format_date_label(d)}"
+        label = format_date_label(d)
         link = date_link(d, ao_id, ts, label=label)
         suffix = f" after attendance no longer qualified at {link}"
     else:
         suffix = " after attendance no longer qualified"
-    return f"- Achievement `{name}` was revoked from `{who}` for period {period}{suffix}"
+    return f"Achievement *{name}* was revoked from `{who}` for period {period}{suffix}"
 
 
 def run_summary_line(
@@ -308,8 +307,9 @@ def run_summary_line(
         held_bits.append(f"{held_out_of_range} out of range")
     held_detail = f" ({', '.join(held_bits)})" if held_bits else ""
     window = ""
-    if start and end:
-        window = f" | {start.isoformat()}..{end.isoformat()}"
+    span = format_iso_range(start, end)
+    if span:
+        window = f" | {span}"
     dest = ""
     if channel:
         dest = f" | posted {channel}"
@@ -318,25 +318,26 @@ def run_summary_line(
             dest += f", {dms} DMs{fail}"
     dur = f" ({duration_s:.1f}s)" if duration_s is not None else ""
     if kind == "backfill":
-        who = f"<@{actor}>" if actor and is_slack_user_id(actor) else (actor or "admin")
+        who = f"`{actor}`" if actor else "admin"
         name = achievement_name or "achievement"
-        end_label = end.isoformat() if end else "present"
-        start_label = start.isoformat() if start else "all-time"
+        span = format_iso_range(start, end) or (
+            f"{start.isoformat() if start else 'all-time'} to {end.isoformat() if end else 'present'}"
+        )
         unchanged = held
         return (
-            f"- Achievements backfill triggered by {who} for '{name}' over "
-            f"{start_label}..{end_label} — {granted} granted, {revoked} revoked, "
+            f"Achievements backfill triggered by {who} for *{name}* over "
+            f"{span} — {granted} granted, {revoked} revoked, "
             f"{unchanged} unchanged"
         )
     return (
-        f"- Achievements {kind}: {granted} granted, {revoked} revoked, "
+        f"Achievements {kind}: {granted} granted, {revoked} revoked, "
         f"{held} held{held_detail} | {rules} rules{window}{dest}{dur}"
     )
 
 
 def reconcile_channel_line(name: str, granted: int, revoked: int, unchanged: int) -> str:
-    total = granted + revoked + unchanged
+    del unchanged  # public copy no longer reports the unchanged count
     return (
-        f"Achievement *{name}* was corrected. {total} award records were updated "
-        f"({granted} granted, {revoked} revoked, {unchanged} unchanged)."
+        f"Achievement *{name}* was corrected "
+        f"({granted} granted, {revoked} revoked)."
     )

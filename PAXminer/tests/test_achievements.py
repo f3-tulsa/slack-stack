@@ -75,6 +75,7 @@ def test_build_kotter_message_mentions_known_and_falls_back():
     assert f"<@{known}>" in text
     assert f"`{unknown}`" in text
     assert f"<@{unknown}>" not in text
+    assert "\n- " not in text
 
 
 def test_kotter_mia_keeps_nan_home_ao():
@@ -210,6 +211,7 @@ def test_leaderboard_tie_break_by_display_name():
     )
     text, blocks = build_leaderboard_message(awarded, users)
     assert text.index("<@U01AAAAAAA2>") < text.index("<@U01AAAAAAA3>") < text.index("<@U01AAAAAAA1>")
+    assert "\n- " not in text
     assert blocks
     assert any(b.get("type") == "header" for b in blocks)
     assert "YTD" not in text
@@ -1178,7 +1180,7 @@ def test_achievement_failure_log_uses_schema_name():
                 _post_achievement_failure_log(region_row, RuntimeError("boom"))
 
     assert len(log_lines) == 1
-    assert log_lines[0] == "- Achievements FAILED - boom"
+    assert log_lines[0] == "Achievements FAILED - boom"
 
 
 def test_achievements_emit_per_event_paxminer_logs():
@@ -1287,8 +1289,10 @@ def test_achievements_emit_per_event_paxminer_logs():
     assert result["revokes"] == 1
     assert any("was granted to `Grant`" in line for line in log_lines)
     assert any("was revoked from `Revoke`" in line for line in log_lines)
-    assert not any("<@" in line for line in log_lines if line.startswith("- Achievement `"))
-    assert not any("f3test" in line for line in log_lines if line.startswith("- Achievement `"))
+    assert any("Achievement *" in line for line in log_lines)
+    assert not any("<@" in line for line in log_lines)
+    assert not any(line.startswith("- ") for line in log_lines)
+    assert not any("f3test" in line for line in log_lines)
     assert not any("Tulsa" in line for line in log_lines)
 
 
@@ -1646,6 +1650,7 @@ def test_channel_single_and_batch_copy():
     )
     text = msgs[0][0]
     assert "<@U01AAAAAAA1>" in text
+    assert "*Leader of Men*" in text
     assert "<#C_AO>" in text
     assert "in 2026" in text
     assert "Encourage this HIM to keep it up!" in text
@@ -1793,12 +1798,13 @@ def test_genuine_revoke_posts_channel_dm_and_log():
     assert len(channel_msgs) == 1
     assert "Correction:" in channel_msgs[0]
     assert "T-Claps" not in channel_msgs[0]
-    assert "this Backblast on August 16" in channel_msgs[0]
+    assert "this Backblast" not in channel_msgs[0]
+    assert "August 16" in channel_msgs[0]
     assert len(dm_msgs) == 1
     assert "Keep showing up and you'll get it back!" in dm_msgs[0]
     assert len(logs) == 1
     assert "was revoked from" in logs[0]
-    assert "after an edit of" in logs[0]
+    assert "after an edit on" in logs[0]
     assert "<@" not in logs[0]
 
 
@@ -1906,7 +1912,7 @@ def test_reconcile_rule_awards_silent_channel_summary():
     assert "Achievement *Centurion* was corrected" in posts[0][1]
     assert mock_dm.call_count == 0
     assert len(logs) == 1
-    assert "backfill triggered by <@UADMIN1234>" in logs[0]
+    assert "backfill triggered by `UADMIN1234`" in logs[0]
     assert "89 granted, 141 revoked, 73 unchanged" in logs[0]
 
 
@@ -1953,7 +1959,7 @@ def test_reconcile_rule_awards_skips_channel_when_noop():
     assert result["held"] == 26
     assert posts == []
     assert len(logs) == 1
-    assert "backfill triggered by <@UADMIN1234>" in logs[0]
+    assert "backfill triggered by `UADMIN1234`" in logs[0]
     assert "0 granted, 0 revoked, 26 unchanged" in logs[0]
     assert "was corrected" not in logs[0]
 
