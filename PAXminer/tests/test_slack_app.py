@@ -292,6 +292,60 @@ def test_modals_with_input_blocks_include_submit():
     create_code = next(b for b in create["blocks"] if b.get("block_id") == "code")
     assert create_code["type"] == "input"
     assert not any(b.get("block_id") == "apply_mode" for b in create["blocks"])
+    pencils = [
+        (b.get("accessory") or {}).get("text", {}).get("text")
+        for b in list_with["blocks"]
+        if b.get("type") == "section"
+    ]
+    assert "✏️ Edit" in pencils
+
+
+def test_achievement_delete_confirm_names_pax_and_pluralizes():
+    from config_paxminer import achievement_delete_confirm_text, _achievement_edit_modal
+    from slack_blocks import confirm_dialog, counted_noun
+
+    assert counted_noun(1, "award") == "1 award"
+    assert counted_noun(27, "award") == "27 awards"
+    assert counted_noun(1, "PAX", "PAX") == "1 PAX"
+    assert counted_noun(12, "PAX", "PAX") == "12 PAX"
+
+    many = achievement_delete_confirm_text("six_pack", 27, 12)
+    assert "`six_pack`" in many
+    assert "27 awards from 12 PAX" in many
+    assert "award(s)" not in many
+    assert "simply disable this achievement" in many
+    one = achievement_delete_confirm_text("six_pack", 1, 1)
+    assert "1 award from 1 PAX" in one
+    none = achievement_delete_confirm_text("six_pack", 0, 0)
+    assert "0 awards from 0 PAX" in none
+
+    dialog = confirm_dialog("Delete achievement?", many)
+    assert dialog["style"] == "danger"
+    assert dialog["confirm"]["text"] == "Delete"
+    restore = confirm_dialog("Restore defaults?", "Adds missing builtins.", "Restore")
+    assert "style" not in restore
+
+    row = {
+        "id": 1,
+        "name": "The Six Pack",
+        "code": "six_pack",
+        "metric": "posts",
+        "activity": "beatdown",
+        "period": "week",
+        "threshold": 6,
+        "award_count": 27,
+        "pax_count": 12,
+    }
+    edit = _achievement_edit_modal("T1", "f3tulsa_test", row)
+    delete_btn = next(
+        el
+        for b in edit["blocks"]
+        if b.get("type") == "actions"
+        for el in b.get("elements") or []
+        if el.get("action_id") == "paxminer_achievement_delete"
+    )
+    assert delete_btn["confirm"]["style"] == "danger"
+    assert "27 awards from 12 PAX" in delete_btn["confirm"]["text"]["text"]
 
 
 def test_edit_achievement_no_selection_updates_view_with_notice():

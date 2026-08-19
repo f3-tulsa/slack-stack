@@ -425,6 +425,7 @@ def test_schedules_list_uses_pencil_rows_and_subline():
     ]
     assert pencils[0]["action_id"] == EDIT_SCHEDULE_ACTION_ID
     assert pencils[0]["value"] == "9"
+    assert pencils[0]["text"]["text"] == "✏️ Edit"
     sub = " ".join(
         el.get("text") or ""
         for b in view["blocks"]
@@ -1217,6 +1218,12 @@ def test_reports_list_has_pencil_not_duplicate():
                 action_ids.append(e["action_id"])
     assert EDIT_REPORT_ACTION_ID in action_ids
     assert DUPLICATE_REPORT_ACTION_ID not in action_ids
+    pencils = [
+        (b.get("accessory") or {}).get("text", {}).get("text")
+        for b in view["blocks"]
+        if b.get("type") == "section"
+    ]
+    assert "✏️ Edit" in pencils
     edit = _report_edit_modal("T1", "f3test", row)
     edit_ids = [
         e.get("action_id")

@@ -9,7 +9,7 @@ import re
 from datetime import date
 from pathlib import Path
 
-from slack_blocks import confirm_dialog, context, page_nav_elements, pencil_row
+from slack_blocks import confirm_dialog, context, counted_noun, page_nav_elements, pencil_row
 from config_schedule import PAGE_SIZE, _bulk_delete_restore, achievement_subline
 
 LOG = logging.getLogger(__name__)
@@ -203,22 +203,6 @@ def _config_modal(region: dict) -> dict:
                 "element": log_element,
             },
         ],
-    }
-
-
-def _achievement_delete_confirm() -> dict:
-    """Native Slack confirm on Achievements list Delete selected."""
-    return {
-        "title": {"type": "plain_text", "text": "Delete achievement?"},
-        "text": {
-            "type": "mrkdwn",
-            "text": (
-                "Deletes the selected achievement and every award of that code. "
-                "This cannot be undone. To keep PAX history, Edit and uncheck Enabled instead."
-            ),
-        },
-        "confirm": {"type": "plain_text", "text": "Delete"},
-        "deny": {"type": "plain_text", "text": "Cancel"},
     }
 
 
@@ -658,6 +642,7 @@ def _achievement_edit_modal(
         aid = str(row["id"])
         code = src.get("code") or aid
         award_count = int(src.get("award_count") or 0)
+        pax_count = int(src.get("pax_count") or 0)
         blocks.append(
             {
                 "type": "actions",
@@ -677,10 +662,7 @@ def _achievement_edit_modal(
                         "value": aid,
                         "confirm": confirm_dialog(
                             "Delete achievement?",
-                            (
-                                f"Deletes `{code}` and {award_count} award(s). "
-                                "This cannot be undone. Uncheck Enabled to keep history."
-                            ),
+                            achievement_delete_confirm_text(code, award_count, pax_count),
                         ),
                     },
                 ],
@@ -996,12 +978,31 @@ def delete_all_achievements(cur, schema: str) -> dict[str, int]:
     return {"awards": awards, "achievements": int(cur.rowcount or 0)}
 
 
-def count_achievement_awards(cur, schema: str, achievement_id: int) -> int:
+def achievement_delete_confirm_text(code: str, award_count: int, pax_count: int) -> str:
+    """Native Slack confirm copy for deleting one achievement from the edit modal."""
+    awards = counted_noun(award_count, "award")
+    pax = counted_noun(pax_count, "PAX", "PAX")
+    return (
+        f"Are you sure you want to delete the `{code}` achievement? If you do, it will "
+        f"remove {awards} from {pax}. This cannot be undone! To keep the historical "
+        "awards and not award anything new, simply disable this achievement."
+    )
+
+
+def achievement_award_impact(cur, schema: str, achievement_id: int) -> tuple[int, int]:
+    """``(award_count, distinct_pax_count)`` for one achievement code."""
     cur.execute(
-        f"SELECT COUNT(*) AS c FROM `{schema}`.`achievements_awarded` WHERE achievement_id=%s",
+        f"SELECT COUNT(*) AS awards, COUNT(DISTINCT pax_id) AS pax "
+        f"FROM `{schema}`.`achievements_awarded` WHERE achievement_id=%s",
         (achievement_id,),
     )
-    return int((cur.fetchone() or {}).get("c") or 0)
+    row = cur.fetchone() or {}
+    return int(row.get("awards") or 0), int(row.get("pax") or 0)
+
+
+def count_achievement_awards(cur, schema: str, achievement_id: int) -> int:
+    awards, _pax = achievement_award_impact(cur, schema, achievement_id)
+    return awards
 
 
 def earliest_beatdown_date(cur, schema: str) -> str | None:

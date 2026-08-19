@@ -72,15 +72,21 @@ def chunk_messages(blocks: list[dict], *, max_blocks: int = MAX_BLOCKS) -> list[
     return [blocks[i : i + max_blocks] for i in range(0, len(blocks), max_blocks)]
 
 
+def counted_noun(n: int, singular: str, plural: str | None = None) -> str:
+    """``1 award``, ``27 awards``. Pass *plural* when it is not ``singular + 's'`` (e.g. PAX)."""
+    word = singular if int(n) == 1 else (plural if plural is not None else f"{singular}s")
+    return f"{int(n)} {word}"
+
+
 def pencil_row(title: str, action_id: str, value: str) -> dict:
-    """Name on the left, pencil accessory on the right (one accessory per section)."""
+    """Name on the left, pencil + Edit accessory on the right (one accessory per section)."""
     return {
         "type": "section",
         "text": {"type": "mrkdwn", "text": f"*{title}*"[:MAX_SECTION_TEXT]},
         "accessory": {
             "type": "button",
             "action_id": action_id,
-            "text": {"type": "plain_text", "text": "✏️", "emoji": True},
+            "text": {"type": "plain_text", "text": "✏️ Edit", "emoji": True},
             "value": str(value),
         },
     }
@@ -113,9 +119,12 @@ def page_nav_elements(
 
 
 def confirm_dialog(title: str, text: str, confirm: str = "Delete") -> dict:
-    return {
+    dialog = {
         "title": {"type": "plain_text", "text": title[:100]},
         "text": {"type": "mrkdwn", "text": text[:300]},
         "confirm": {"type": "plain_text", "text": confirm[:30]},
         "deny": {"type": "plain_text", "text": "Cancel"},
     }
+    if confirm.lower().startswith("delete"):
+        dialog["style"] = "danger"
+    return dialog

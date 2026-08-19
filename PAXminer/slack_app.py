@@ -47,13 +47,14 @@ from config_paxminer import (
     _registry_db,
     _selected_achievement_id,
     _validate_achievement,
-    count_achievement_awards,
+    achievement_award_impact,
     delete_all_achievements,
     earliest_beatdown_date,
     restore_achievement_defaults,
     uniquify_achievement_code,
 )
 from paxminer_db import connect_from_env, paxminer_schema_from_env
+from slack_blocks import counted_noun
 from slack_http import ADMIN_REQUIRED_TEXT, is_http_request, is_slack_admin, notify_admin_required
 
 LOCAL_DEVELOPMENT = not os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
@@ -332,9 +333,11 @@ def handle_edit_achievement(ack, body, client, logger):
             row = _load_achievement(cur, regional_schema, selected_id)
             options = _load_activity_options(cur, regional_schema)
             if row:
-                row["award_count"] = count_achievement_awards(
+                awards, pax = achievement_award_impact(
                     cur, regional_schema, selected_id
                 )
+                row["award_count"] = awards
+                row["pax_count"] = pax
         if not row:
             _refresh_achievements_list(
                 client, body, team_id, regional_schema, "Achievement not found."
@@ -375,12 +378,9 @@ def handle_delete_achievement(ack, body, client, logger):
                     client, body, team_id, regional_schema, "Achievement not found."
                 )
                 return
-            cur.execute(
-                f"SELECT COUNT(*) AS cnt FROM `{regional_schema}`.`achievements_awarded` "
-                "WHERE achievement_id=%s",
-                (selected_id,),
+            cnt, pax_cnt = achievement_award_impact(
+                cur, regional_schema, selected_id
             )
-            cnt = int((cur.fetchone() or {}).get("cnt", 0) or 0)
             cur.execute(
                 f"DELETE FROM `{regional_schema}`.`achievements_awarded` WHERE achievement_id=%s",
                 (selected_id,),
@@ -396,14 +396,16 @@ def handle_delete_achievement(ack, body, client, logger):
             conn.commit()
         name = row.get("name") or "achievement"
         code = row.get("code") or name
-        notice = f"Deleted `{code}` ({cnt} award(s) removed)."
+        awards = counted_noun(cnt, "award")
+        pax = counted_noun(pax_cnt, "PAX", "PAX")
+        notice = f"Deleted `{code}` ({awards} from {pax} removed)."
         _refresh_achievements_list(client, body, team_id, regional_schema, notice)
         region = dict(region)
         region["schema_name"] = regional_schema
         _post_achievement_admin_notice(
             region,
-            f"Achievement *{name}* was deleted along with {cnt} award(s).",
-            f"Achievement *{name}* was deleted by `{_log_actor_name(client, user_id)}` ({cnt} awards removed)",
+            f"Achievement *{name}* was deleted along with {awards} from {pax}.",
+            f"Achievement *{name}* was deleted by `{_log_actor_name(client, user_id)}` ({awards} from {pax} removed)",
         )
     except Exception:
         logger.exception("achievement delete failed id=%s", selected_id)
@@ -530,8 +532,8 @@ def handle_delete_all_achievements(ack, body, client, logger):
             team_id,
             regional_schema,
             (
-                f"Deleted {counts['achievements']} achievement(s) and "
-                f"{counts['awards']} award(s)."
+                f"Deleted {counted_noun(counts['achievements'], 'achievement')} and "
+                f"{counted_noun(counts['awards'], 'award')}."
             ),
             page=0,
         )
