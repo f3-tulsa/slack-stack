@@ -496,6 +496,62 @@ def test_cosmetic_edit_does_not_mint_version():
     assert "SET name=%s, description=%s, verb=%s, enabled=%s" in update_sql
 
 
+def test_reenable_does_not_mint_version_or_force_today():
+    from slack_app import handle_achievement_edit_submit
+
+    ack = MagicMock()
+    body = {
+        "user": {"id": "U1"},
+        "view": {
+            "private_metadata": '{"team_id":"T1","regional_schema":"f3test","achievement_id":3}',
+            "state": {"values": {}},
+        },
+    }
+    existing = {
+        "id": 3,
+        "code": "six_pack",
+        "name": "6 pack",
+        "description": "d",
+        "verb": "v",
+        "metric": "posts",
+        "activity": ["beatdown"],
+        "period": "week",
+        "threshold": 6,
+        "enabled": "0",
+        "effective_from": "2026-01-15",
+    }
+    values = {
+        "name": "6 pack",
+        "description": "d",
+        "verb": "v",
+        "code": "six_pack",
+        "metric": "posts",
+        "activity_list": ["beatdown"],
+        "period": "week",
+        "threshold": 6,
+        "enabled": 1,
+        "range_mode": "going_forward",
+        "apply_mode": "going_forward",
+        "effective_from": None,
+        "effective_to": None,
+    }
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch("slack_app._region_context_from_body", return_value=("T1", "f3test", {"region": "t"})):
+            with patch("slack_app._parse_achievement_form", return_value=values):
+                with patch("slack_app._validate_achievement", return_value={}):
+                    with patch("slack_app.connect_from_env") as mock_conn:
+                        mock_cur = MagicMock()
+                        mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                        mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                        with patch("slack_app._load_achievement", return_value=existing):
+                            with patch("slack_app._load_achievements", return_value=[]):
+                                with patch("achievements.versions.supersede_and_insert") as mint:
+                                    handle_achievement_edit_submit(ack, body, MagicMock(), MagicMock())
+    mint.assert_not_called()
+    update_sql = " ".join(str(c) for c in mock_cur.execute.call_args_list)
+    assert "SET name=%s, description=%s, verb=%s, enabled=%s" in update_sql
+
+
 def test_parameter_edit_mints_version_and_can_queue_backfill():
     from slack_app import handle_achievement_edit_submit
 

@@ -367,7 +367,7 @@ def achievement_rule_hint(row: dict) -> str:
 
 
 def achievement_subline(row: dict) -> str:
-    enabled = "Enabled" if int(row.get("enabled") or 1) else "Disabled"
+    enabled = "Enabled" if int(row.get("enabled") or 0) else "Disabled"
     return f"{enabled} | {achievement_rule_hint(row)}"
 
 
@@ -1362,31 +1362,34 @@ def _report_edit_modal(
 def draft_from_report_state(state: dict, meta_draft: dict | None = None) -> dict:
     draft = dict(meta_draft or {})
     for key in ("name", "code", "top_n", "window_days"):
-        val = _state_text(state, key)
-        if val:
-            draft[key] = val
+        if key in state:
+            draft[key] = _state_text(state, key)
     for key, action in (
         ("kind", "val"),
         ("source", "val"),
         ("metric", "val"),
         ("group_by", "val"),
     ):
-        sel = _state_selected(state, key, action)
-        if sel:
-            draft[key] = sel
-    w = _state_selected(state, "time_window_type", REPORT_WINDOW_ACTION_ID)
-    if w:
-        draft["time_window_type"] = w
-    tmpl = _state_selected(state, "report_type", REPORT_TEMPLATE_ACTION_ID)
-    if tmpl:
-        draft["report_type"] = tmpl
-    fields = state.get("fields", {}).get("val", {}).get("selected_options") or []
-    if fields:
+        if key in state:
+            sel = _state_selected(state, key, action)
+            if sel:
+                draft[key] = sel
+    if "time_window_type" in state:
+        w = _state_selected(state, "time_window_type", REPORT_WINDOW_ACTION_ID)
+        if w:
+            draft["time_window_type"] = w
+    if "report_type" in state:
+        tmpl = _state_selected(state, "report_type", REPORT_TEMPLATE_ACTION_ID)
+        if tmpl:
+            draft["report_type"] = tmpl
+    if "fields" in state:
+        fields = state.get("fields", {}).get("val", {}).get("selected_options") or []
         draft["fields"] = [o["value"] for o in fields]
     for key in ("window_start", "window_end"):
-        d = state.get(key, {}).get("val", {}).get("selected_date")
-        if d:
-            draft[key] = d
+        if key in state:
+            d = state.get(key, {}).get("val", {}).get("selected_date")
+            if d:
+                draft[key] = d
     return draft
 
 
@@ -1510,16 +1513,30 @@ def parse_kotter_form(payload: dict) -> dict:
 
     state = payload.get("view", {}).get("state", {}).get("values", {})
     return {
-        "NO_POST_THRESHOLD": _to_int(state.get("NO_POST_THRESHOLD", {}).get("val", {}).get("value"), 2),
-        "REMINDER_WEEKS": _to_int(state.get("REMINDER_WEEKS", {}).get("val", {}).get("value"), 2),
-        "HOME_AO_CAPTURE": _to_int(state.get("HOME_AO_CAPTURE", {}).get("val", {}).get("value"), 8),
+        "NO_POST_THRESHOLD": _to_int(state.get("NO_POST_THRESHOLD", {}).get("val", {}).get("value"), None),
+        "REMINDER_WEEKS": _to_int(state.get("REMINDER_WEEKS", {}).get("val", {}).get("value"), None),
+        "HOME_AO_CAPTURE": _to_int(state.get("HOME_AO_CAPTURE", {}).get("val", {}).get("value"), None),
         "NO_Q_THRESHOLD_WEEKS": _to_int(
-            state.get("NO_Q_THRESHOLD_WEEKS", {}).get("val", {}).get("value"), 4
+            state.get("NO_Q_THRESHOLD_WEEKS", {}).get("val", {}).get("value"), None
         ),
         "NO_Q_THRESHOLD_POSTS": _to_int(
-            state.get("NO_Q_THRESHOLD_POSTS", {}).get("val", {}).get("value"), 4
+            state.get("NO_Q_THRESHOLD_POSTS", {}).get("val", {}).get("value"), None
         ),
     }
+
+
+def validate_kotter_form(values: dict) -> dict[str, str]:
+    errors: dict[str, str] = {}
+    for key in (
+        "NO_POST_THRESHOLD",
+        "REMINDER_WEEKS",
+        "HOME_AO_CAPTURE",
+        "NO_Q_THRESHOLD_WEEKS",
+        "NO_Q_THRESHOLD_POSTS",
+    ):
+        if values.get(key) is None:
+            errors[key] = "Enter a whole number"
+    return errors
 
 
 def selected_schedule_id(payload: dict) -> int | None:

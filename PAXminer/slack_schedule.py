@@ -60,6 +60,7 @@ from config_schedule import (
     schedule_as_new_draft,
     selected_report_id,
     selected_schedule_id,
+    validate_kotter_form,
     validate_report_form,
     validate_schedule_form,
 )
@@ -1184,6 +1185,10 @@ def register_schedule_listeners(app) -> None:
             ack(response_action="errors", errors={"NO_POST_THRESHOLD": "Region key missing"})
             return
         values = parse_kotter_form(body)
+        errors = validate_kotter_form(values)
+        if errors:
+            ack(response_action="errors", errors=errors)
+            return
         pm = paxminer_schema_from_env()
         try:
             conn = connect_from_env(

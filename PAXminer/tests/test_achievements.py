@@ -826,16 +826,16 @@ def test_validate_achievement_code():
     assert "code" in errors
 
 
-def test_parse_kotter_form_non_numeric_falls_back_to_defaults():
-    from config_schedule import parse_kotter_form
+def test_parse_kotter_form_blank_and_invalid_do_not_coerce():
+    from config_schedule import parse_kotter_form, validate_kotter_form
 
     parsed = parse_kotter_form(
         {
             "view": {
                 "state": {
                     "values": {
-                        "NO_POST_THRESHOLD": {"val": {"value": "abc"}},
-                        "REMINDER_WEEKS": {"val": {"value": ""}},
+                        "NO_POST_THRESHOLD": {"val": {"value": ""}},
+                        "REMINDER_WEEKS": {"val": {"value": "abc"}},
                         "HOME_AO_CAPTURE": {"val": {"value": "nope"}},
                         "NO_Q_THRESHOLD_WEEKS": {"val": {"value": "3.5"}},
                         "NO_Q_THRESHOLD_POSTS": {"val": {"value": None}},
@@ -844,11 +844,20 @@ def test_parse_kotter_form_non_numeric_falls_back_to_defaults():
             }
         }
     )
-    assert parsed["NO_POST_THRESHOLD"] == 2
-    assert parsed["REMINDER_WEEKS"] == 2
-    assert parsed["HOME_AO_CAPTURE"] == 8
-    assert parsed["NO_Q_THRESHOLD_WEEKS"] == 4
-    assert parsed["NO_Q_THRESHOLD_POSTS"] == 4
+    assert parsed["NO_POST_THRESHOLD"] is None
+    assert parsed["REMINDER_WEEKS"] is None
+    assert parsed["HOME_AO_CAPTURE"] is None
+    assert parsed["NO_Q_THRESHOLD_WEEKS"] is None
+    assert parsed["NO_Q_THRESHOLD_POSTS"] is None
+    errors = validate_kotter_form(parsed)
+    assert errors["NO_POST_THRESHOLD"] == "Enter a whole number"
+    assert set(errors) == {
+        "NO_POST_THRESHOLD",
+        "REMINDER_WEEKS",
+        "HOME_AO_CAPTURE",
+        "NO_Q_THRESHOLD_WEEKS",
+        "NO_Q_THRESHOLD_POSTS",
+    }
 
 
 def test_parse_achievement_form_non_numeric_threshold_is_none():
@@ -875,6 +884,120 @@ def test_parse_achievement_form_non_numeric_threshold_is_none():
     assert values["threshold"] is None
     errors = _validate_achievement(values)
     assert errors.get("threshold") == "Enter a whole number"
+
+
+def _achievement_form_state(**overrides):
+    values = {
+        "name": {"val": {"value": "Six Pack"}},
+        "description": {"val": {"value": "d"}},
+        "verb": {"val": {"value": "posting"}},
+        "code": {"val": {"value": "six_pack"}},
+        "metric": {"val": {"selected_option": {"value": "posts"}}},
+        "activity": {"val": {"selected_options": [{"value": "beatdown"}]}},
+        "period": {"val": {"selected_option": {"value": "week"}}},
+        "threshold": {"val": {"value": "6"}},
+        "enabled": {"val": {"selected_options": [{"value": "1"}]}},
+    }
+    values.update(overrides)
+    return {"view": {"state": {"values": values}}}
+
+
+def test_parse_achievement_form_empty_threshold_errors_not_one():
+    from config_paxminer import _parse_achievement_form, _validate_achievement
+
+    values = _parse_achievement_form(_achievement_form_state(threshold={"val": {"value": ""}}))
+    assert values["threshold"] is None
+    errors = _validate_achievement(values)
+    assert errors.get("threshold") == "Enter a whole number"
+
+
+def test_parse_achievement_form_missing_enabled_block_is_disabled():
+    from config_paxminer import _parse_achievement_form
+
+    payload = _achievement_form_state()
+    del payload["view"]["state"]["values"]["enabled"]
+    values = _parse_achievement_form(payload)
+    assert values["enabled"] == 0
+
+
+def test_achievement_subline_shows_disabled_when_enabled_is_zero():
+    from config_paxminer import _achievements_list_modal
+    from config_schedule import achievement_subline
+
+    row = {
+        "id": 3,
+        "name": "6 pack",
+        "code": "six_pack",
+        "metric": "posts",
+        "period": "month",
+        "threshold": 6,
+        "enabled": 0,
+    }
+    assert achievement_subline(row) == "Disabled | Month - 6 posts"
+    modal = _achievements_list_modal("T1", "f3test", [row])
+    texts = [
+        (b.get("elements") or [{}])[0].get("text")
+        for b in modal["blocks"]
+        if b.get("type") == "context"
+    ]
+    assert any(t and t.startswith("Disabled |") for t in texts)
+
+
+def test_achievement_edit_modal_disabled_row_is_unchecked():
+    from config_paxminer import _achievement_edit_modal, _achievement_summary
+
+    row = {
+        "id": 3,
+        "name": "Six Pack",
+        "code": "six_pack",
+        "description": "d",
+        "verb": "posting",
+        "metric": "posts",
+        "activity": ["beatdown"],
+        "period": "week",
+        "threshold": 6,
+        "enabled": 0,
+        "effective_from": "2026-01-01",
+    }
+    assert "off" in _achievement_summary(row)
+    modal = _achievement_edit_modal("T1", "f3test", row)
+    enabled = next(b for b in modal["blocks"] if b.get("block_id") == "enabled")
+    assert "initial_options" not in enabled["element"]
+
+
+def test_load_achievement_keeps_version_activity_not_legacy_beatdown():
+    from unittest.mock import MagicMock
+
+    from config_paxminer import _achievement_edit_modal, _load_achievement
+
+    cur = MagicMock()
+    cur.fetchone.return_value = {
+        "id": 3,
+        "name": "Social Butterfly",
+        "description": "d",
+        "verb": "posting",
+        "code": "social",
+        "metric": "posts",
+        "activity": "beatdown",
+        "period": "year",
+        "threshold": 6,
+        "enabled": 1,
+        "version": 2,
+        "version_key": "abc",
+        "version_metric": "posts",
+        "version_activity": ["2nd F"],
+        "version_period": "year",
+        "version_threshold": 6,
+        "effective_from": "2026-01-01",
+        "effective_to": None,
+    }
+    row = _load_achievement(cur, "f3test", 3)
+    assert row["activity"] == ["2nd F"]
+    modal = _achievement_edit_modal("T1", "f3test", row)
+    activity = next(b for b in modal["blocks"] if b.get("block_id") == "activity")
+    initial = [o["value"] for o in activity["element"].get("initial_options") or []]
+    assert initial == ["2nd F"]
+    assert "beatdown" not in initial
 
 
 def test_config_modal_hub_has_timezone_and_section_buttons():
@@ -2129,6 +2252,8 @@ def test_legacy_activity_lists_and_classifier_text_formats():
     assert legacy_activity_to_list("any") == []
     assert "beatdown" in legacy_activity_to_list("beatdown")
     assert "Bootcamp" in legacy_activity_to_list("beatdown")
+    beatdown = legacy_activity_to_list("beatdown")
+    assert len(beatdown) == len({a.lower() for a in beatdown})
     assert "qsource" in {a.lower() for a in legacy_activity_to_list("qsource")}
     assert (
         classify_activity_type(backblast="QSource with Klint at The Goose", ao_name="the-goose")
@@ -2138,3 +2263,97 @@ def test_legacy_activity_lists_and_classifier_text_formats():
         classify_activity_type(backblast="QSource with <@U01ABCDEF23>", ao_name="the-goose")
         == "qsource"
     )
+
+
+def test_activity_labels_dedupe_case_and_prefer_option_spelling():
+    from achievements.activity import (
+        activity_list_from_rule,
+        map_activities_to_options,
+        unique_activity_labels,
+    )
+
+    assert unique_activity_labels(["Bootcamp", "beatdown", "bootcamp"]) == [
+        "Bootcamp",
+        "beatdown",
+    ]
+    assert activity_list_from_rule(
+        {"activity": ["beatdown", "Bootcamp", "bootcamp"]}
+    ) == ["beatdown", "Bootcamp"]
+    assert map_activities_to_options(
+        ["bootcamp", "beatdown"],
+        ["Bootcamp", "beatdown", "qsource"],
+    ) == ["Bootcamp", "beatdown"]
+
+
+def test_load_activity_options_dedupes_slackblast_case_variants():
+    from unittest.mock import MagicMock
+
+    from config_paxminer import _load_activity_options
+
+    cur = MagicMock()
+    cur.fetchall.return_value = [
+        {"activity_type": "Bootcamp"},
+        {"activity_type": "beatdown"},
+        {"activity_type": "bootcamp"},
+    ]
+    opts = _load_activity_options(cur, "f3test")
+    assert opts[0] == "Bootcamp"
+    assert "bootcamp" not in opts
+    assert len(opts) == len({o.lower() for o in opts})
+    assert "qsource" in opts
+    assert "2nd F" in opts
+
+
+def test_achievement_edit_modal_activity_options_are_case_insensitive():
+    from config_paxminer import _achievement_edit_modal, _parse_achievement_form
+
+    modal = _achievement_edit_modal(
+        "T1",
+        "f3test",
+        {
+            "id": 3,
+            "name": "6 pack",
+            "code": "six_pack",
+            "description": "d",
+            "verb": "posting",
+            "metric": "posts",
+            "activity": ["beatdown", "Bootcamp", "bootcamp"],
+            "period": "month",
+            "threshold": 6,
+            "enabled": 1,
+        },
+        activity_options=[
+            "Bootcamp",
+            "beatdown",
+            "qsource",
+            "rucking",
+            "bootcamp",
+            "2nd F",
+        ],
+    )
+    activity = next(b for b in modal["blocks"] if b.get("block_id") == "activity")
+    values = [o["value"] for o in activity["element"]["options"]]
+    assert values == ["Bootcamp", "beatdown", "qsource", "rucking", "2nd F"]
+    initial = [o["value"] for o in activity["element"].get("initial_options") or []]
+    assert initial == ["Bootcamp", "beatdown"]
+
+    parsed = _parse_achievement_form(
+        {
+            "view": {
+                "state": {
+                    "values": {
+                        "activity": {
+                            "val": {
+                                "selected_options": [
+                                    {"value": "Bootcamp"},
+                                    {"value": "beatdown"},
+                                    {"value": "bootcamp"},
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    )
+    assert parsed["activity_list"] == ["Bootcamp", "beatdown"]
