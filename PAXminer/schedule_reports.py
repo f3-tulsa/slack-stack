@@ -186,7 +186,14 @@ def run_custom_report(
                     delivered += 1
                 except Exception:
                     LOG.exception("custom report empty post failed channel=%s", ch)
-            return {"kind": "chart", "rows": 0, "delivered": delivered}
+            return {
+                "kind": "chart",
+                "rows": 0,
+                "delivered": delivered,
+                "period_start": start.isoformat(),
+                "period_end": end.isoformat(),
+                "results_line": "0 rows",
+            }
 
         value_col = [c for c in agg.columns if c != agg.columns[0]][-1]
         label_col = agg.columns[0]
@@ -202,7 +209,15 @@ def run_custom_report(
                 delivered += 1
             except Exception:
                 LOG.exception("custom report chart upload failed channel=%s", ch)
-        return {"kind": "chart", "rows": len(agg), "delivered": delivered, "file": str(out)}
+        return {
+            "kind": "chart",
+            "rows": len(agg),
+            "delivered": delivered,
+            "file": str(out),
+            "period_start": start.isoformat(),
+            "period_end": end.isoformat(),
+            "results_line": f"{delivered} charts posted" if delivered else f"{len(agg)} rows",
+        }
 
     text, blocks = _table_blocks(f"{title} ({start} → {end})", agg)
     for ch in delivery_channels:
@@ -217,4 +232,11 @@ def run_custom_report(
             delivered += 1
         except Exception:
             LOG.exception("custom report table post failed channel=%s", ch)
-    return {"kind": "table", "rows": len(agg), "delivered": delivered}
+    return {
+        "kind": "table",
+        "rows": len(agg),
+        "delivered": delivered,
+        "period_start": start.isoformat(),
+        "period_end": end.isoformat(),
+        "results_line": f"{len(agg)} rows",
+    }

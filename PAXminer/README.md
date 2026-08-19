@@ -62,7 +62,7 @@ Award grant/revoke, leaderboards, Kotter, and charts are all schedule-driven. Aw
 | Surface | Trigger | Notes |
 |---------|---------|-------|
 | `/config-paxminer` hub | slash | admin-only; timezone on Save; hub buttons for Achievements rules / Reports / Kotter thresholds / Schedule |
-| Schedule / Reports modals | hub buttons | editable builtins + custom builder; Duplicate; Load/Restore defaults; Delete All; Run Now (DMs result) |
+| Schedule / Reports modals | hub buttons | editable builtins + custom builder; Duplicate; Load/Restore defaults; Delete All; Run Now (logs outcome) |
 | App Home | `app_home_opened` | minimal stub; full dashboard later |
 
 ## Lambdas (four functions)
@@ -76,7 +76,7 @@ Award grant/revoke, leaderboards, Kotter, and charts are all schedule-driven. Aw
 
 Function URL outputs: **`SlackFunctionUrl`**, **`AchievementsFunctionUrl`**.
 
-**Run Now:** Schedule list → select item → **Run Now** async-invokes ScheduleFunction immediately (`force=True`). The worker DMs the requesting admin with success / skipped / error (no `paxminer_logs` post for manual runs), and the list shows `last_run_status` / `last_run_on`. The Slack app **Messages** tab must stay enabled (`messages_tab_enabled: true`) so those DMs are visible.
+**Run Now:** Schedule list → select item → **Run Now** async-invokes ScheduleFunction immediately (`force=True`). The worker posts the same outcome line to `#paxminer_logs` as a scheduled tick (it does **not** DM the requesting admin). The list shows `last_run_status` / `last_run_on`. The Slack app **Messages** tab stays enabled (`messages_tab_enabled: true`) so PAX still see award and chart DMs.
 
 ### Operational log (`paxminer_logs`)
 
@@ -88,7 +88,7 @@ Best-effort lines in the region's `#paxminer_logs` channel (same channel used by
 | Achievement region failure | `- Achievement (f3ttown_test): FAILED - …` |
 | Automatic schedule run | `- Schedule (f3ttown_test) #3 (kotter): success - posted to 1 channel(s) \| posted: kotter (C…)` |
 
-Schedule Run Now DMs and automatic log lines list **posted** and **failed** destinations (AO name + channel/user ID + reason), capped for Slack length. Chart producers report real upload successes — a resolved AO count is no longer treated as “posted.”
+Scheduled ticks and Run Now share one `#paxminer_logs` outcome (report name, status + duration, optional Results/Period, message count, destination phrase). Chart producers report real upload successes — a resolved AO count is no longer treated as “posted.”
 
 Empty attendance for Achievements/Kotter returns a clear skip/error (and Achievements will **not** mass-revoke awards when attendance data is missing).
 
@@ -120,7 +120,7 @@ python PAXminer/scripts/reset_test_region.py
 
 Reset clears **all** `bd_attendance` / `beatdowns` / `achievements_awarded`, and prunes `users` / `aos` rows whose Slack IDs are not in the test workspace (`--keep-roster` skips the prune). `achievements_list` rules and views are preserved. Migrated prod attendance is not useful in test because the Slack user IDs differ — reset, then seed.
 
-Manual **Run Now** does **not** post here; the admin gets a DM instead.
+Manual **Run Now** posts the same outcome line here as a scheduled tick; it does not DM the admin.
 
 ## Slack app manifest
 

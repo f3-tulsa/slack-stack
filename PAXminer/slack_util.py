@@ -54,6 +54,30 @@ def slack_client(token: str) -> WebClient:
     return client
 
 
+def slack_display_name(client: WebClient, user_id: str) -> str:
+    """Best-effort Slack display name for operational logs. Never a mention.
+
+    Falls back to the raw user id when lookup fails so the log still names someone.
+    """
+    uid = (user_id or "").strip()
+    if not uid:
+        return ""
+    try:
+        user = (client.users_info(user=uid) or {}).get("user") or {}
+        profile = user.get("profile") or {}
+        name = (
+            (profile.get("display_name") or "").strip()
+            or (profile.get("real_name") or "").strip()
+            or (user.get("real_name") or "").strip()
+            or (user.get("name") or "").strip()
+        )
+        if name:
+            return name
+    except Exception:
+        logging.debug("users_info failed user=%s", uid, exc_info=True)
+    return uid
+
+
 def ordinal_suffix(n: int) -> str:
     if 11 <= (n % 100) <= 13:
         suffix = "th"

@@ -51,6 +51,82 @@ VALID_DESTINATIONS: dict[str, tuple[str, ...]] = {
     "custom_report": DESTINATION_TYPES,
 }
 
+# Human labels + expansion for logs, the Schedule picker, and list summary.
+# Unknown future types default to computed so the logger never dumps a roster.
+DESTINATION_META: dict[str, dict[str, str]] = {
+    "all_ao_channels": {
+        "label": "All AO channels",
+        "expansion": "computed",
+        "kind": "channel",
+    },
+    "specific_channels": {
+        "label": "Specific channels",
+        "expansion": "specific",
+        "kind": "channel",
+    },
+    "dm_all_pax": {
+        "label": "DM to all PAX",
+        "expansion": "computed",
+        "kind": "dm",
+    },
+    "dm_specific_pax": {
+        "label": "DM to specific PAX",
+        "expansion": "specific",
+        "kind": "dm",
+    },
+}
+
+
+def destination_descriptor(destination_type: str | None) -> dict[str, str]:
+    """Label / expansion / kind for a destination_type. Never switches on report_type."""
+    code = (destination_type or "").strip()
+    meta = DESTINATION_META.get(code)
+    if meta:
+        return {"destination_type": code, **meta}
+    if not code:
+        return {
+            "destination_type": "",
+            "label": "unknown",
+            "expansion": "specific",
+            "kind": "channel",
+        }
+    kind = "dm" if "dm" in code else "channel"
+    return {
+        "destination_type": code,
+        "label": code.replace("_", " "),
+        "expansion": "computed",
+        "kind": kind,
+    }
+
+
+def destination_label(destination_type: str | None) -> str:
+    return destination_descriptor(destination_type)["label"]
+
+
+def destination_expansion(destination_type: str | None) -> str:
+    return destination_descriptor(destination_type)["expansion"]
+
+
+def format_iso_range(start: Any, end: Any) -> str | None:
+    """Slack-facing inclusive range: ``YYYY-MM-DD to YYYY-MM-DD``. None if either bound is missing."""
+
+    def _iso(value: Any) -> str | None:
+        if value is None or value == "":
+            return None
+        if isinstance(value, datetime):
+            return value.date().isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        text = str(value).strip()
+        if not text:
+            return None
+        return text[:10]
+
+    lo, hi = _iso(start), _iso(end)
+    if not lo or not hi:
+        return None
+    return f"{lo} to {hi}"
+
 
 def _load_report_defaults() -> dict[str, Any]:
     path = Path(__file__).resolve().parent / "report_defaults.json"
@@ -351,7 +427,8 @@ def destination_valid_for_report(report_type: str, destination_type: str) -> boo
 def format_schedule_summary(schedule: dict[str, Any], definition: dict[str, Any] | None = None) -> str:
     """Short human-readable line for the schedule list modal."""
     name = (definition or {}).get("name") or schedule.get("name") or f"#{schedule.get('id')}"
-    dest = schedule.get("destination_type") or "?"
+    dest_code = schedule.get("destination_type") or "?"
+    dest = destination_label(dest_code) if dest_code in DESTINATION_META else dest_code
     freq = schedule.get("frequency_type") or "?"
     tod = parse_time_of_day(schedule.get("time_of_day"))
     enabled = "on" if schedule.get("enabled") else "off"

@@ -77,18 +77,14 @@ def test_schedule_tick_isolates_per_item_failures():
     assert body["results"][1]["ok"] is True
 
 
-def test_schedule_tick_fans_out_award_achievements():
+def test_schedule_tick_fans_out_computed_destinations():
     import json
     from unittest.mock import MagicMock, patch
 
     from handlers import schedule_handler
 
-    due = [{"id": 9, "report_definition_id": 4}]
+    due = [{"id": 9, "report_definition_id": 4, "destination_type": "dm_all_pax"}]
     mock_conn = MagicMock()
-    mock_cur = MagicMock()
-    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
-    mock_conn.cursor.return_value.__exit__.return_value = False
-    mock_cur.fetchone.return_value = {"report_type": "award_achievements"}
 
     with patch("handlers.connect_from_env", return_value=mock_conn):
         with patch("handlers._pm_schema", return_value="paxminer_test"):
@@ -108,6 +104,36 @@ def test_schedule_tick_fans_out_award_achievements():
     assert body["results"][0]["queued"] is True
     mock_fan.assert_called_once_with(9, force=False)
     mock_run.assert_not_called()
+
+
+def test_schedule_tick_runs_specific_destinations_inline():
+    import json
+    from unittest.mock import MagicMock, patch
+
+    from handlers import schedule_handler
+
+    due = [{"id": 9, "report_definition_id": 4, "destination_type": "specific_channels"}]
+    mock_conn = MagicMock()
+
+    with patch("handlers.connect_from_env", return_value=mock_conn):
+        with patch("handlers._pm_schema", return_value="paxminer_test"):
+            with patch("handlers._registry_database", return_value="paxminer_test"):
+                with patch("schedule_runner.list_due_schedules", return_value=due):
+                    with patch.dict(
+                        "os.environ", {"AWS_LAMBDA_FUNCTION_NAME": "paxminer-test-schedule"}
+                    ):
+                        with patch("schedule_runner.async_invoke_schedule_item") as mock_fan:
+                            with patch(
+                                "schedule_runner.run_one_schedule_item",
+                                return_value={"schedule_id": 9, "ok": True},
+                            ) as mock_run:
+                                resp = schedule_handler({}, None)
+
+    assert resp["statusCode"] == 200
+    body = json.loads(resp["body"])
+    assert body["results"][0]["ok"] is True
+    mock_fan.assert_not_called()
+    mock_run.assert_called_once()
 
 
 def test_achievements_leaderboard_smoke():
