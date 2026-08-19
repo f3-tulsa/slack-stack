@@ -87,17 +87,50 @@ def classify_activity_type(
     return "beatdown"
 
 
+def unique_activity_labels(items: list[str] | tuple[str, ...]) -> list[str]:
+    """Keep first spelling of each activity; later case variants are dropped."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in items:
+        label = str(raw).strip() if raw is not None else ""
+        if not label:
+            continue
+        key = label.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(label)
+    return out
+
+
+def map_activities_to_options(selected: list[str], options: list[str]) -> list[str]:
+    """Case-fold duplicates and use the option's spelling when it matches."""
+    by_lower = {o.lower(): o for o in options}
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in selected:
+        label = str(raw).strip() if raw is not None else ""
+        if not label:
+            continue
+        key = label.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(by_lower.get(key, label))
+    return out
+
+
 def legacy_activity_to_list(activity: str | None) -> list[str]:
     """Map old enum (beatdown|qsource|any) to a versioned activity list. Empty = all types."""
     raw = (activity or "beatdown").strip().lower()
     if raw in ("any", "*", "all"):
         return []
     if raw in QSOURCE_LABELS:
-        return ["qsource", "QSource", "Q-Source"]
+        return unique_activity_labels(["qsource", "QSource", "Q-Source"])
     if raw in RUCK_LABELS:
-        return ["rucking", "ruck", "Rucking"]
+        return unique_activity_labels(["rucking", "ruck", "Rucking"])
     if raw == "beatdown":
-        return ["beatdown", "Bootcamp", "bootcamp"]
+        return unique_activity_labels(["beatdown", "Bootcamp", "bootcamp"])
     return [activity] if activity else []
 
 
@@ -106,7 +139,7 @@ def activity_list_from_rule(rule: dict) -> list[str]:
     if raw is None or raw == "" or raw == []:
         return []
     if isinstance(raw, list):
-        return [str(x) for x in raw if str(x).strip()]
+        return unique_activity_labels([str(x) for x in raw if str(x).strip()])
     if isinstance(raw, (bytes, bytearray)):
         raw = raw.decode("utf-8", errors="replace")
     if isinstance(raw, str):
@@ -115,7 +148,9 @@ def activity_list_from_rule(rule: dict) -> list[str]:
             try:
                 parsed = json.loads(text)
                 if isinstance(parsed, list):
-                    return [str(x) for x in parsed if str(x).strip()]
+                    return unique_activity_labels(
+                        [str(x) for x in parsed if str(x).strip()]
+                    )
             except json.JSONDecodeError:
                 pass
         return legacy_activity_to_list(text)

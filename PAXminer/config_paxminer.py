@@ -392,13 +392,18 @@ def _achievement_edit_modal(
 ) -> dict:
     from datetime import date as _date
 
-    from achievements.activity import BUILTIN_ACTIVITY_TYPES, activity_list_from_rule
+    from achievements.activity import (
+        BUILTIN_ACTIVITY_TYPES,
+        activity_list_from_rule,
+        map_activities_to_options,
+        unique_activity_labels,
+    )
 
     is_edit = bool(row and row.get("id"))
     src = dict(row or {})
-    options = activity_options or list(BUILTIN_ACTIVITY_TYPES)
+    options = unique_activity_labels(activity_options or list(BUILTIN_ACTIVITY_TYPES))
     activity_opts = _select_options(tuple(options))
-    selected_activities = activity_list_from_rule(src)
+    selected_activities = map_activities_to_options(activity_list_from_rule(src), options)
     initial_activities = [o for o in activity_opts if o["value"] in selected_activities]
     enabled = int(src.get("enabled") or 0) == 1 if is_edit else True
     range_mode = "going_forward" if not is_edit else "all_previous"
@@ -704,6 +709,8 @@ def _parse_modal_values(payload: dict) -> dict:
 
 
 def _parse_achievement_form(payload: dict) -> dict:
+    from achievements.activity import unique_activity_labels
+
     state = payload.get("view", {}).get("state", {}).get("values", {})
 
     def _text(block_id: str) -> str:
@@ -716,7 +723,9 @@ def _parse_achievement_form(payload: dict) -> dict:
 
     def _multi(block_id: str) -> list[str]:
         opts = (state.get(block_id, {}).get("val", {}) or {}).get("selected_options") or []
-        return [str(o.get("value")).strip() for o in opts if o.get("value")]
+        return unique_activity_labels(
+            [str(o.get("value")).strip() for o in opts if o.get("value")]
+        )
 
     def _date(block_id: str) -> str | None:
         return (state.get(block_id, {}).get("val", {}) or {}).get("selected_date")
@@ -822,7 +831,7 @@ def _load_achievement(cur, schema: str, achievement_id: int) -> dict | None:
 
 
 def _load_activity_options(cur, schema: str) -> list[str]:
-    from achievements.activity import BUILTIN_ACTIVITY_TYPES
+    from achievements.activity import BUILTIN_ACTIVITY_TYPES, unique_activity_labels
 
     found: list[str] = []
     try:
@@ -836,11 +845,7 @@ def _load_activity_options(cur, schema: str) -> list[str]:
         found = [str(r["activity_type"]) for r in (cur.fetchall() or []) if r.get("activity_type")]
     except Exception:
         found = []
-    seen: list[str] = []
-    for item in [*found, *BUILTIN_ACTIVITY_TYPES]:
-        if item and item not in seen:
-            seen.append(item)
-    return seen[:100]
+    return unique_activity_labels([*found, *BUILTIN_ACTIVITY_TYPES])[:100]
 
 
 def _selected_achievement_id(payload: dict) -> int | None:

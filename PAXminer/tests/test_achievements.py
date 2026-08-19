@@ -2252,6 +2252,8 @@ def test_legacy_activity_lists_and_classifier_text_formats():
     assert legacy_activity_to_list("any") == []
     assert "beatdown" in legacy_activity_to_list("beatdown")
     assert "Bootcamp" in legacy_activity_to_list("beatdown")
+    beatdown = legacy_activity_to_list("beatdown")
+    assert len(beatdown) == len({a.lower() for a in beatdown})
     assert "qsource" in {a.lower() for a in legacy_activity_to_list("qsource")}
     assert (
         classify_activity_type(backblast="QSource with Klint at The Goose", ao_name="the-goose")
@@ -2261,3 +2263,97 @@ def test_legacy_activity_lists_and_classifier_text_formats():
         classify_activity_type(backblast="QSource with <@U01ABCDEF23>", ao_name="the-goose")
         == "qsource"
     )
+
+
+def test_activity_labels_dedupe_case_and_prefer_option_spelling():
+    from achievements.activity import (
+        activity_list_from_rule,
+        map_activities_to_options,
+        unique_activity_labels,
+    )
+
+    assert unique_activity_labels(["Bootcamp", "beatdown", "bootcamp"]) == [
+        "Bootcamp",
+        "beatdown",
+    ]
+    assert activity_list_from_rule(
+        {"activity": ["beatdown", "Bootcamp", "bootcamp"]}
+    ) == ["beatdown", "Bootcamp"]
+    assert map_activities_to_options(
+        ["bootcamp", "beatdown"],
+        ["Bootcamp", "beatdown", "qsource"],
+    ) == ["Bootcamp", "beatdown"]
+
+
+def test_load_activity_options_dedupes_slackblast_case_variants():
+    from unittest.mock import MagicMock
+
+    from config_paxminer import _load_activity_options
+
+    cur = MagicMock()
+    cur.fetchall.return_value = [
+        {"activity_type": "Bootcamp"},
+        {"activity_type": "beatdown"},
+        {"activity_type": "bootcamp"},
+    ]
+    opts = _load_activity_options(cur, "f3test")
+    assert opts[0] == "Bootcamp"
+    assert "bootcamp" not in opts
+    assert len(opts) == len({o.lower() for o in opts})
+    assert "qsource" in opts
+    assert "2nd F" in opts
+
+
+def test_achievement_edit_modal_activity_options_are_case_insensitive():
+    from config_paxminer import _achievement_edit_modal, _parse_achievement_form
+
+    modal = _achievement_edit_modal(
+        "T1",
+        "f3test",
+        {
+            "id": 3,
+            "name": "6 pack",
+            "code": "six_pack",
+            "description": "d",
+            "verb": "posting",
+            "metric": "posts",
+            "activity": ["beatdown", "Bootcamp", "bootcamp"],
+            "period": "month",
+            "threshold": 6,
+            "enabled": 1,
+        },
+        activity_options=[
+            "Bootcamp",
+            "beatdown",
+            "qsource",
+            "rucking",
+            "bootcamp",
+            "2nd F",
+        ],
+    )
+    activity = next(b for b in modal["blocks"] if b.get("block_id") == "activity")
+    values = [o["value"] for o in activity["element"]["options"]]
+    assert values == ["Bootcamp", "beatdown", "qsource", "rucking", "2nd F"]
+    initial = [o["value"] for o in activity["element"].get("initial_options") or []]
+    assert initial == ["Bootcamp", "beatdown"]
+
+    parsed = _parse_achievement_form(
+        {
+            "view": {
+                "state": {
+                    "values": {
+                        "activity": {
+                            "val": {
+                                "selected_options": [
+                                    {"value": "Bootcamp"},
+                                    {"value": "beatdown"},
+                                    {"value": "bootcamp"},
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    )
+    assert parsed["activity_list"] == ["Bootcamp", "beatdown"]
