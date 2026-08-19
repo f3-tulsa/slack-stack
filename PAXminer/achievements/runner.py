@@ -661,13 +661,15 @@ def reconcile_rule_awards(
     if token_enc and channel:
         try:
             client = slack_client(decrypt_field(token_enc))
-            post_message(
-                client,
-                channel,
-                reconcile_channel_line(
-                    name, totals["grants"], totals["revokes"], totals["held"]
-                ),
-            )
+            # Public "was corrected" is false when nothing was granted or revoked.
+            if totals["grants"] or totals["revokes"]:
+                post_message(
+                    client,
+                    channel,
+                    reconcile_channel_line(
+                        name, totals["grants"], totals["revokes"], totals["held"]
+                    ),
+                )
             post_log(
                 client,
                 run_summary_line(
