@@ -12,8 +12,22 @@ from typing import Any
 
 from common.encryption import decrypt_field
 from paxminer_db import connect_from_env
-from scheduling import is_due_now, region_local_now, resolve_time_window
-from slack_util import is_slack_user_id, open_dm_channel, post_log, post_message, slack_client, upload_file
+from scheduling import (
+    destination_descriptor,
+    format_iso_range,
+    is_due_now,
+    region_local_now,
+    resolve_time_window,
+)
+from slack_util import (
+    is_slack_user_id,
+    open_dm_channel,
+    post_log,
+    post_message,
+    slack_client,
+    slack_display_name,
+    upload_file,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -280,69 +294,200 @@ def format_run_result(result: dict) -> tuple[str, list[dict] | None]:
     return format_schedule_log_line("", result), None
 
 
-def format_schedule_log_line(region_name: str, result: dict) -> str:
-    """Outcome line for scheduled ticks and Run Now, posted to paxminer_logs."""
-    name = result.get("definition_name") or result.get("report_type") or "report"
-    notify_user = (result.get("notify_user") or "").strip()
-    if result.get("manual") or notify_user:
-        trigger = f"was run manually by <@{notify_user}>." if notify_user else "was run manually."
-    else:
-        trigger = "ran on schedule."
-    header = f"The {name} report {trigger}"
+def _report_title(name: str) -> str:
+    """Strip a trailing ' report' so builtin names don't read 'The *Kotter report* report'."""
+    title = (name or "report").strip() or "report"
+    if title.lower().endswith(" report"):
+        stripped = title[: -len(" report")].rstrip()
+        if stripped:
+            return stripped
+    return title
 
+
+def _channel_link(channel_id: Any) -> str | None:
+    cid = str(channel_id or "").strip()
+    if not cid:
+        return None
+    return f"<#{cid}>" if cid.startswith("C") else cid
+
+
+def _posted_channel_links(result: dict, nested: dict) -> list[str]:
+    posted = result.get("posted_channels") or nested.get("posted_channels") or []
+    links: list[str] = []
+    extra = 0
+    for item in posted:
+        cid = item.get("channel_id") if isinstance(item, dict) else item
+        tag = _channel_link(cid)
+        if not tag:
+            continue
+        candidate = " ".join(links + [tag])
+        if len(candidate) > 2800:
+            extra += 1
+        else:
+            links.append(tag)
+    if not links:
+        for cid in result.get("specified_channels") or []:
+            tag = _channel_link(cid)
+            if not tag:
+                continue
+            candidate = " ".join(links + [tag])
+            if len(candidate) > 2800:
+                extra += 1
+            else:
+                links.append(tag)
+    if extra:
+        links.append(f"+{extra} more")
+    return links
+
+
+def _posted_user_ticks(result: dict, nested: dict) -> list[str]:
+    posted = result.get("posted_users") or nested.get("posted_users") or []
+    ticks: list[str] = []
+    extra = 0
+    for item in posted:
+        if isinstance(item, dict):
+            label = (item.get("pax") or item.get("user_id") or "").strip()
+        else:
+            label = str(item).strip()
+        if not label:
+            continue
+        tag = f"`{label}`"
+        candidate = " ".join(ticks + [tag])
+        if len(candidate) > 2800:
+            extra += 1
+        else:
+            ticks.append(tag)
+    if extra:
+        ticks.append(f"+{extra} more")
+    return ticks
+
+
+def _ensure_outcome_fields(result: dict, report_type: str) -> dict:
+    """Fill optional envelope keys producers may omit. Does not switch the logger."""
+    out = dict(result)
+    if not out.get("results_line"):
+        if "grants" in out or "revokes" in out:
+            rules = out.get("rules")
+            if rules is None:
+                rules = out.get("rule_count")
+            grants = int(out.get("grants") or 0)
+            revokes = int(out.get("revokes") or 0)
+            held = int(out.get("held") or 0)
+            if rules is not None:
+                out["results_line"] = (
+                    f"{int(rules)} rules, {grants} granted, {revokes} revoked, {held} held"
+                )
+        elif "mia_count" in out or "lowq_count" in out or "noq_count" in out:
+            out["results_line"] = (
+                f"{int(out.get('mia_count') or 0)} MIA, "
+                f"{int(out.get('lowq_count') or 0)} low-Q, "
+                f"{int(out.get('noq_count') or 0)} never-Q"
+            )
+        elif out.get("kind") == "chart":
+            delivered = int(out.get("delivered") or 0)
+            out["results_line"] = (
+                f"{delivered} charts posted" if delivered else f"{int(out.get('rows') or 0)} rows"
+            )
+        elif out.get("kind") == "table":
+            out["results_line"] = f"{int(out.get('rows') or 0)} rows"
+        else:
+            n = out.get("graphs") or out.get("ao_charts") or out.get("channel_count") or out.get("user_count")
+            if n:
+                noun = "chart" if int(n) == 1 else "charts"
+                out["results_line"] = f"{int(n)} {noun} posted"
+    if not out.get("period_start"):
+        out["period_start"] = out.get("window_start")
+    if not out.get("period_end"):
+        out["period_end"] = out.get("window_end")
+    return out
+
+
+def format_schedule_log_line(region_name: str, result: dict) -> str:
+    """Reusable schedule-run outcome for paxminer_logs. Independent of report_type."""
     nested = result.get("result") if isinstance(result.get("result"), dict) else {}
+    name = result.get("definition_name") or nested.get("definition_name") or result.get("report_type") or "report"
+    notify_user = (result.get("notify_user") or nested.get("notify_user") or "").strip()
+    operator = (result.get("operator_name") or "").strip() or notify_user
+    if result.get("manual") or notify_user:
+        trigger = f"was run manually by `{operator}`" if operator else "was run manually"
+    else:
+        trigger = "was run as scheduled"
+    header = f"The *{_report_title(str(name))}* report {trigger}"
+
     skipped = result.get("skipped") or nested.get("skipped")
-    error = result.get("error")
+    error = result.get("error") or nested.get("error")
     ok = result.get("ok", True)
     status_name = result.get("status")
     if skipped and ok:
         status = "skipped"
         detail = str(skipped)
-    elif error or not ok or status_name == "error":
+    elif error or not ok or status_name in ("error", "failed"):
         status = "failed"
         detail = str(error or "failed")[:500]
     else:
         status = "success"
         detail = ""
 
-    dest_type = (result.get("destination_type") or nested.get("destination_type") or "").lower()
-    specified = result.get("specified_channels") or []
-    if dest_type.startswith("dm") or dest_type in ("specific_users", "dm_all_pax", "all_pax"):
-        dest = "DM to specified PAX"
-    elif specified:
-        links = []
-        extra = 0
-        for cid in specified:
-            tag = f"<#{cid}>" if str(cid).startswith("C") else str(cid)
-            candidate = " ".join(links + [tag])
-            if len(candidate) > 2800:
-                extra += 1
-            else:
-                links.append(tag)
-        dest = " ".join(links)
-        if extra:
-            dest = f"{dest} +{extra} more"
-    else:
-        posted = result.get("posted_channels") or nested.get("posted_channels") or []
-        if posted:
-            dest = " ".join(
-                f"<#{p.get('channel_id')}>" if str(p.get("channel_id") or "").startswith("C") else str(p.get("channel_id"))
-                for p in posted
-                if p.get("channel_id")
-            )
-        else:
-            dest = "(none)"
+    duration = result.get("duration_s")
+    if duration is None:
+        duration = nested.get("duration_s")
+    try:
+        dur_s = float(duration)
+    except (TypeError, ValueError):
+        dur_s = 0.0
 
     inner = nested if nested else result
     messages = int(inner.get("channel_count") or 0) + int(inner.get("user_count") or 0)
     if "message_count" in result and result["message_count"] is not None:
         messages = int(result["message_count"])
 
-    lines = [header, f"Status: {status}"]
+    dest_type = result.get("destination_type") or nested.get("destination_type")
+    meta = destination_descriptor(dest_type)
+    label = result.get("destination_label") or nested.get("destination_label") or meta["label"]
+    expansion = (
+        result.get("destination_expansion")
+        or nested.get("destination_expansion")
+        or meta["expansion"]
+    )
+    kind = result.get("destination_kind") or nested.get("destination_kind") or meta["kind"]
+    if not dest_type:
+        specified = result.get("specified_channels") or []
+        posted_ch = result.get("posted_channels") or nested.get("posted_channels") or []
+        posted_u = result.get("posted_users") or nested.get("posted_users") or []
+        if specified or posted_ch:
+            expansion, kind, label = "specific", "channel", label if dest_type else "Specific channels"
+        elif posted_u:
+            expansion, kind, label = "specific", "dm", label if dest_type else "DM to specific PAX"
+
+    if messages <= 0:
+        dest = "none"
+    elif expansion == "computed":
+        dest = label
+    elif kind == "dm":
+        ticks = _posted_user_ticks(result, nested)
+        dest = f"{label} ({' '.join(ticks)})" if ticks else label
+    else:
+        links = _posted_channel_links(result, nested)
+        dest = " ".join(links) if links else label
+
+    results_line = (result.get("results_line") or nested.get("results_line") or "").strip()
+    period = format_iso_range(
+        result.get("period_start") or nested.get("period_start") or result.get("window_start") or nested.get("window_start"),
+        result.get("period_end") or nested.get("period_end") or result.get("window_end") or nested.get("window_end"),
+    )
+
+    lines = [header, f"Status: {status} ({dur_s:.1f}s)"]
     if detail and status != "success":
         lines.append(detail)
-    lines.append(f"Destination: {dest}")
+    if results_line or period:
+        lines.append("")
+        if results_line:
+            lines.append(f"Results: {results_line}")
+        if period:
+            lines.append(f"Period: {period}")
+    lines.append("")
     lines.append(f"Number of Messages: {messages}")
+    lines.append(f"Destination(s): {dest}")
     return "\n".join(lines)
 
 
@@ -365,7 +510,11 @@ def _post_schedule_outcome_log(region: dict | None, result: dict) -> None:
             return
     try:
         client = slack_client(token)
-        post_log(client, format_schedule_log_line(region_name, result))
+        payload = dict(result)
+        notify = (payload.get("notify_user") or "").strip()
+        if notify and not payload.get("operator_name"):
+            payload["operator_name"] = slack_display_name(client, notify)
+        post_log(client, format_schedule_log_line(region_name, payload))
     except Exception:
         LOG.debug("schedule outcome log failed region=%s", region_name, exc_info=True)
 
@@ -482,6 +631,7 @@ def run_one_schedule_item(
             "schema": schema_name,
         }
 
+    dest_meta = destination_descriptor(schedule.get("destination_type"))
     mark_schedule_status(
         registry_conn, pm_schema, schedule_id, local_date, "running", local_dt=local
     )
@@ -493,6 +643,8 @@ def run_one_schedule_item(
             schedule,
             definition,
         )
+        if isinstance(result, dict):
+            result = _ensure_outcome_fields(result, report_type)
         status = _result_status(result)
         mark_schedule_status(
             registry_conn, pm_schema, schedule_id, local_date, status, local_dt=local
@@ -510,6 +662,9 @@ def run_one_schedule_item(
             "manual": bool(manual or notify_user),
             "notify_user": notify_user or "",
             "destination_type": schedule.get("destination_type"),
+            "destination_label": dest_meta["label"],
+            "destination_expansion": dest_meta["expansion"],
+            "destination_kind": dest_meta["kind"],
             "specified_channels": _parse_json_list(schedule.get("destination_channels")),
         }
         if isinstance(result, dict):
@@ -517,6 +672,9 @@ def run_one_schedule_item(
             out["failed_channels"] = result.get("failed_channels")
             out["posted_users"] = result.get("posted_users")
             out["failed_users"] = result.get("failed_users")
+            out["results_line"] = result.get("results_line")
+            out["period_start"] = result.get("period_start")
+            out["period_end"] = result.get("period_end")
         ch = int(out.get("channel_count") or 0)
         us = int(out.get("user_count") or 0)
         out["message_count"] = ch + us
@@ -547,6 +705,9 @@ def run_one_schedule_item(
             "manual": bool(manual or notify_user),
             "notify_user": notify_user or "",
             "destination_type": schedule.get("destination_type"),
+            "destination_label": dest_meta["label"],
+            "destination_expansion": dest_meta["expansion"],
+            "destination_kind": dest_meta["kind"],
             "specified_channels": _parse_json_list(schedule.get("destination_channels")),
             "message_count": 0,
         }

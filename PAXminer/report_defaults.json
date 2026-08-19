@@ -44,7 +44,7 @@
     },
     {
       "code": "kotter",
-      "name": "Kotter report",
+      "name": "Kotter",
       "report_type": "kotter",
       "is_builtin": 1,
       "time_window_type": null

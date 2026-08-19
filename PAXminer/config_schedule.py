@@ -15,6 +15,7 @@ from scheduling import (
     TIME_WINDOW_TYPES,
     VALID_DESTINATIONS,
     destination_valid_for_report,
+    destination_label,
     format_schedule_summary,
     parse_time_of_day,
     snap_time_to_tick,
@@ -467,7 +468,7 @@ def _schedule_edit_modal(
         draft["report_definition_id"] = selected_def
 
     allowed_dests = VALID_DESTINATIONS.get(report_type, DESTINATION_TYPES)
-    dest_opts = [_opt(d) for d in allowed_dests]
+    dest_opts = [_opt(d, destination_label(d)) for d in allowed_dests]
     dest_type = draft.get("destination_type") or allowed_dests[0]
     if dest_type not in allowed_dests:
         dest_type = allowed_dests[0]
@@ -546,7 +547,7 @@ def _schedule_edit_modal(
                 "elements": [
                     {
                         "type": "mrkdwn",
-                        "text": f"Destination `{dest_type}` resolves automatically at send time.",
+                        "text": f"*{destination_label(dest_type)}* resolves automatically at send time.",
                     }
                 ],
             }

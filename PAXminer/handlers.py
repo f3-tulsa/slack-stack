@@ -284,21 +284,10 @@ def schedule_handler(event, context):
     try:
         due = list_due_schedules(conn, pm)
         results: list[dict] = []
+        from scheduling import destination_expansion
+
         for row in due:
-            report_type = None
-            with conn.cursor() as cur:
-                cur.execute(
-                    f"SELECT report_type FROM `{pm}`.`region_report_definitions` WHERE id=%s",
-                    (row["report_definition_id"],),
-                )
-                d = cur.fetchone()
-                report_type = (d or {}).get("report_type")
-            heavy = report_type in (
-                "pax_charts",
-                "q_charts",
-                "ao_leaderboard",
-                "award_achievements",
-            )
+            heavy = destination_expansion(row.get("destination_type")) == "computed"
             try:
                 if dry_run:
                     results.append(
