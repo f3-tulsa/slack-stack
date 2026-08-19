@@ -55,7 +55,6 @@ from config_paxminer import (
     _hydrate_range_row,
     _metadata,
     achievement_delete_confirm_text,
-    delete_all_achievements,
     earliest_beatdown_date,
     restore_achievement_defaults,
     uniquify_achievement_code,
@@ -475,6 +474,48 @@ def handle_achievement_more(ack, body, client, logger):
 app.action(MORE_ACHIEVEMENT_ACTION_ID)(handle_achievement_more)
 
 
+def _delete_one_achievement(cur, schema: str, achievement_id: int) -> dict | None:
+    """Remove one achievement's awards, versions, and list row. Returns log fields."""
+    row = _load_achievement(cur, schema, achievement_id)
+    if not row:
+        return None
+    awards, pax = achievement_award_impact(cur, schema, achievement_id)
+    cur.execute(
+        f"DELETE FROM `{schema}`.`achievements_awarded` WHERE achievement_id=%s",
+        (achievement_id,),
+    )
+    cur.execute(
+        f"DELETE FROM `{schema}`.`achievement_versions` WHERE achievement_id=%s",
+        (achievement_id,),
+    )
+    cur.execute(
+        f"DELETE FROM `{schema}`.`achievements_list` WHERE id=%s",
+        (achievement_id,),
+    )
+    name = row.get("name") or "achievement"
+    return {
+        "name": name,
+        "code": row.get("code") or name,
+        "awards": awards,
+        "pax": pax,
+    }
+
+
+def _announce_achievement_deleted(region: dict, client, user_id: str, deleted: dict) -> None:
+    """Same paxminer_logs / channel line as a manual single delete."""
+    awards = counted_noun(deleted["awards"], "award")
+    pax = counted_noun(deleted["pax"], "PAX", "PAX")
+    name = deleted["name"]
+    _post_achievement_admin_notice(
+        region,
+        f"Achievement *{name}* was deleted along with {awards} from {pax}.",
+        (
+            f"Achievement *{name}* was deleted by `{_log_actor_name(client, user_id)}` "
+            f"({awards} from {pax} removed)"
+        ),
+    )
+
+
 def handle_delete_achievement(ack, body, client, logger):
     user_id = (body.get("user") or {}).get("id", "")
     ack()
@@ -493,41 +534,20 @@ def handle_delete_achievement(ack, body, client, logger):
     conn = connect_from_env(_registry_db())
     try:
         with conn.cursor() as cur:
-            row = _load_achievement(cur, regional_schema, selected_id)
-            if not row:
+            deleted = _delete_one_achievement(cur, regional_schema, selected_id)
+            if not deleted:
                 _refresh_achievements_list(
                     client, body, team_id, regional_schema, "Achievement not found."
                 )
                 return
-            cnt, pax_cnt = achievement_award_impact(
-                cur, regional_schema, selected_id
-            )
-            cur.execute(
-                f"DELETE FROM `{regional_schema}`.`achievements_awarded` WHERE achievement_id=%s",
-                (selected_id,),
-            )
-            cur.execute(
-                f"DELETE FROM `{regional_schema}`.`achievement_versions` WHERE achievement_id=%s",
-                (selected_id,),
-            )
-            cur.execute(
-                f"DELETE FROM `{regional_schema}`.`achievements_list` WHERE id=%s",
-                (selected_id,),
-            )
             conn.commit()
-        name = row.get("name") or "achievement"
-        code = row.get("code") or name
-        awards = counted_noun(cnt, "award")
-        pax = counted_noun(pax_cnt, "PAX", "PAX")
-        notice = f"Deleted `{code}` ({awards} from {pax} removed)."
+        awards = counted_noun(deleted["awards"], "award")
+        pax = counted_noun(deleted["pax"], "PAX", "PAX")
+        notice = f"Deleted `{deleted['code']}` ({awards} from {pax} removed)."
         _refresh_achievements_list(client, body, team_id, regional_schema, notice)
         region = dict(region)
         region["schema_name"] = regional_schema
-        _post_achievement_admin_notice(
-            region,
-            f"Achievement *{name}* was deleted along with {awards} from {pax}.",
-            f"Achievement *{name}* was deleted by `{_log_actor_name(client, user_id)}` ({awards} from {pax} removed)",
-        )
+        _announce_achievement_deleted(region, client, user_id, deleted)
     except Exception:
         logger.exception("achievement delete failed id=%s", selected_id)
         _refresh_achievements_list(
@@ -682,29 +702,32 @@ def handle_delete_all_achievements(ack, body, client, logger):
     conn = connect_from_env(_registry_db())
     try:
         with conn.cursor() as cur:
-            counts = delete_all_achievements(cur, regional_schema)
+            rows = _load_achievements(cur, regional_schema)
+            deleted: list[dict] = []
+            for row in rows:
+                aid = row.get("id")
+                if aid is None:
+                    continue
+                one = _delete_one_achievement(cur, regional_schema, int(aid))
+                if one:
+                    deleted.append(one)
             conn.commit()
-        awards = counted_noun(counts["awards"], "award")
-        pax = counted_noun(counts.get("pax") or 0, "PAX", "PAX")
-        achievements = counted_noun(counts["achievements"], "achievement")
+        awards_n = sum(int(d["awards"]) for d in deleted)
         _refresh_achievements_list(
             client,
             body,
             team_id,
             regional_schema,
-            f"Deleted {achievements} and {awards}.",
+            (
+                f"Deleted {counted_noun(len(deleted), 'achievement')} and "
+                f"{counted_noun(awards_n, 'award')}."
+            ),
             page=0,
         )
         region = dict(region)
         region["schema_name"] = regional_schema
-        _post_achievement_admin_notice(
-            region,
-            f"All achievements were deleted along with {awards} from {pax}.",
-            (
-                f"All achievements were deleted by `{_log_actor_name(client, user_id)}` "
-                f"({achievements}, {awards} from {pax} removed)"
-            ),
-        )
+        for one in deleted:
+            _announce_achievement_deleted(region, client, user_id, one)
     except Exception:
         logger.exception("delete all achievements failed")
         _refresh_achievements_list(
