@@ -18,7 +18,6 @@ from slack_bolt.adapter.aws_lambda import SlackRequestHandler
 from slack_sdk.errors import SlackApiError
 
 from config_paxminer import (
-    ACHIEVEMENT_DELETE_CALLBACK_ID,
     ACHIEVEMENT_EDIT_CALLBACK_ID,
     ACHIEVEMENTS_LIST_CALLBACK_ID,
     ADD_ACHIEVEMENT_ACTION_ID,
@@ -26,7 +25,6 @@ from config_paxminer import (
     CALLBACK_ID,
     DELETE_ACHIEVEMENT_ACTION_ID,
     EDIT_ACHIEVEMENT_ACTION_ID,
-    _achievement_delete_modal,
     _achievement_edit_modal,
     _achievements_list_modal,
     _config_modal,
@@ -82,7 +80,21 @@ def log_request(logger, body, next):
     return next()
 
 
-def operator_error_notice(error: BaseException) -> str:
+def _error_control_label(body: dict | None) -> str:
+    """Button label, else action_id, else view callback_id — for operator error DMs."""
+    if not body:
+        return ""
+    actions = body.get("actions") or []
+    action = actions[0] if actions else {}
+    label = ((action.get("text") or {}).get("text") or "").strip()
+    if not label:
+        label = (action.get("action_id") or "").strip()
+    if label:
+        return label
+    return ((body.get("view") or {}).get("callback_id") or "").strip()
+
+
+def operator_error_notice(error: BaseException, body: dict | None = None) -> str:
     """Short operator-facing reason for an unhandled Bolt error. No log-channel pointer."""
     reason = ""
     if isinstance(error, SlackApiError):
@@ -92,9 +104,12 @@ def operator_error_notice(error: BaseException) -> str:
     if not reason:
         reason = str(error).strip() or type(error).__name__
     reason = " ".join(reason.split())
-    if len(reason) > 200:
-        reason = reason[:197] + "..."
-    return f"Something went wrong: {reason}"
+    control = _error_control_label(body)
+    suffix = f" ({control})" if control else ""
+    notice = f"Something went wrong: {reason}{suffix}"
+    if len(notice) > 200:
+        notice = notice[:197] + "..."
+    return notice
 
 
 @app.error
@@ -102,7 +117,7 @@ def handle_error(error, body, logger, client):
     logger.exception("Unhandled Slack Bolt error: %s", error)
     user_id = body.get("user_id") or (body.get("user") or {}).get("id")
     channel_id = body.get("channel_id") or (body.get("channel") or {}).get("id")
-    notice = operator_error_notice(error)
+    notice = operator_error_notice(error, body)
     if user_id and channel_id:
         try:
             client.chat_postEphemeral(
@@ -211,7 +226,7 @@ def handle_add_achievement(ack, body, client, logger):
         with conn.cursor() as cur:
             options = _load_activity_options(cur, regional_schema)
         view = _achievement_edit_modal(team_id, regional_schema, None, activity_options=options)
-        client.views_push(trigger_id=body["trigger_id"], view=view)
+        client.views_update(view_id=body["view"]["id"], view=view)
     finally:
         conn.close()
 
@@ -261,7 +276,7 @@ def handle_edit_achievement(ack, body, client, logger):
         view = _achievement_edit_modal(
             team_id, regional_schema, row, activity_options=options
         )
-        client.views_push(trigger_id=body["trigger_id"], view=view)
+        client.views_update(view_id=body["view"]["id"], view=view)
     finally:
         conn.close()
 
@@ -288,20 +303,45 @@ def handle_delete_achievement(ack, body, client, logger):
     try:
         with conn.cursor() as cur:
             row = _load_achievement(cur, regional_schema, selected_id)
+            if not row:
+                _refresh_achievements_list(
+                    client, body, team_id, regional_schema, "Achievement not found."
+                )
+                return
             cur.execute(
                 f"SELECT COUNT(*) AS cnt FROM `{regional_schema}`.`achievements_awarded` "
                 "WHERE achievement_id=%s",
                 (selected_id,),
             )
             cnt = int((cur.fetchone() or {}).get("cnt", 0) or 0)
-        if not row:
-            _refresh_achievements_list(
-                client, body, team_id, regional_schema, "Achievement not found."
+            cur.execute(
+                f"DELETE FROM `{regional_schema}`.`achievements_awarded` WHERE achievement_id=%s",
+                (selected_id,),
             )
-            return
-        client.views_push(
-            trigger_id=body["trigger_id"],
-            view=_achievement_delete_modal(team_id, regional_schema, row, cnt),
+            cur.execute(
+                f"DELETE FROM `{regional_schema}`.`achievement_versions` WHERE achievement_id=%s",
+                (selected_id,),
+            )
+            cur.execute(
+                f"DELETE FROM `{regional_schema}`.`achievements_list` WHERE id=%s",
+                (selected_id,),
+            )
+            conn.commit()
+        name = row.get("name") or "achievement"
+        code = row.get("code") or name
+        notice = f"Deleted `{code}` ({cnt} award(s) removed)."
+        _refresh_achievements_list(client, body, team_id, regional_schema, notice)
+        region = dict(region)
+        region["schema_name"] = regional_schema
+        _post_achievement_admin_notice(
+            region,
+            f"Achievement *{name}* was deleted along with {cnt} award(s).",
+            f"- Achievement `{name}` was deleted by <@{user_id}> ({cnt} awards removed)",
+        )
+    except Exception:
+        logger.exception("achievement delete failed id=%s", selected_id)
+        _refresh_achievements_list(
+            client, body, team_id, regional_schema, "Could not delete achievement — try again."
         )
     finally:
         conn.close()
@@ -593,72 +633,6 @@ def handle_achievement_edit_submit(ack, body, client, logger):
 
 
 app.view(ACHIEVEMENT_EDIT_CALLBACK_ID)(handle_achievement_edit_submit)
-
-
-def handle_achievement_delete_submit(ack, body, client, logger):
-    user_id = (body.get("user") or {}).get("id", "")
-    if not is_slack_admin(user_id, client=client):
-        ack(response_action="errors", errors={"delete_action": "Admin required"})
-        return
-    team_id, regional_schema, region = _region_context_from_body(body)
-    if not region or not regional_schema:
-        ack(response_action="errors", errors={"delete_action": "Region not found"})
-        return
-    meta = _parse_metadata((body.get("view") or {}).get("private_metadata"))
-    achievement_id = meta.get("achievement_id")
-    state = (body.get("view") or {}).get("state", {}).get("values", {})
-    action = ((state.get("delete_action") or {}).get("val") or {}).get("selected_option") or {}
-    choice = action.get("value") or "disable"
-    conn = connect_from_env(_registry_db())
-    try:
-        with conn.cursor() as cur:
-            row = _load_achievement(cur, regional_schema, achievement_id)
-            name = (row or {}).get("name") or "achievement"
-            cur.execute(
-                f"SELECT COUNT(*) AS cnt FROM `{regional_schema}`.`achievements_awarded` "
-                "WHERE achievement_id=%s",
-                (achievement_id,),
-            )
-            cnt = int((cur.fetchone() or {}).get("cnt", 0) or 0)
-            if choice == "delete":
-                cur.execute(
-                    f"DELETE FROM `{regional_schema}`.`achievements_awarded` WHERE achievement_id=%s",
-                    (achievement_id,),
-                )
-                cur.execute(
-                    f"DELETE FROM `{regional_schema}`.`achievement_versions` WHERE achievement_id=%s",
-                    (achievement_id,),
-                )
-                cur.execute(
-                    f"DELETE FROM `{regional_schema}`.`achievements_list` WHERE id=%s",
-                    (achievement_id,),
-                )
-                channel_text = f"Achievement *{name}* was deleted along with {cnt} award(s)."
-                log_text = f"- Achievement `{name}` was deleted by <@{user_id}> ({cnt} awards removed)"
-            else:
-                cur.execute(
-                    f"UPDATE `{regional_schema}`.`achievements_list` SET enabled=0 WHERE id=%s",
-                    (achievement_id,),
-                )
-                channel_text = (
-                    f"Achievement *{name}* was disabled. {cnt} existing award(s) were kept."
-                )
-                log_text = f"- Achievement `{name}` was disabled by <@{user_id}> ({cnt} awards kept)"
-            conn.commit()
-            achievements = _load_achievements(cur, regional_schema)
-            view = _achievements_list_modal(team_id, regional_schema, achievements)
-            ack(response_action="update", view=view)
-        region = dict(region)
-        region["schema_name"] = regional_schema
-        _post_achievement_admin_notice(region, channel_text, log_text)
-    except Exception as exc:
-        logger.exception("achievement delete submit failed")
-        ack(response_action="errors", errors={"delete_action": f"Failed: {str(exc)[:120]}"})
-    finally:
-        conn.close()
-
-
-app.view(ACHIEVEMENT_DELETE_CALLBACK_ID)(handle_achievement_delete_submit)
 
 
 # Schedule / PAX Reports / Kotter config listeners

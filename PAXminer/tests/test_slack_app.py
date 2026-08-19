@@ -115,11 +115,17 @@ def test_delete_achievement_updates_view():
                     "slack_app._load_achievement",
                     return_value={"id": 7, "name": "Six Pack", "code": "six_pack"},
                 ):
-                    handle_delete_achievement(ack, body, client, logger)
+                    with patch("slack_app._load_achievements", return_value=[]):
+                        with patch("slack_app._post_achievement_admin_notice"):
+                            handle_delete_achievement(ack, body, client, logger)
 
     ack.assert_called_once_with()
-    client.views_push.assert_called_once()
-    assert client.views_push.call_args.kwargs["view"]["callback_id"] == "paxminer-achievement-delete-id"
+    client.views_push.assert_not_called()
+    client.views_update.assert_called_once()
+    assert client.views_update.call_args.kwargs["view"]["callback_id"] == "paxminer-achievements-list-id"
+    sql = " ".join(str(c) for c in mock_cur.execute.call_args_list)
+    assert "DELETE FROM" in sql
+    assert "achievements_awarded" in sql
 
 
 def test_config_submit_clear_on_success():
@@ -203,7 +209,8 @@ def test_modals_with_input_blocks_include_submit():
         for el in b["elements"]
         if el.get("action_id") == "paxminer_achievement_delete"
     )
-    assert "confirm" not in delete_btn
+    assert "confirm" in delete_btn
+    assert "code" in delete_btn["confirm"]["text"]["text"].lower()
     assert any(
         el.get("action_id") == "paxminer_achievement_backfill"
         for b in list_with["blocks"]
@@ -466,17 +473,24 @@ def test_backfill_button_queues_worker():
     assert queue.call_args.kwargs["achievement_id"] == 4
 
 
-def test_delete_submit_disable_keeps_awards():
-    from slack_app import handle_achievement_delete_submit
+def test_delete_achievement_posts_admin_notice():
+    from slack_app import handle_delete_achievement
 
     ack = MagicMock()
+    client = MagicMock()
+    logger = MagicMock()
     body = {
         "user": {"id": "U1"},
         "view": {
-            "private_metadata": '{"team_id":"T1","regional_schema":"f3test","achievement_id":3}',
+            "id": "V1",
+            "private_metadata": '{"team_id":"T1","regional_schema":"f3test"}',
             "state": {
                 "values": {
-                    "delete_action": {"val": {"selected_option": {"value": "disable"}}}
+                    "achievement_pick": {
+                        "paxminer_achievement_select": {
+                            "selected_option": {"value": "3"}
+                        }
+                    }
                 }
             },
         },
@@ -493,57 +507,19 @@ def test_delete_submit_disable_keeps_awards():
                 mock_cur.fetchone.return_value = {"cnt": 12}
                 with patch(
                     "slack_app._load_achievement",
-                    return_value={"id": 3, "name": "Centurion"},
+                    return_value={"id": 3, "name": "Centurion", "code": "centurion"},
                 ):
                     with patch("slack_app._load_achievements", return_value=[]):
-                        with patch("slack_app._post_achievement_admin_notice"):
-                            handle_achievement_delete_submit(
-                                ack, body, MagicMock(), MagicMock()
-                            )
-    sql = " ".join(str(c) for c in mock_cur.execute.call_args_list)
-    assert "SET enabled=0" in sql
-    assert "DELETE FROM" not in sql
-
-
-def test_delete_submit_delete_all_clears_awards():
-    from slack_app import handle_achievement_delete_submit
-
-    ack = MagicMock()
-    body = {
-        "user": {"id": "U1"},
-        "view": {
-            "private_metadata": '{"team_id":"T1","regional_schema":"f3test","achievement_id":3}',
-            "state": {
-                "values": {
-                    "delete_action": {"val": {"selected_option": {"value": "delete"}}}
-                }
-            },
-        },
-    }
-    with patch("slack_app.is_slack_admin", return_value=True):
-        with patch(
-            "slack_app._region_context_from_body",
-            return_value=("T1", "f3test", {"region": "t"}),
-        ):
-            with patch("slack_app.connect_from_env") as mock_conn:
-                mock_cur = MagicMock()
-                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
-                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
-                mock_cur.fetchone.return_value = {"cnt": 12}
-                with patch(
-                    "slack_app._load_achievement",
-                    return_value={"id": 3, "name": "Centurion"},
-                ):
-                    with patch("slack_app._load_achievements", return_value=[]):
-                        with patch("slack_app._post_achievement_admin_notice"):
-                            handle_achievement_delete_submit(
-                                ack, body, MagicMock(), MagicMock()
-                            )
+                        with patch("slack_app._post_achievement_admin_notice") as notice:
+                            handle_delete_achievement(ack, body, client, logger)
     sql = " ".join(str(c) for c in mock_cur.execute.call_args_list)
     assert "DELETE FROM" in sql
     assert "achievements_awarded" in sql
     assert "achievement_versions" in sql
     assert "achievements_list" in sql
+    notice.assert_called_once()
+    client.views_push.assert_not_called()
+    client.views_update.assert_called_once()
 
 
 def test_slack_function_stays_pandas_free():
@@ -591,6 +567,20 @@ def test_operator_error_notice_includes_reason_without_log_channel():
     api = operator_error_notice(SlackApiError("fail", {"error": "invalid_blocks"}))
     assert "invalid_blocks" in api
     assert "paxminer_logs" not in api.lower()
+
+    body = {
+        "actions": [
+            {
+                "action_id": "paxminer_report_add",
+                "text": {"type": "plain_text", "text": "Add custom report"},
+            }
+        ],
+        "view": {"callback_id": "paxminer-reports-list-id"},
+    }
+    named = operator_error_notice(
+        SlackApiError("fail", {"error": "push_limit_reached"}), body
+    )
+    assert named == "Something went wrong: push_limit_reached (Add custom report)"
 
 
 def test_handle_error_dms_reason_not_log_channel():
@@ -692,4 +682,51 @@ def test_copied_achievement_modules_stay_pandas_free():
                 assert not node.module.startswith("achievements.runner")
                 assert not node.module.startswith("achievements.attendance")
                 assert not node.module.startswith("achievements.leaderboard")
+
+def test_add_and_edit_achievement_update_view_instead_of_push():
+    from slack_app import handle_add_achievement, handle_edit_achievement
+
+    ack = MagicMock()
+    client = MagicMock()
+    logger = MagicMock()
+    region = {"region": "tulsa", "schema_name": "f3tulsa_test"}
+    add_body = {
+        "user": {"id": "U1"},
+        "view": {"id": "V1", "private_metadata": '{"team_id":"T1","regional_schema":"f3tulsa_test"}'},
+    }
+    edit_body = {
+        "user": {"id": "U1"},
+        "view": {
+            "id": "V1",
+            "private_metadata": '{"team_id":"T1","regional_schema":"f3tulsa_test"}',
+            "state": {
+                "values": {
+                    "achievement_pick": {
+                        "paxminer_achievement_select": {"selected_option": {"value": "7"}}
+                    }
+                }
+            },
+        },
+    }
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch(
+            "slack_app._region_context_from_body",
+            return_value=("T1", "f3tulsa_test", region),
+        ):
+            with patch("slack_app.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                with patch("slack_app._load_activity_options", return_value=["beatdown"]):
+                    handle_add_achievement(ack, add_body, client, logger)
+                    with patch(
+                        "slack_app._load_achievement",
+                        return_value={"id": 7, "name": "Six Pack", "code": "six_pack"},
+                    ):
+                        handle_edit_achievement(ack, edit_body, client, logger)
+
+    assert client.views_update.call_count == 2
+    client.views_push.assert_not_called()
+    callbacks = [c.kwargs["view"]["callback_id"] for c in client.views_update.call_args_list]
+    assert callbacks == ["paxminer-achievement-edit-id", "paxminer-achievement-edit-id"]
 
