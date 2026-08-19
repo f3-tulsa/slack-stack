@@ -403,7 +403,7 @@ def handle_delete_achievement(ack, body, client, logger):
         _post_achievement_admin_notice(
             region,
             f"Achievement *{name}* was deleted along with {cnt} award(s).",
-            f"- Achievement `{name}` was deleted by <@{user_id}> ({cnt} awards removed)",
+            f"Achievement *{name}* was deleted by `{_log_actor_name(client, user_id)}` ({cnt} awards removed)",
         )
     except Exception:
         logger.exception("achievement delete failed id=%s", selected_id)
@@ -730,6 +730,21 @@ def _effective_range(values: dict, *, inherit_from=None):
     if mode == "custom":
         return values.get("effective_from") or inherit_from, values.get("effective_to") or None
     return date.today().isoformat(), values.get("effective_to") or None
+
+
+def _log_actor_name(client, user_id: str) -> str:
+    """Display name for paxminer_logs; never a mention."""
+    if not user_id:
+        return "admin"
+    try:
+        user = client.users_info(user=user_id).get("user") or {}
+        if not isinstance(user, dict):
+            return user_id
+        profile = user.get("profile") or {}
+        name = profile.get("display_name") or user.get("real_name") or user_id
+        return str(name)
+    except Exception:
+        return user_id
 
 
 def _post_achievement_admin_notice(region: dict, channel_text: str, log_text: str) -> None:

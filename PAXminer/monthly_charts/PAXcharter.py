@@ -31,6 +31,20 @@ from scheduling import (  # noqa: E402
     format_window_label,
     window_file_tag,
 )
+from slack_util import mention  # noqa: E402
+
+
+def pax_chart_dm_text(user_id, pax, title, label) -> str:
+    """DM caption for a PAX chart; mentions when the id is Slack-shaped."""
+    return (
+        "Hey "
+        + mention(user_id, pax)
+        + "! Here is "
+        + (title or "your posting summary")
+        + " for "
+        + label
+        + ". \nPush yourself, get those bars higher every month! SYITG!"
+    )
 
 
 def run_pax_charter(
@@ -186,15 +200,7 @@ def run_pax_charter(
                     out_jpg = plot_base / f"{user_id_tmp}_{tag}.jpg"
                     plt.savefig(str(out_jpg), bbox_inches="tight")
                     total_graphs += 1
-                    message = (
-                        "Hey "
-                        + pax
-                        + "! Here is "
-                        + (title or "your posting summary")
-                        + " for "
-                        + label
-                        + ". \nPush yourself, get those bars higher every month! SYITG!"
-                    )
+                    message = pax_chart_dm_text(user_id_tmp, pax, title, label)
                     file = str(out_jpg)
                     if total_graphs > 0:
                         delivered = False

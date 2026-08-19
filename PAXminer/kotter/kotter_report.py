@@ -53,17 +53,17 @@ def build_kotter_message(
     if not df_mia.empty:
         body_lines.append("\n\nThe following men haven't posted in a while.")
         for _, row in df_mia.iterrows():
-            body_lines.append(f"\n- {_row_mention(row, known_ids)} last posted {row['date']}")
+            body_lines.append(f"\n{_row_mention(row, known_ids)} last posted {row['date']}")
     if not df_lowq.empty:
         body_lines.append("\n\nThese guys haven't Q'd in a while. Here's how many days it's been:")
         today = date.today()
         for _, row in df_lowq.iterrows():
             days = (today - pd.to_datetime(row["date"]).date()).days
-            body_lines.append(f"\n- {_row_mention(row, known_ids)}: {days} days!")
+            body_lines.append(f"\n{_row_mention(row, known_ids)}: {days} days!")
     if not df_noq.empty:
         body_lines.append("\n\nThese guys have never been Q:")
         for _, row in df_noq.iterrows():
-            body_lines.append(f"\n- {_row_mention(row, known_ids)}")
+            body_lines.append(f"\n{_row_mention(row, known_ids)}")
     text = intro + "".join(body_lines)
     blocks: list[dict] = [header("Monthly Kotter Report"), section(intro)]
     if body_lines:

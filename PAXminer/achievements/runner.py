@@ -740,6 +740,6 @@ def _post_achievement_failure_log(region_row: dict, exc: Exception) -> None:
     try:
         token = decrypt_field(token_enc)
         client = slack_client(token)
-        post_log(client, f"- Achievements FAILED - {exc}", region=region_row)
+        post_log(client, f"Achievements FAILED - {exc}", region=region_row)
     except Exception:
         LOG.debug("achievement failure log skipped", exc_info=True)
