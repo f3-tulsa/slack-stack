@@ -14,7 +14,7 @@ from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 import logging
 
 
-def database_slack_channel_update(region_db, key, mydb):
+def database_slack_channel_update(region_db, key, mydb, log_channel=None):
     logging.info("Database_slack_user_update")
 
     slack = WebClient(token=key)
@@ -97,7 +97,7 @@ def database_slack_channel_update(region_db, key, mydb):
     if inserted or updated:
         try:
             slack.chat_postMessage(
-                channel="paxminer_logs",
+                channel=(log_channel or "").strip() or "paxminer_logs",
                 text=f" - Channel sync ({region_db}): {inserted} created, {updated} updated",
             )
         except Exception as log_exc:

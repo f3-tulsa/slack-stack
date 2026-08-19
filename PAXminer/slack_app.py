@@ -161,6 +161,8 @@ def _strip_channel_initials(view: dict) -> dict:
         element = block.get("element") or {}
         if element.get("type") == "channels_select":
             element.pop("initial_channel", None)
+        if element.get("type") == "conversations_select":
+            element.pop("initial_conversation", None)
     return cleaned
 
 
@@ -662,8 +664,23 @@ def handle_achievements_list_submit(ack, body, client, logger):
 app.view(ACHIEVEMENTS_LIST_CALLBACK_ID)(handle_achievements_list_submit)
 
 
+def _join_log_channel(client, channel_id: str | None, logger) -> None:
+    """Best-effort conversations.join so PAXMiner can post to the picked log channel."""
+    cid = (channel_id or "").strip()
+    if not cid:
+        return
+    try:
+        client.conversations_join(channel=cid)
+    except SlackApiError as exc:
+        err = (exc.response or {}).get("error")
+        if err not in ("already_in_channel", "method_not_supported_for_channel_type"):
+            logger.warning("join log channel failed channel=%s error=%s", cid, err)
+
+
 def handle_config_submit(ack, body, client, logger):
     """Named listener for config modal save — importable for unit tests."""
+    from schedule_schema import ensure_log_channel_column
+
     user_id = (body.get("user") or {}).get("id", "")
     if not is_slack_admin(user_id, client=client):
         ack(response_action="errors", errors={"timezone": "Admin required"})
@@ -676,7 +693,9 @@ def handle_config_submit(ack, body, client, logger):
     if not region_key:
         ack(response_action="errors", errors={"timezone": "Region key missing"})
         return
-    values = {k: v for k, v in _parse_modal_values(body).items() if v is not None}
+    parsed = _parse_modal_values(body)
+    timezone = (parsed.get("timezone") or "America/Chicago").strip() or "America/Chicago"
+    log_channel = parsed.get("log_channel") or None
     pm = paxminer_schema_from_env()
     try:
         conn = connect_from_env(_registry_db())
@@ -686,12 +705,13 @@ def handle_config_submit(ack, body, client, logger):
         return
     try:
         with conn.cursor() as cur:
-            sets = ", ".join(f"`{k}`=%s" for k in values)
+            ensure_log_channel_column(cur, pm)
             cur.execute(
-                f"UPDATE `{pm}`.`regions` SET {sets} WHERE region=%s",
-                (*values.values(), region_key),
+                f"UPDATE `{pm}`.`regions` SET `timezone`=%s, `log_channel`=%s WHERE region=%s",
+                (timezone, log_channel, region_key),
             )
             conn.commit()
+        _join_log_channel(client, log_channel, logger)
         ack(response_action="clear")
     except Exception as exc:
         logger.exception("config submit failed")
@@ -724,7 +744,7 @@ def _post_achievement_admin_notice(region: dict, channel_text: str, log_text: st
         channel = (region.get("achievement_channel") or "").strip() or None
         if channel:
             post_message(client, channel, channel_text)
-        post_log(client, log_text)
+        post_log(client, log_text, region=region)
     except Exception:
         logging.getLogger(__name__).debug("achievement admin notice skipped", exc_info=True)
 

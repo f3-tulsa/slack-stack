@@ -545,10 +545,10 @@ def run_achievements_for_region(
         if log_mode == "webhook":
             if changed:
                 for line in log_lines:
-                    post_log(client, line)
+                    post_log(client, line, region=region_row)
         else:
             for line in log_lines:
-                post_log(client, line)
+                post_log(client, line, region=region_row)
             # Scheduled / Run Now: one outcome line from schedule_runner, not a second dashed summary.
             if log_mode != "scheduled":
                 dest_channel = f"<#{channels[0]}>" if channels and str(channels[0]).startswith("C") else (channels[0] if channels else None)
@@ -572,6 +572,7 @@ def run_achievements_for_region(
                         actor=actor,
                         achievement_name=(rules[0].get("name") if achievement_id and rules else None),
                     ),
+                    region=region_row,
                 )
 
     return {
@@ -690,6 +691,7 @@ def reconcile_rule_awards(
                     actor=actor,
                     achievement_name=name,
                 ),
+                region=region_row,
             )
         except Exception:
             LOG.exception("reconcile channel summary failed schema=%s", regional_schema)
@@ -738,6 +740,6 @@ def _post_achievement_failure_log(region_row: dict, exc: Exception) -> None:
     try:
         token = decrypt_field(token_enc)
         client = slack_client(token)
-        post_log(client, f"- Achievements FAILED - {exc}")
+        post_log(client, f"- Achievements FAILED - {exc}", region=region_row)
     except Exception:
         LOG.debug("achievement failure log skipped", exc_info=True)

@@ -517,7 +517,7 @@ def _post_schedule_outcome_log(region: dict | None, result: dict) -> None:
         notify = (payload.get("notify_user") or "").strip()
         if notify and not payload.get("operator_name"):
             payload["operator_name"] = slack_display_name(client, notify)
-        post_log(client, format_schedule_log_line(region_name, payload))
+        post_log(client, format_schedule_log_line(region_name, payload), region=region)
     except Exception:
         LOG.debug("schedule outcome log failed region=%s", region_name, exc_info=True)
 

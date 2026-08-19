@@ -892,8 +892,13 @@ def test_config_modal_hub_has_timezone_and_section_buttons():
         }
     )
     by_id = {b["block_id"]: b for b in modal["blocks"] if "block_id" in b}
+    ids = [b["block_id"] for b in modal["blocks"] if "block_id" in b]
+    assert ids.index("hub_actions") < ids.index("timezone") < ids.index("log_channel")
     assert "timezone" in by_id
     assert by_id["timezone"]["element"]["type"] == "static_select"
+    assert by_id["log_channel"]["element"]["type"] == "conversations_select"
+    assert by_id["log_channel"]["optional"] is True
+    assert set(by_id["log_channel"]["element"]["filter"]["include"]) == {"public", "private"}
     assert "hub_actions" in by_id
     action_ids = {e["action_id"] for e in by_id["hub_actions"]["elements"]}
     assert OPEN_SCHEDULE_ACTION_ID in action_ids
@@ -928,7 +933,25 @@ def test_config_modal_hub_has_timezone_and_section_buttons():
             }
         }
     )
-    assert parsed == {"timezone": "America/Chicago"}
+    assert parsed == {"timezone": "America/Chicago", "log_channel": None}
+
+    picked = _parse_modal_values(
+        {
+            "view": {
+                "state": {
+                    "values": {
+                        "timezone": {
+                            "val": {"selected_option": {"value": "America/Chicago"}}
+                        },
+                        "log_channel": {
+                            "val": {"selected_conversation": "CLOG123"}
+                        },
+                    }
+                }
+            }
+        }
+    )
+    assert picked == {"timezone": "America/Chicago", "log_channel": "CLOG123"}
 
 
 def test_achievements_handler_webhook_unauthorized():

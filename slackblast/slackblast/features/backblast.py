@@ -20,6 +20,7 @@ from utilities.helper_functions import (
     ensure_users_in_db,
     get_channel_id,
     get_channel_name,
+    resolve_paxminer_log_channel,
     get_pax,
     get_user_names,
     parse_rich_block,
@@ -774,7 +775,7 @@ COUNT: {count}
                 logger=logger,
             )
             try:
-                paxminer_log_channel = get_channel_id(name="paxminer_logs", client=client, logger=logger)
+                paxminer_log_channel = resolve_paxminer_log_channel(region_record, logger, client)
                 if paxminer_log_channel:
                     import_or_edit = "imported" if create_or_edit == "create" else "edited"
                     client.chat_postMessage(
