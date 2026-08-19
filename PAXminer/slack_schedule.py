@@ -10,10 +10,12 @@ from config_paxminer import _config_modal, _parse_metadata
 from config_schedule import (
     ADD_REPORT_ACTION_ID,
     ADD_SCHEDULE_ACTION_ID,
+    DELETE_ALL_REPORTS_ACTION_ID,
     DELETE_ALL_SCHEDULES_ACTION_ID,
     DELETE_REPORT_ACTION_ID,
     DELETE_SCHEDULE_ACTION_ID,
     DUPLICATE_REPORT_ACTION_ID,
+    DUPLICATE_SCHEDULE_ACTION_ID,
     EDIT_REPORT_ACTION_ID,
     EDIT_SCHEDULE_ACTION_ID,
     KOTTER_CONFIG_CALLBACK_ID,
@@ -25,12 +27,17 @@ from config_schedule import (
     REPORT_EDIT_CALLBACK_ID,
     REPORT_WINDOW_ACTION_ID,
     REPORTS_LIST_CALLBACK_ID,
+    REPORTS_PAGE_NEXT_ACTION_ID,
+    REPORTS_PAGE_PREV_ACTION_ID,
     RESTORE_DEFAULTS_ACTION_ID,
+    RESTORE_REPORTS_ACTION_ID,
     RUN_NOW_SCHEDULE_ACTION_ID,
     SCHEDULE_DEST_TYPE_ACTION_ID,
     SCHEDULE_EDIT_CALLBACK_ID,
     SCHEDULE_FREQ_ACTION_ID,
     SCHEDULE_LIST_CALLBACK_ID,
+    SCHEDULE_PAGE_NEXT_ACTION_ID,
+    SCHEDULE_PAGE_PREV_ACTION_ID,
     SCHEDULE_REPORT_ACTION_ID,
     TOGGLE_SCHEDULE_ACTION_ID,
     _kotter_config_modal,
@@ -38,6 +45,7 @@ from config_schedule import (
     _reports_list_modal,
     _schedule_edit_modal,
     _schedules_list_modal,
+    duplicate_report_draft,
     draft_from_report_state,
     draft_from_schedule_state,
     is_code_rendered,
@@ -48,6 +56,7 @@ from config_schedule import (
     parse_kotter_form,
     parse_report_form,
     parse_schedule_form,
+    schedule_as_new_draft,
     selected_report_id,
     selected_schedule_id,
     validate_report_form,
@@ -61,9 +70,9 @@ from paxminer_db import connect_from_env, paxminer_schema_from_env
 from schedule_schema import (
     count_customized_builtins,
     count_schedules_for_definition,
+    delete_all_definitions_and_schedules,
     delete_all_schedules,
     delete_definition_and_schedules,
-    duplicate_definition,
     restore_defaults,
 )
 from slack_http import is_slack_admin, notify_admin_required
@@ -185,7 +194,13 @@ def register_schedule_listeners(app) -> None:
         finally:
             conn.close()
 
-    def _refresh_reports_list(client, body, team_id, regional_schema, notice=None):
+    def _refresh_reports_list(client, body, team_id, regional_schema, notice=None, page=None):
+        if page is None:
+            meta = _parse_metadata((body.get("view") or {}).get("private_metadata"))
+            try:
+                page = int(meta.get("page") or 0)
+            except (TypeError, ValueError):
+                page = 0
         pm = paxminer_schema_from_env()
         conn = connect_from_env(
             os.environ.get("PAXMINER_REGISTRY_DATABASE")
@@ -197,7 +212,9 @@ def register_schedule_listeners(app) -> None:
                 defs = load_definitions(cur, pm, regional_schema)
             client.views_update(
                 view_id=body["view"]["id"],
-                view=_reports_list_modal(team_id, regional_schema, defs, notice=notice),
+                view=_reports_list_modal(
+                    team_id, regional_schema, defs, notice=notice, page=page
+                ),
             )
         finally:
             conn.close()
@@ -597,8 +614,8 @@ def register_schedule_listeners(app) -> None:
             selected_id=sid,
         )
 
-    @app.action("paxminer_schedule_page_prev")
-    @app.action("paxminer_schedule_page_next")
+    @app.action(SCHEDULE_PAGE_PREV_ACTION_ID)
+    @app.action(SCHEDULE_PAGE_NEXT_ACTION_ID)
     def schedule_page(ack, body, client, logger):
         if not _admin_ack(ack, body, client):
             return
@@ -793,7 +810,7 @@ def register_schedule_listeners(app) -> None:
         rid = selected_report_id(body)
         if not rid:
             _refresh_reports_list(
-                client, body, team_id, regional_schema, notice="Select a report first."
+                client, body, team_id, regional_schema, notice="Open a report with the pencil first."
             )
             return
         pm = paxminer_schema_from_env()
@@ -806,17 +823,133 @@ def register_schedule_listeners(app) -> None:
             with conn.cursor() as cur:
                 row = load_definition(cur, pm, rid)
                 if not row:
-                    notice = "Report not found."
-                else:
-                    copy = duplicate_definition(cur, pm, regional_schema, row)
-                    conn.commit()
-                    notice = (
-                        f"Duplicated as `{copy['code']}` "
-                        f"({copy.get('name')}). No schedules copied."
+                    _refresh_reports_list(
+                        client, body, team_id, regional_schema, notice="Report not found."
                     )
-            _refresh_reports_list(client, body, team_id, regional_schema, notice=notice)
+                    return
+                draft = duplicate_report_draft(cur, pm, regional_schema, row)
+            client.views_update(
+                view_id=body["view"]["id"],
+                view=_report_edit_modal(team_id, regional_schema, None, draft=draft),
+            )
         finally:
             conn.close()
+
+    @app.action(DUPLICATE_SCHEDULE_ACTION_ID)
+    def duplicate_schedule(ack, body, client, logger):
+        if not _admin_ack(ack, body, client):
+            return
+        team_id, regional_schema, region = _ctx(body)
+        sid = selected_schedule_id(body)
+        if not sid:
+            _refresh_schedule_list(
+                client,
+                body,
+                team_id,
+                regional_schema,
+                region or {},
+                notice="Open a schedule with the pencil first.",
+            )
+            return
+        pm = paxminer_schema_from_env()
+        conn = connect_from_env(
+            os.environ.get("PAXMINER_REGISTRY_DATABASE")
+            or os.environ.get("PAXMINER_SCHEMA")
+            or "paxminer"
+        )
+        try:
+            with conn.cursor() as cur:
+                sched = load_schedule(cur, pm, sid)
+                defs = load_definitions(cur, pm, regional_schema)
+            if not sched:
+                _refresh_schedule_list(
+                    client,
+                    body,
+                    team_id,
+                    regional_schema,
+                    region or {},
+                    notice="Schedule not found.",
+                )
+                return
+            client.views_update(
+                view_id=body["view"]["id"],
+                view=_schedule_edit_modal(
+                    team_id,
+                    regional_schema,
+                    defs,
+                    timezone_name=(region or {}).get("timezone") or "America/Chicago",
+                    draft=schedule_as_new_draft(sched),
+                ),
+            )
+        finally:
+            conn.close()
+
+    @app.action(DELETE_ALL_REPORTS_ACTION_ID)
+    def delete_all_reports(ack, body, client, logger):
+        if not _admin_ack(ack, body, client):
+            return
+        team_id, regional_schema, region = _ctx(body)
+        pm = paxminer_schema_from_env()
+        conn = connect_from_env(
+            os.environ.get("PAXMINER_REGISTRY_DATABASE")
+            or os.environ.get("PAXMINER_SCHEMA")
+            or "paxminer"
+        )
+        try:
+            with conn.cursor() as cur:
+                counts = delete_all_definitions_and_schedules(cur, pm, regional_schema)
+                conn.commit()
+            notice = (
+                f"Deleted {counts['definitions']} report(s) and "
+                f"{counts['schedules']} schedule(s)."
+            )
+            _refresh_reports_list(client, body, team_id, regional_schema, notice=notice, page=0)
+        finally:
+            conn.close()
+
+    @app.action(RESTORE_REPORTS_ACTION_ID)
+    def restore_reports(ack, body, client, logger):
+        if not _admin_ack(ack, body, client):
+            return
+        team_id, regional_schema, region = _ctx(body)
+        if not region or not regional_schema:
+            return
+        pm = paxminer_schema_from_env()
+        conn = connect_from_env(
+            os.environ.get("PAXMINER_REGISTRY_DATABASE")
+            or os.environ.get("PAXMINER_SCHEMA")
+            or "paxminer"
+        )
+        try:
+            with conn.cursor() as cur:
+                customized = count_customized_builtins(cur, pm, regional_schema)
+                n = restore_defaults(cur, pm, region)
+                conn.commit()
+                defs = load_definitions(cur, pm, regional_schema)
+            notice = (
+                f"Restored defaults ({n} schedule row(s) added, {len(defs)} report(s) now)."
+            )
+            if customized:
+                notice += (
+                    f" Kept {customized} customized builtin report(s); "
+                    "missing builtins were re-added."
+                )
+            _refresh_reports_list(client, body, team_id, regional_schema, notice=notice, page=0)
+        finally:
+            conn.close()
+
+    @app.action(REPORTS_PAGE_PREV_ACTION_ID)
+    @app.action(REPORTS_PAGE_NEXT_ACTION_ID)
+    def reports_page(ack, body, client, logger):
+        if not _admin_ack(ack, body, client):
+            return
+        team_id, regional_schema, region = _ctx(body)
+        action = (body.get("actions") or [{}])[0]
+        try:
+            page = int(action.get("value") or 0)
+        except ValueError:
+            page = 0
+        _refresh_reports_list(client, body, team_id, regional_schema, page=page)
 
     @app.action(DELETE_REPORT_ACTION_ID)
     def delete_report(ack, body, client, logger):

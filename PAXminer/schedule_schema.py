@@ -514,6 +514,30 @@ def seed_all_regions(cur, pm_schema: str) -> dict[str, int]:
     }
 
 
+def delete_all_definitions_and_schedules(
+    cur, pm_schema: str, regional_schema: str
+) -> dict[str, int]:
+    """Drop every schedule and report definition for a region (FK is RESTRICT)."""
+    schedules = delete_all_schedules(cur, pm_schema, regional_schema)
+    cur.execute(
+        f"DELETE FROM `{pm_schema}`.`region_report_definitions` WHERE schema_name=%s",
+        (regional_schema,),
+    )
+    return {"schedules": schedules, "definitions": int(cur.rowcount or 0)}
+
+
+def delete_all_definitions_and_schedules(
+    cur, pm_schema: str, regional_schema: str
+) -> dict[str, int]:
+    """Drop every schedule and report definition for a region (FK is RESTRICT)."""
+    schedules = delete_all_schedules(cur, pm_schema, regional_schema)
+    cur.execute(
+        f"DELETE FROM `{pm_schema}`.`region_report_definitions` WHERE schema_name=%s",
+        (regional_schema,),
+    )
+    return {"schedules": schedules, "definitions": int(cur.rowcount or 0)}
+
+
 def delete_all_schedules(cur, pm_schema: str, regional_schema: str) -> int:
     """Delete all schedule rows for a regional schema. Definitions are kept."""
     cur.execute(
