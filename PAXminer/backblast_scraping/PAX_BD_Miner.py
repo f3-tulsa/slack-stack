@@ -660,6 +660,25 @@ try:
 finally:
     pass
 
+log_dest = "paxminer_logs"
+try:
+    from paxminer_db import paxminer_schema_from_env
+    from slack_util import resolve_log_channel
+
+    pm_schema = paxminer_schema_from_env()
+    with mydb.cursor() as _log_cur:
+        _log_cur.execute(
+            f"SELECT log_channel FROM `{pm_schema}`.`regions` WHERE schema_name=%s LIMIT 1",
+            (db,),
+        )
+        _log_row = _log_cur.fetchone()
+    if isinstance(_log_row, dict):
+        log_dest = resolve_log_channel(_log_row)
+    elif _log_row:
+        log_dest = resolve_log_channel({"log_channel": _log_row[0]})
+except Exception:
+    logging.debug("log_channel lookup failed", exc_info=True)
+
 mydb.close()
 
 
@@ -669,7 +688,7 @@ logging.info("Beatdown execution complete for region " + db)
 logging.info(f"Time elapsed: {time.time() - current_ts}")
 
 try:
-    slack.chat_postMessage(channel='paxminer_logs', text=pm_log_text)
+    slack.chat_postMessage(channel=log_dest, text=pm_log_text)
 except:
     print("Slack log message error - not posted")
     logging.error("Slack log message error - not posted")

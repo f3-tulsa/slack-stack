@@ -13,6 +13,7 @@ from schedule_schema import (  # noqa: E402
     backfill_award_achievements_schedules,
     ensure_is_customized_column,
     ensure_last_run_at_column,
+    ensure_log_channel_column,
     ensure_scheduler_tables,
     ensure_timezone_column,
 )
@@ -24,7 +25,7 @@ LOG = logging.getLogger(__name__)
 
 def run_scheduler(cur, stage: str) -> dict:
     """
-    Ensure regions.timezone, scheduler tables, last_run_at, and backfill
+    Ensure regions.timezone, regions.log_channel, scheduler tables, last_run_at, and backfill
     Award Achievements schedules for regions that previously used the daily
     EventBridge path (send_achievements + achievement_channel).
 
@@ -40,6 +41,12 @@ def run_scheduler(cur, stage: str) -> dict:
         "%s.regions.timezone: %s",
         pm_schema,
         "added" if added_tz else "already present",
+    )
+    added_log = ensure_log_channel_column(cur, pm_schema)
+    LOG.info(
+        "%s.regions.log_channel: %s",
+        pm_schema,
+        "added" if added_log else "already present",
     )
     tables_created = ensure_scheduler_tables(cur, pm_schema)
     LOG.info("Scheduler tables created this run: %s", tables_created or "(none)")
@@ -69,6 +76,7 @@ def run_scheduler(cur, stage: str) -> dict:
     return {
         "pm_schema": pm_schema,
         "timezone_added": added_tz,
+        "log_channel_added": added_log,
         "tables_created": tables_created,
         "is_customized_added": added_customized,
         "last_run_at_added": added_last_run_at,

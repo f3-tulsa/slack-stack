@@ -709,3 +709,23 @@ def test_check_for_duplicate_returns_false_when_no_dups(mock_db):
     )
 
     assert result is False
+
+
+
+def test_resolve_paxminer_log_channel_prefers_stored_id():
+    region = MagicMock(paxminer_schema="f3test")
+    stored = MagicMock(log_channel="CLOG99")
+    with patch("utilities.helper_functions.DbManager.find_records", return_value=[stored]):
+        with patch("utilities.helper_functions.get_channel_id") as by_name:
+            got = helper_functions.resolve_paxminer_log_channel(region, MagicMock(), MagicMock())
+    assert got == "CLOG99"
+    by_name.assert_not_called()
+
+
+def test_resolve_paxminer_log_channel_falls_back_to_name():
+    region = MagicMock(paxminer_schema="f3test")
+    with patch("utilities.helper_functions.DbManager.find_records", return_value=[]):
+        with patch("utilities.helper_functions.get_channel_id", return_value="CNAME") as by_name:
+            got = helper_functions.resolve_paxminer_log_channel(region, MagicMock(), MagicMock())
+    assert got == "CNAME"
+    by_name.assert_called_once()

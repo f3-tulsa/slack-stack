@@ -76,11 +76,11 @@ Award grant/revoke, leaderboards, Kotter, and charts are all schedule-driven. Aw
 
 Function URL outputs: **`SlackFunctionUrl`**, **`AchievementsFunctionUrl`**.
 
-**Run Now:** Schedule list → select item → **Run Now** async-invokes ScheduleFunction immediately (`force=True`). The worker posts the same outcome line to `#paxminer_logs` as a scheduled tick (it does **not** DM the requesting admin). The list shows `last_run_status` / `last_run_on`. The Slack app **Messages** tab stays enabled (`messages_tab_enabled: true`) so PAX still see award and chart DMs.
+**Run Now:** Schedule list → select item → **Run Now** async-invokes ScheduleFunction immediately (`force=True`). The worker posts the same outcome line to the PAXMiner log channel as a scheduled tick (it does **not** DM the requesting admin). The list shows `last_run_status` / `last_run_on`. The Slack app **Messages** tab stays enabled (`messages_tab_enabled: true`) so PAX still see award and chart DMs.
 
-### Operational log (`paxminer_logs`)
+### Operational log
 
-Best-effort lines in the region's `#paxminer_logs` channel (same channel used by beatdown/user sync). Labels use **`schema_name`** (e.g. `f3ttown_test`), not the display region name:
+Best-effort lines in the region's PAXMiner log channel (defaults to `#paxminer_logs` by name until an admin picks one in Settings; same channel used by beatdown/user sync). Labels use **`schema_name`** (e.g. `f3ttown_test`), not the display region name:
 
 | Event | Example line |
 |-------|----------------|
@@ -88,7 +88,7 @@ Best-effort lines in the region's `#paxminer_logs` channel (same channel used by
 | Achievement region failure | `- Achievement (f3ttown_test): FAILED - …` |
 | Automatic schedule run | `- Schedule (f3ttown_test) #3 (kotter): success - posted to 1 channel(s) \| posted: kotter (C…)` |
 
-Scheduled ticks and Run Now share one `#paxminer_logs` outcome (report name, status + duration, optional Results/Period, message count, destination phrase). Chart producers report real upload successes — a resolved AO count is no longer treated as “posted.”
+Scheduled ticks and Run Now share one PAXMiner log-channel outcome (report name, status + duration, optional Results/Period, message count, destination phrase). Chart producers report real upload successes — a resolved AO count is no longer treated as “posted.”
 
 Empty attendance for Achievements/Kotter returns a clear skip/error (and Achievements will **not** mass-revoke awards when attendance data is missing).
 

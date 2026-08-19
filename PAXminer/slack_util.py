@@ -258,16 +258,33 @@ def open_dm_channel(client: WebClient, user_id: str) -> str:
     return resp["channel"]["id"]
 
 
+DEFAULT_LOG_CHANNEL = "paxminer_logs"
+
+
+def resolve_log_channel(region: dict | None = None, *, channel: str | None = None) -> str:
+    """Stored Slack channel ID, else an explicit override, else the #paxminer_logs name."""
+    if channel and str(channel).strip() and str(channel).strip() != DEFAULT_LOG_CHANNEL:
+        return str(channel).strip()
+    stored = ((region or {}).get("log_channel") or "").strip()
+    if stored:
+        return stored
+    if channel and str(channel).strip():
+        return str(channel).strip()
+    return DEFAULT_LOG_CHANNEL
+
+
 def post_log(
     client: WebClient,
     text: str,
     *,
     blocks: list | None = None,
-    channel: str = "paxminer_logs",
+    channel: str | None = None,
+    region: dict | None = None,
 ) -> None:
-    """Best-effort operational log to the region's paxminer_logs channel. Never raises."""
+    """Best-effort operational log to the region's configured log channel. Never raises."""
+    dest = resolve_log_channel(region, channel=channel)
     try:
-        post_message(client, channel, text, blocks=blocks)
+        post_message(client, dest, text, blocks=blocks)
     except Exception:
         logging.debug("paxminer_logs post failed: %s", text, exc_info=True)
 

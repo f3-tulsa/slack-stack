@@ -119,6 +119,15 @@ def _config_modal(region: dict) -> dict:
     if tz not in TIMEZONE_OPTIONS:
         tz_opts = [{"text": {"type": "plain_text", "text": tz}, "value": tz}] + tz_opts
     tz_initial = next((o for o in tz_opts if o["value"] == tz), tz_opts[0])
+    log_ch = (region.get("log_channel") or "").strip()
+    log_element = {
+        "type": "conversations_select",
+        "action_id": "val",
+        "placeholder": {"type": "plain_text", "text": "Defaults to #paxminer_logs"},
+        "filter": {"include": ["public", "private"], "exclude_bot_users": True},
+    }
+    if log_ch:
+        log_element["initial_conversation"] = log_ch
 
     return {
         "type": "modal",
@@ -127,17 +136,6 @@ def _config_modal(region: dict) -> dict:
         "title": {"type": "plain_text", "text": "PAXMiner Settings"},
         "submit": {"type": "plain_text", "text": "Save"},
         "blocks": [
-            {
-                "type": "input",
-                "block_id": "timezone",
-                "label": {"type": "plain_text", "text": "Region timezone"},
-                "element": {
-                    "type": "static_select",
-                    "action_id": "val",
-                    "options": tz_opts,
-                    "initial_option": tz_initial,
-                },
-            },
             {
                 "type": "section",
                 "text": {
@@ -178,6 +176,31 @@ def _config_modal(region: dict) -> dict:
                         "style": "primary",
                     },
                 ],
+            },
+            {
+                "type": "input",
+                "block_id": "timezone",
+                "label": {"type": "plain_text", "text": "Region timezone"},
+                "element": {
+                    "type": "static_select",
+                    "action_id": "val",
+                    "options": tz_opts,
+                    "initial_option": tz_initial,
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "log_channel",
+                "optional": True,
+                "label": {"type": "plain_text", "text": "PAXMiner log channel"},
+                "hint": {
+                    "type": "plain_text",
+                    "text": (
+                        "Leave empty to keep looking up #paxminer_logs by name. "
+                        "Invite both the PAXMiner and Slackblast bots."
+                    ),
+                },
+                "element": log_element,
             },
         ],
     }
@@ -690,8 +713,11 @@ def _parse_modal_values(payload: dict) -> dict:
     state = payload.get("view", {}).get("state", {}).get("values", {})
     tz_sel = state.get("timezone", {}).get("val", {}).get("selected_option") or {}
     timezone = (tz_sel.get("value") or "America/Chicago").strip()
+    log_sel = (state.get("log_channel") or {}).get("val") or {}
+    log_channel = (log_sel.get("selected_conversation") or "").strip() or None
     return {
         "timezone": timezone,
+        "log_channel": log_channel,
     }
 
 

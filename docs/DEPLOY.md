@@ -166,7 +166,7 @@ aws lambda invoke \
   /tmp/pm-schedule.json && cat /tmp/pm-schedule.json
 ```
 
-Admins can manually send Kotter (and other reports) from Slack via **`/config-paxminer` → Schedule → Run Now** (SlackFunction acks and async-invokes **ScheduleFunction** for that one schedule item; the worker posts the outcome to `#paxminer_logs`). Slash commands and interactivity use **`SlackFunctionUrl`** from the PAXMiner manifest.
+Admins can manually send Kotter (and other reports) from Slack via **`/config-paxminer` → Schedule → Run Now** (SlackFunction acks and async-invokes **ScheduleFunction** for that one schedule item; the worker posts the outcome to the PAXMiner log channel). Slash commands and interactivity use **`SlackFunctionUrl`** from the PAXMiner manifest.
 
 With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if needed.
 
@@ -178,7 +178,7 @@ With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if nee
    - `/config-paxminer` — modal opens, **no** empty `""` ephemeral
    - **PAX Achievements** hub button — push modal works; Save persists
    - Channel fields are dropdowns (not raw IDs)
-   - **Schedule → Run Now** — runs immediately; outcome is posted to `#paxminer_logs`
+   - **Schedule → Run Now** — runs immediately; outcome is posted to the PAXMiner log channel
 4. Confirm deploy smoke includes `paxminer-<stage>-paxminer-slack` warm ping (`statusCode: 200`).
 5. Re-apply the stage Slack app from **`PAXminer/manifest-<stage>.json`** after removing slash commands so Slack drops stale `/kotter-report`.
 
