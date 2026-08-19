@@ -25,6 +25,7 @@ if str(_PAX_ROOT) not in sys.path:
     sys.path.insert(0, str(_PAX_ROOT))
 
 from scheduling import (  # noqa: E402
+    caption_with_window,
     default_chart_window,
     format_window_label,
     window_file_tag,
@@ -223,7 +224,13 @@ def run_q_charter(
                 comment = (
                     "Hey "
                     + region
-                    + f"! Here is {title or 'a look at who has been stepping up to Q across all AOs'} for {label}. "
+                    + "! Here is "
+                    + caption_with_window(
+                        title,
+                        label,
+                        "a look at who has been stepping up to Q across all AOs",
+                    )
+                    + ". "
                     "Is your name on this list? Remember Core Principle #4 - F3 is peer led in a rotating "
                     "fashion. Exercise your leadership muscles. Sign up to Q!"
                 )

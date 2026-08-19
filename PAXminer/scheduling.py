@@ -176,6 +176,20 @@ def format_report_title(name: str | None, window: tuple[date, date] | None = Non
     return base
 
 
+def caption_with_window(title: str | None, label: str | None, fallback: str) -> str:
+    """Slack caption noun: ``{title} for {label}`` without repeating the window.
+
+    Schedule jobs pass ``format_report_title`` (already ``Name (July 2026)``). Charters
+    also know the window label, so naive ``title for label`` becomes
+    ``PAX Charts (July 2026) for July 2026``.
+    """
+    heading = (title or "").strip() or fallback
+    period = (label or "").strip()
+    if not period or period in heading:
+        return heading
+    return f"{heading} for {period}"
+
+
 def destination_expansion(destination_type: str | None) -> str:
     return destination_descriptor(destination_type)["expansion"]
 
