@@ -1886,6 +1886,54 @@ def test_reconcile_rule_awards_silent_channel_summary():
     assert "89 granted, 141 revoked, 73 unchanged" in logs[0]
 
 
+def test_reconcile_rule_awards_skips_channel_when_noop():
+    """0 granted / 0 revoked is not a public correction; the log line still posts."""
+    from achievements.runner import reconcile_rule_awards
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchone.return_value = {
+        "name": "6 pack",
+        "effective_from": date(2026, 1, 1),
+        "effective_to": date(2026, 12, 31),
+    }
+    posts = []
+    logs = []
+    with patch(
+        "achievements.runner.run_achievements_for_region",
+        return_value={"grants": 0, "revokes": 0, "held": 26},
+    ):
+        with patch("achievements.runner.resolve_achievement_channel", return_value="C_ACH"):
+            with patch("achievements.runner.decrypt_field", return_value="x"):
+                with patch("achievements.runner.slack_client"):
+                    with patch(
+                        "achievements.runner.post_message",
+                        side_effect=lambda _c, ch, text, **_k: posts.append((ch, text)),
+                    ):
+                        with patch(
+                            "achievements.runner.post_log",
+                            side_effect=lambda _c, text, **_k: logs.append(text),
+                        ):
+                            result = reconcile_rule_awards(
+                                mock_conn,
+                                pm_schema="pm",
+                                regional_schema="f3test",
+                                region_row={"slack_token": "enc"},
+                                achievement_id=6,
+                                actor="UADMIN1234",
+                            )
+    assert result["grants"] == 0
+    assert result["revokes"] == 0
+    assert result["held"] == 26
+    assert posts == []
+    assert len(logs) == 1
+    assert "backfill triggered by <@UADMIN1234>" in logs[0]
+    assert "0 granted, 0 revoked, 26 unchanged" in logs[0]
+    assert "was corrected" not in logs[0]
+
+
 def test_scheduled_noop_logs_summary_webhook_silent():
     from achievements.runner import run_achievements_for_region
 
