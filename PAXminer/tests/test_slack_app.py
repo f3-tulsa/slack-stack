@@ -1063,6 +1063,62 @@ def test_delete_achievement_posts_admin_notice():
     client.views_update.assert_called_once()
 
 
+def test_delete_all_achievements_counts_awards_and_pax():
+    from config_paxminer import delete_all_achievements
+
+    cur = MagicMock()
+    cur.fetchone.return_value = {"awards": 40, "pax": 12}
+    cur.rowcount = 5
+    counts = delete_all_achievements(cur, "f3test")
+    assert counts == {"awards": 40, "pax": 12, "achievements": 5}
+    sql = " ".join(str(c) for c in cur.execute.call_args_list)
+    assert "COUNT(DISTINCT pax_id)" in sql
+    assert "DELETE FROM `f3test`.`achievements_awarded`" in sql
+    assert "DELETE FROM `f3test`.`achievement_versions`" in sql
+    assert "DELETE FROM `f3test`.`achievements_list`" in sql
+
+
+def test_delete_all_achievements_posts_admin_log_with_actor():
+    from slack_app import handle_delete_all_achievements
+
+    ack = MagicMock()
+    client = MagicMock()
+    body = {
+        "user": {"id": "UADMIN"},
+        "view": {
+            "id": "V1",
+            "private_metadata": '{"team_id":"T1","regional_schema":"f3test"}',
+        },
+    }
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch(
+            "slack_app._region_context_from_body",
+            return_value=("T1", "f3test", {"region": "t", "schema_name": "f3test"}),
+        ):
+            with patch("slack_app.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                with patch(
+                    "slack_app.delete_all_achievements",
+                    return_value={"awards": 40, "pax": 12, "achievements": 5},
+                ):
+                    with patch("slack_app._log_actor_name", return_value="Klint"):
+                        with patch("slack_app._post_achievement_admin_notice") as notice:
+                            with patch("slack_app._refresh_achievements_list") as refresh:
+                                handle_delete_all_achievements(
+                                    ack, body, client, MagicMock()
+                                )
+    notice.assert_called_once()
+    _region, channel_text, log_text = notice.call_args.args
+    assert "Klint" not in channel_text
+    assert "40 awards from 12 PAX" in channel_text
+    assert "deleted by `Klint`" in log_text
+    assert "5 achievements" in log_text
+    assert "40 awards from 12 PAX" in log_text
+    assert "Deleted 5 achievements and 40 awards." in refresh.call_args.args[4]
+
+
 def test_slack_function_stays_pandas_free():
     """Interactive Lambda must not import pandas or the achievements engine."""
     import ast

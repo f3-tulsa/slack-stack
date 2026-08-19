@@ -567,16 +567,26 @@ def handle_delete_all_achievements(ack, body, client, logger):
         with conn.cursor() as cur:
             counts = delete_all_achievements(cur, regional_schema)
             conn.commit()
+        awards = counted_noun(counts["awards"], "award")
+        pax = counted_noun(counts.get("pax") or 0, "PAX", "PAX")
+        achievements = counted_noun(counts["achievements"], "achievement")
         _refresh_achievements_list(
             client,
             body,
             team_id,
             regional_schema,
-            (
-                f"Deleted {counted_noun(counts['achievements'], 'achievement')} and "
-                f"{counted_noun(counts['awards'], 'award')}."
-            ),
+            f"Deleted {achievements} and {awards}.",
             page=0,
+        )
+        region = dict(region)
+        region["schema_name"] = regional_schema
+        _post_achievement_admin_notice(
+            region,
+            f"All achievements were deleted along with {awards} from {pax}.",
+            (
+                f"All achievements were deleted by `{_log_actor_name(client, user_id)}` "
+                f"({achievements}, {awards} from {pax} removed)"
+            ),
         )
     except Exception:
         logger.exception("delete all achievements failed")
