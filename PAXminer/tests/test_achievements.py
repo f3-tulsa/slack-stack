@@ -73,7 +73,8 @@ def test_build_kotter_message_mentions_known_and_falls_back():
         mia, lowq, noq, known_ids={known}
     )
     assert f"<@{known}>" in text
-    assert f"`{unknown}`" in text
+    assert "`[SEED] PAX 12`" in text
+    assert f"`{unknown}`" not in text
     assert f"<@{unknown}>" not in text
     assert "\n- " not in text
 
@@ -1912,8 +1913,11 @@ def test_reconcile_rule_awards_silent_channel_summary():
     assert "Achievement *Centurion* was corrected" in posts[0][1]
     assert mock_dm.call_count == 0
     assert len(logs) == 1
-    assert "backfill triggered by `UADMIN1234`" in logs[0]
-    assert "89 granted, 141 revoked, 73 unchanged" in logs[0]
+    assert "Achievement re-evaluate triggered by `admin`" in logs[0]
+    assert "Status: success" in logs[0]
+    assert "Achievement: Centurion" in logs[0]
+    assert "Results: 89 granted, 141 revoked, 73 unchanged" in logs[0]
+    assert "`UADMIN1234`" not in logs[0]
 
 
 def test_reconcile_rule_awards_skips_channel_when_noop():
@@ -1959,8 +1963,12 @@ def test_reconcile_rule_awards_skips_channel_when_noop():
     assert result["held"] == 26
     assert posts == []
     assert len(logs) == 1
-    assert "backfill triggered by `UADMIN1234`" in logs[0]
-    assert "0 granted, 0 revoked, 26 unchanged" in logs[0]
+    assert "Achievement re-evaluate triggered by `admin`" in logs[0]
+    assert "Status: success" in logs[0]
+    assert "Achievement: 6 pack" in logs[0]
+    assert "Results: 0 granted, 0 revoked, 26 unchanged" in logs[0]
+    assert "Period:" in logs[0]
+    assert "`UADMIN1234`" not in logs[0]
     assert "was corrected" not in logs[0]
 
 

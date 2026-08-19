@@ -23,12 +23,14 @@ from scheduling import (
     template_has,
 )
 from slack_util import (
+    format_log_message,
     is_slack_user_id,
     open_dm_channel,
     post_log,
     post_message,
     slack_client,
     slack_display_name,
+    ticked_display_name,
     upload_file,
 )
 
@@ -354,7 +356,7 @@ def _posted_user_ticks(result: dict, nested: dict) -> list[str]:
             label = str(item).strip()
         if not label:
             continue
-        tag = f"`{label}`"
+        tag = ticked_display_name(label, fallback="PAX")
         candidate = " ".join(ticks + [tag])
         if len(candidate) > 2800:
             extra += 1
@@ -412,7 +414,11 @@ def format_schedule_log_line(region_name: str, result: dict) -> str:
     notify_user = (result.get("notify_user") or nested.get("notify_user") or "").strip()
     operator = (result.get("operator_name") or "").strip() or notify_user
     if result.get("manual") or notify_user:
-        trigger = f"was run manually by `{operator}`" if operator else "was run manually"
+        trigger = (
+            f"was run manually by {ticked_display_name(operator)}"
+            if operator
+            else "was run manually"
+        )
     else:
         trigger = "was run as scheduled"
     header = f"The *{_report_title(str(name))}* report {trigger}"
@@ -479,19 +485,20 @@ def format_schedule_log_line(region_name: str, result: dict) -> str:
         result.get("period_end") or nested.get("period_end") or result.get("window_end") or nested.get("window_end"),
     )
 
-    lines = [header, f"Status: {status} ({dur_s:.1f}s)"]
-    if detail and status != "success":
-        lines.append(detail)
-    if results_line or period:
-        lines.append("")
-        if results_line:
-            lines.append(f"Results: {results_line}")
-        if period:
-            lines.append(f"Period: {period}")
-    lines.append("")
-    lines.append(f"Number of Messages: {messages}")
-    lines.append(f"Destination(s): {dest}")
-    return "\n".join(lines)
+    fields: list[tuple[str, str]] = []
+    if results_line:
+        fields.append(("Results", results_line))
+    if period:
+        fields.append(("Period", period))
+    return format_log_message(
+        header,
+        status=status,
+        duration_s=dur_s,
+        detail=detail if status != "success" else None,
+        fields=fields,
+        message_count=messages,
+        destinations=dest,
+    )
 
 
 def _post_schedule_outcome_log(region: dict | None, result: dict) -> None:

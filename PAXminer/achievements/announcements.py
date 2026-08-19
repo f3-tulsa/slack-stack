@@ -7,7 +7,7 @@ from datetime import date
 from achievements.period import backblast_archive_url, format_date_label, spoken_period
 from scheduling import format_iso_range
 from slack_blocks import chunk_messages, chunk_sections, fallback_text, section
-from slack_util import mention, ordinal_suffix, plain_name
+from slack_util import format_log_message, mention, ordinal_suffix, plain_name, ticked_display_name
 
 
 def _as_date(value) -> date | None:
@@ -318,17 +318,23 @@ def run_summary_line(
             dest += f", {dms} DMs{fail}"
     dur = f" ({duration_s:.1f}s)" if duration_s is not None else ""
     if kind == "backfill":
-        who = f"`{actor}`" if actor else "admin"
+        who = ticked_display_name(actor, fallback="admin")
         name = achievement_name or "achievement"
         span = format_iso_range(start, end) or (
             f"{start.isoformat() if start else 'all-time'} to {end.isoformat() if end else 'present'}"
         )
         unchanged = held
-        return (
-            f"Achievements backfill triggered by {who} for *{name}* over "
-            f"{span} — {granted} granted, {revoked} revoked, "
-            f"{unchanged} unchanged"
+        return format_log_message(
+            f"Achievement re-evaluate triggered by {who}",
+            status="success",
+            duration_s=duration_s,
+            fields=[
+                ("Achievement", name),
+                ("Results", f"{granted} granted, {revoked} revoked, {unchanged} unchanged"),
+                ("Period", span),
+            ],
         )
+
     return (
         f"Achievements {kind}: {granted} granted, {revoked} revoked, "
         f"{held} held{held_detail} | {rules} rules{window}{dest}{dur}"

@@ -1364,14 +1364,15 @@ def test_format_schedule_log_line_manual_vs_scheduled_and_dm_dest():
             "definition_name": "Achievement leaderboard",
             "ok": False,
             "error": "all channel uploads failed: not_in_channel",
-            "notify_user": "UADMIN",
+            "notify_user": "UADMIN1234",
             "specified_channels": ["C0APR1E1137"],
             "message_count": 0,
             "duration_s": 1.2,
         },
     )
-    assert "was run manually by `UADMIN`" in manual
-    assert "<@UADMIN>" not in manual
+    assert "was run manually by `admin`" in manual
+    assert "`UADMIN1234`" not in manual
+    assert "<@UADMIN1234>" not in manual
     assert "Status: failed (1.2s)" in manual
     assert "all channel uploads failed: not_in_channel" in manual
     assert "Number of Messages: 0" in manual
