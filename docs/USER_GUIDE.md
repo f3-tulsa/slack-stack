@@ -29,7 +29,7 @@ PAXMiner runs in the background and in Slack admin flows:
 - **Sync:** Daily user/channel sync.
 - **Achievements:** Data-driven rules grant and revoke awards. Schedule an **Award Achievements** item (default daily) for when/where unlocks post; awards also DM the PAX. Optional AO channel posts come from Slackblast when enabled.
 - **Scheduled reports:** Awards, charts, leaderboards, Kotter, and custom reports run on the unified schedule. Frequencies include hourly, daily, weekly, monthly, and custom intervals. Items with no destination channel configured are skipped until an admin sets one.
-- **`/config-paxminer`** (workspace admins): Timezone on Save; hub buttons for achievement rules, report definitions, Kotter thresholds, and **Schedule** (including **Run Now** for a single report item).
+- **`/config-paxminer`** (workspace admins): Timezone on Save; hub buttons for achievement rules, report definitions, Kotter thresholds, and **Schedule** (including **Run Now** for a single report item). The same hub is available from the PAXMiner App Home **PAXMiner Settings** button, and from `/config-slackblast` when the workspace is linked to PAXMiner.
 - Manual Kotter (and other reports): use **Schedule → select item → Run Now** (one region / one schedule item). There is no `/kotter-report` slash command. Run Now posts the outcome to the PAXMiner log channel (it does not DM the admin).
 - **PAXMiner log channel:** Operational summaries for automatic runs and **Run Now** — achievement grants/revokes, Kotter posts, and scheduled report success/skip/failure (with error detail on failure). Open that channel to audit background activity.
 
