@@ -1131,6 +1131,140 @@ def test_delete_one_achievement_sql_matches_single_delete():
     assert "DELETE FROM `f3test`.`achievements_list` WHERE id=%s" in sql
 
 
+def test_restore_defaults_adds_like_new_and_queues_reeval():
+    from slack_app import handle_restore_achievements
+
+    ack = MagicMock()
+    client = MagicMock()
+    body = {
+        "user": {"id": "UADMIN"},
+        "view": {
+            "id": "V1",
+            "private_metadata": '{"team_id":"T1","regional_schema":"f3test"}',
+        },
+    }
+    seeds = [
+        {
+            "name": "The Priest",
+            "description": "d",
+            "verb": "v",
+            "code": "the_priest",
+            "metric": "posts",
+            "activity": "qsource",
+            "period": "year",
+            "threshold": 25,
+        },
+        {
+            "name": "The Monk",
+            "description": "d",
+            "verb": "v",
+            "code": "the_monk",
+            "metric": "posts",
+            "activity": "qsource",
+            "period": "month",
+            "threshold": 4,
+        },
+    ]
+    next_id = {"n": 9}
+
+    def execute(sql, params=None):
+        if "INSERT INTO" in str(sql) and "achievements_list" in str(sql):
+            next_id["n"] += 1
+            mock_cur.lastrowid = next_id["n"]
+
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch(
+            "slack_app._region_context_from_body",
+            return_value=("T1", "f3test", {"region": "t", "schema_name": "f3test"}),
+        ):
+            with patch("slack_app.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_cur.fetchone.return_value = None
+                mock_cur.execute.side_effect = execute
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                with patch("slack_app.load_achievement_defaults", return_value=seeds):
+                    with patch("slack_app.earliest_beatdown_date", return_value="2025-01-01"):
+                        with patch("achievements.range.ensure_achievement_range_columns"):
+                            with patch(
+                                "achievements.range.try_acquire_reeval_lock",
+                                return_value=(True, None),
+                            ):
+                                with patch("achievements.versions.insert_version") as insert_ver:
+                                    with patch(
+                                        "slack_schedule.queue_achievement_backfill"
+                                    ) as queue:
+                                        with patch(
+                                            "slack_app._post_achievement_admin_notice"
+                                        ) as notice:
+                                            with patch(
+                                                "slack_app._refresh_achievements_list"
+                                            ) as refresh:
+                                                handle_restore_achievements(
+                                                    ack, body, client, MagicMock()
+                                                )
+    assert insert_ver.call_count == 2
+    assert insert_ver.call_args_list[0].kwargs["range_mode"] == "all_attendance"
+    assert insert_ver.call_args_list[0].kwargs["code"] == "the_priest"
+    assert insert_ver.call_args_list[1].kwargs["code"] == "the_monk"
+    assert queue.call_count == 2
+    assert queue.call_args_list[0].kwargs["automatic"] is True
+    assert queue.call_args_list[0].kwargs["achievement_id"] == 10
+    assert queue.call_args_list[1].kwargs["achievement_id"] == 11
+    assert queue.call_args_list[0].kwargs["actor"] == "UADMIN"
+    notice.assert_not_called()
+    assert "2 missing builtin" in refresh.call_args.args[4]
+    assert "Re-evaluate queued" in refresh.call_args.args[4]
+
+
+def test_restore_defaults_skips_existing_codes():
+    from slack_app import handle_restore_achievements
+
+    ack = MagicMock()
+    body = {
+        "user": {"id": "UADMIN"},
+        "view": {
+            "id": "V1",
+            "private_metadata": '{"team_id":"T1","regional_schema":"f3test"}',
+        },
+    }
+    seeds = [
+        {
+            "name": "The Priest",
+            "description": "d",
+            "verb": "v",
+            "code": "the_priest",
+            "metric": "posts",
+            "activity": "qsource",
+            "period": "year",
+            "threshold": 25,
+        }
+    ]
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch(
+            "slack_app._region_context_from_body",
+            return_value=("T1", "f3test", {"region": "t"}),
+        ):
+            with patch("slack_app.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_cur.fetchone.return_value = {"id": 1}
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                with patch("slack_app.load_achievement_defaults", return_value=seeds):
+                    with patch("slack_app.earliest_beatdown_date", return_value="2025-01-01"):
+                        with patch("achievements.range.ensure_achievement_range_columns"):
+                            with patch("achievements.versions.insert_version") as insert_ver:
+                                with patch(
+                                    "slack_schedule.queue_achievement_backfill"
+                                ) as queue:
+                                    with patch("slack_app._refresh_achievements_list"):
+                                        handle_restore_achievements(
+                                            ack, body, MagicMock(), MagicMock()
+                                        )
+    insert_ver.assert_not_called()
+    queue.assert_not_called()
+
+
 def test_slack_function_stays_pandas_free():
     """Interactive Lambda must not import pandas or the achievements engine."""
     import ast
