@@ -434,21 +434,26 @@ def test_format_run_result_variants():
             "ok": True,
             "channel_count": 2,
             "specified_channels": ["C1", "C2"],
+            "destination_type": "specific_channels",
+            "duration_s": 0.6,
         }
     )
-    assert "ran on schedule" in text
-    assert "Status: success" in text
+    assert "The *Kotter* report was run as scheduled" in text
+    assert "Status: success (0.6s)" in text
     assert "Number of Messages: 2" in text
+    assert "<#C1>" in text
 
     text, _ = format_run_result(
         {
             "definition_name": "Kotter",
             "ok": True,
             "skipped": "no destinations configured",
+            "duration_s": 0.1,
         }
     )
-    assert "Status: skipped" in text
+    assert "Status: skipped (0.1s)" in text
     assert "no destinations configured" in text
+    assert "Destination(s): none" in text
 
     text, _ = format_run_result(
         {
@@ -456,10 +461,13 @@ def test_format_run_result_variants():
             "ok": False,
             "error": "boom",
             "specified_channels": ["C1"],
+            "message_count": 0,
+            "duration_s": 1.2,
         }
     )
-    assert "Status: failed" in text
-    assert "boom" in text
+    assert "Status: failed (1.2s)" in text
+    assert "\nboom\n" in text or text.splitlines()[2] == "boom"
+    assert "Destination(s): none" in text
 
 
 def test_format_schedule_log_line_variants():
@@ -472,12 +480,15 @@ def test_format_schedule_log_line_variants():
             "ok": True,
             "channel_count": 2,
             "specified_channels": ["C0APR1E1137"],
+            "destination_type": "specific_channels",
+            "duration_s": 0.5,
         },
     )
-    assert line.startswith("The Kotter report ran on schedule.")
-    assert "Status: success" in line
+    assert line.startswith("The *Kotter* report was run as scheduled")
+    assert "Status: success (0.5s)" in line
     assert "<#C0APR1E1137>" in line
     assert "Number of Messages: 2" in line
+    assert "<@" not in line
 
     line = format_schedule_log_line(
         "f3ttown_test",
@@ -487,7 +498,7 @@ def test_format_schedule_log_line_variants():
             "skipped": "no destinations configured",
         },
     )
-    assert "Status: skipped" in line
+    assert "Status: skipped (0.0s)" in line
     assert "no destinations configured" in line
 
     line = format_schedule_log_line(
@@ -497,10 +508,12 @@ def test_format_schedule_log_line_variants():
             "ok": False,
             "error": "boom",
             "specified_channels": ["C1"],
+            "message_count": 0,
         },
     )
-    assert "Status: failed" in line
+    assert "Status: failed (0.0s)" in line
     assert "boom" in line
+    assert "Destination(s): none" in line
 
 
 def test_post_schedule_outcome_log_uses_schema_name():
@@ -529,7 +542,7 @@ def test_post_schedule_outcome_log_uses_schema_name():
                 _post_schedule_outcome_log(region, result)
 
     assert len(log_lines) == 1
-    assert log_lines[0].startswith("The kotter report ran on schedule.")
+    assert log_lines[0].startswith("The *kotter* report was run as scheduled")
     assert "Tulsa" not in log_lines[0]
 
 
@@ -832,8 +845,9 @@ def test_format_run_result_includes_posted_failed_channels():
             ],
         }
     )
-    assert "Status: success" in text
+    assert "Status: success (0.0s)" in text
     assert "<#C111>" in text
+    assert "Destination(s): <#C111>" in text
 
 
 def test_format_schedule_log_line_includes_destinations():
@@ -849,9 +863,9 @@ def test_format_schedule_log_line_includes_destinations():
             "message_count": 0,
         },
     )
-    assert "Status: failed" in line
+    assert "Status: failed (0.0s)" in line
     assert "all channel uploads failed" in line
-    assert "<#C1>" in line
+    assert "Destination(s): none" in line
     assert "Number of Messages: 0" in line
 
 
@@ -1219,12 +1233,15 @@ def test_format_schedule_log_line_manual_vs_scheduled_and_dm_dest():
             "definition_name": "Achievement leaderboard",
             "ok": True,
             "specified_channels": ["C0APR1E1137"],
+            "destination_type": "specific_channels",
             "message_count": 1,
+            "duration_s": 0.4,
         },
     )
-    assert scheduled.startswith("The Achievement leaderboard report ran on schedule.")
-    assert "<@U" not in scheduled
-    assert "Destination: <#C0APR1E1137>" in scheduled
+    assert scheduled.startswith("The *Achievement leaderboard* report was run as scheduled")
+    assert "<@" not in scheduled
+    assert "Destination(s): <#C0APR1E1137>" in scheduled
+    assert "Status: success (0.4s)" in scheduled
 
     manual = format_schedule_log_line(
         "x",
@@ -1235,12 +1252,15 @@ def test_format_schedule_log_line_manual_vs_scheduled_and_dm_dest():
             "notify_user": "UADMIN",
             "specified_channels": ["C0APR1E1137"],
             "message_count": 0,
+            "duration_s": 1.2,
         },
     )
-    assert "was run manually by <@UADMIN>." in manual
-    assert "Status: failed" in manual
+    assert "was run manually by `UADMIN`" in manual
+    assert "<@UADMIN>" not in manual
+    assert "Status: failed (1.2s)" in manual
     assert "all channel uploads failed: not_in_channel" in manual
     assert "Number of Messages: 0" in manual
+    assert "Destination(s): none" in manual
 
     dm = format_schedule_log_line(
         "x",
@@ -1250,10 +1270,78 @@ def test_format_schedule_log_line_manual_vs_scheduled_and_dm_dest():
             "destination_type": "dm_all_pax",
             "user_count": 12,
             "channel_count": 0,
+            "duration_s": 8.5,
         },
     )
-    assert "Destination: DM to specified PAX" in dm
+    assert "The *PAX charts (DM)* report was run as scheduled" in dm
+    assert "Destination(s): DM to all PAX" in dm
+    assert "specified PAX" not in dm
     assert "Number of Messages: 12" in dm
+    assert "Status: success (8.5s)" in dm
+
+
+def test_format_schedule_log_line_results_period_and_specific_pax():
+    from schedule_runner import format_schedule_log_line
+
+    awarded = format_schedule_log_line(
+        "x",
+        {
+            "definition_name": "Award Achievements",
+            "ok": True,
+            "results_line": "14 rules, 0 granted, 0 revoked, 0 held",
+            "period_start": "2026-01-01",
+            "period_end": "2026-08-18",
+            "message_count": 0,
+            "duration_s": 0.6,
+        },
+    )
+    assert "Results: 14 rules, 0 granted, 0 revoked, 0 held" in awarded
+    assert "Period: 2026-01-01 to 2026-08-18" in awarded
+    assert ".." not in awarded
+    assert "Destination(s): none" in awarded
+
+    named = format_schedule_log_line(
+        "x",
+        {
+            "definition_name": "Kotter report",
+            "ok": True,
+            "message_count": 1,
+            "destination_type": "specific_channels",
+            "posted_channels": [{"channel_id": "C9"}],
+        },
+    )
+    assert "The *Kotter* report was run as scheduled" in named
+    assert "Kotter report report" not in named
+
+    specific_dm = format_schedule_log_line(
+        "x",
+        {
+            "definition_name": "PAX charts (DM)",
+            "ok": True,
+            "destination_type": "dm_specific_pax",
+            "message_count": 2,
+            "posted_users": [{"user_id": "U1", "pax": "Nacho"}, {"user_id": "U2", "pax": "Honey Badger"}],
+        },
+    )
+    assert "Destination(s): DM to specific PAX (`Nacho` `Honey Badger`)" in specific_dm
+    assert "<@" not in specific_dm
+
+
+def test_format_schedule_summary_uses_destination_label():
+    from scheduling import format_schedule_summary
+
+    line = format_schedule_summary(
+        {
+            "id": 1,
+            "destination_type": "dm_all_pax",
+            "frequency_type": "monthly",
+            "time_of_day": "07:00:00",
+            "enabled": 1,
+        },
+        {"name": "PAX charts (DM)"},
+    )
+    assert "DM to all PAX" in line
+    assert "dm_all_pax" not in line
 
 
 def test_queue_achievement_backfill_serializes_dates():

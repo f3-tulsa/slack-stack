@@ -549,28 +549,30 @@ def run_achievements_for_region(
         else:
             for line in log_lines:
                 post_log(client, line)
-            dest_channel = f"<#{channels[0]}>" if channels and str(channels[0]).startswith("C") else (channels[0] if channels else None)
-            post_log(
-                client,
-                run_summary_line(
-                    kind="backfill" if log_mode == "backfill" else ("daily" if log_mode == "scheduled" else log_mode),
-                    granted=len(grants),
-                    revoked=len(revokes),
-                    held=held,
-                    held_grandfathered=held_grandfathered,
-                    held_older_version=held_older_version,
-                    held_out_of_range=held_out_of_range,
-                    rules=len(rules),
-                    start=start,
-                    end=end,
-                    channel=dest_channel,
-                    dms=dms_sent,
-                    dm_failed=dm_failed,
-                    duration_s=duration_s,
-                    actor=actor,
-                    achievement_name=(rules[0].get("name") if achievement_id and rules else None),
-                ),
-            )
+            # Scheduled / Run Now: one outcome line from schedule_runner, not a second dashed summary.
+            if log_mode != "scheduled":
+                dest_channel = f"<#{channels[0]}>" if channels and str(channels[0]).startswith("C") else (channels[0] if channels else None)
+                post_log(
+                    client,
+                    run_summary_line(
+                        kind="backfill" if log_mode == "backfill" else log_mode,
+                        granted=len(grants),
+                        revoked=len(revokes),
+                        held=held,
+                        held_grandfathered=held_grandfathered,
+                        held_older_version=held_older_version,
+                        held_out_of_range=held_out_of_range,
+                        rules=len(rules),
+                        start=start,
+                        end=end,
+                        channel=dest_channel,
+                        dms=dms_sent,
+                        dm_failed=dm_failed,
+                        duration_s=duration_s,
+                        actor=actor,
+                        achievement_name=(rules[0].get("name") if achievement_id and rules else None),
+                    ),
+                )
 
     return {
         "grants": len(grants),
@@ -578,6 +580,12 @@ def run_achievements_for_region(
         "held": held,
         "dm_failed": dm_failed,
         "duration_s": duration_s,
+        "rules": len(rules),
+        "results_line": (
+            f"{len(rules)} rules, {len(grants)} granted, {len(revokes)} revoked, {held} held"
+        ),
+        "period_start": start.isoformat() if start else None,
+        "period_end": end.isoformat() if end else None,
     }
 
 
