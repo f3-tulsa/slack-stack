@@ -1370,3 +1370,153 @@ def test_queue_achievement_backfill_serializes_dates():
         "start": "2026-03-01",
         "end": "2026-08-18",
     }
+
+class _CatchApp:
+    def __init__(self):
+        self.actions = {}
+        self.views = {}
+
+    def action(self, action_id):
+        def wrap(fn):
+            self.actions[action_id] = fn
+            return fn
+        return wrap
+
+    def view(self, callback_id):
+        def wrap(fn):
+            self.views[callback_id] = fn
+            return fn
+        return wrap
+
+
+def _schedule_handlers():
+    from slack_schedule import register_schedule_listeners
+
+    app = _CatchApp()
+    register_schedule_listeners(app)
+    return app
+
+
+def _modal_action_body(**extra):
+    body = {
+        "user": {"id": "U1"},
+        "trigger_id": "trig",
+        "view": {"id": "V1", "private_metadata": '{"team_id":"T1","regional_schema":"f3test"}'},
+    }
+    body.update(extra)
+    return body
+
+
+def test_add_edit_report_and_schedule_update_view_not_push():
+    """S1: Add/Edit replace the current list view instead of pushing a third modal."""
+    from config_schedule import (
+        ADD_REPORT_ACTION_ID,
+        ADD_SCHEDULE_ACTION_ID,
+        EDIT_REPORT_ACTION_ID,
+        EDIT_SCHEDULE_ACTION_ID,
+    )
+    from unittest.mock import MagicMock, patch
+
+    os.environ.setdefault("PM_SLACK_TOKEN", "xoxb-test-token")
+    os.environ.setdefault("PM_SLACK_SIGNING_SECRET", "test-signing-secret-16")
+
+    app = _schedule_handlers()
+    ack = MagicMock()
+    client = MagicMock()
+    logger = MagicMock()
+    region = {"region": "t", "schema_name": "f3test", "timezone": "America/Chicago"}
+    report_body = _modal_action_body()
+    report_body["view"]["state"] = {
+        "values": {
+            "report_pick": {
+                "paxminer_report_select": {"selected_option": {"value": "9"}}
+            }
+        }
+    }
+    schedule_body = _modal_action_body()
+    schedule_body["view"]["state"] = {
+        "values": {
+            "schedule_pick": {
+                "paxminer_schedule_select": {"selected_option": {"value": "4"}}
+            }
+        }
+    }
+
+    with patch("slack_schedule.is_slack_admin", return_value=True):
+        with patch(
+            "slack_app._region_context_from_body",
+            return_value=("T1", "f3test", region),
+        ):
+            with patch("slack_schedule.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                with patch("slack_schedule.load_definitions", return_value=[]):
+                    app.actions[ADD_REPORT_ACTION_ID](ack, report_body, client, logger)
+                    app.actions[ADD_SCHEDULE_ACTION_ID](ack, schedule_body, client, logger)
+                with patch(
+                    "slack_schedule.load_definition",
+                    return_value={"id": 9, "code": "pax", "name": "PAX"},
+                ):
+                    app.actions[EDIT_REPORT_ACTION_ID](ack, report_body, client, logger)
+                with patch(
+                    "slack_schedule.load_schedule",
+                    return_value={"id": 4, "report_definition_id": 9},
+                ):
+                    with patch("slack_schedule.load_definitions", return_value=[]):
+                        app.actions[EDIT_SCHEDULE_ACTION_ID](ack, schedule_body, client, logger)
+
+    client.views_push.assert_not_called()
+    assert client.views_update.call_count == 4
+    callbacks = [c.kwargs["view"]["callback_id"] for c in client.views_update.call_args_list]
+    assert callbacks[0] == "paxminer-report-edit-id"
+    assert callbacks[1] == "paxminer-schedule-edit-id"
+    assert callbacks[2] == "paxminer-report-edit-id"
+    assert callbacks[3] == "paxminer-schedule-edit-id"
+
+
+def test_duplicate_report_updates_list_and_does_not_push():
+    from config_schedule import DUPLICATE_REPORT_ACTION_ID
+    from unittest.mock import MagicMock, patch
+
+    os.environ.setdefault("PM_SLACK_TOKEN", "xoxb-test-token")
+    os.environ.setdefault("PM_SLACK_SIGNING_SECRET", "test-signing-secret-16")
+
+    app = _schedule_handlers()
+    ack = MagicMock()
+    client = MagicMock()
+    logger = MagicMock()
+    body = _modal_action_body()
+    body["view"]["state"] = {
+        "values": {
+            "report_pick": {
+                "paxminer_report_select": {"selected_option": {"value": "9"}}
+            }
+        }
+    }
+    region = {"region": "t", "schema_name": "f3test"}
+    with patch("slack_schedule.is_slack_admin", return_value=True):
+        with patch(
+            "slack_app._region_context_from_body",
+            return_value=("T1", "f3test", region),
+        ):
+            with patch("slack_schedule.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                with patch(
+                    "slack_schedule.load_definition",
+                    return_value={"id": 9, "code": "pax", "name": "PAX"},
+                ):
+                    with patch(
+                        "slack_schedule.duplicate_definition",
+                        return_value={"id": 10, "code": "pax_copy", "name": "PAX (copy)"},
+                    ):
+                        with patch("slack_schedule.load_definitions", return_value=[]):
+                            app.actions[DUPLICATE_REPORT_ACTION_ID](
+                                ack, body, client, logger
+                            )
+    client.views_push.assert_not_called()
+    client.views_update.assert_called_once()
+    assert client.views_update.call_args.kwargs["view"]["callback_id"] == "paxminer-reports-list-id"
+

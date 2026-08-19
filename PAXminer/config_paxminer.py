@@ -12,8 +12,6 @@ LOG = logging.getLogger(__name__)
 CALLBACK_ID = "paxminer-config-id"
 ACHIEVEMENTS_LIST_CALLBACK_ID = "paxminer-achievements-list-id"
 ACHIEVEMENT_EDIT_CALLBACK_ID = "paxminer-achievement-edit-id"
-ACHIEVEMENT_DELETE_CALLBACK_ID = "paxminer-achievement-delete-id"
-
 ADD_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_add"
 EDIT_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_edit"
 DELETE_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_delete"
@@ -173,6 +171,22 @@ def _config_modal(region: dict) -> dict:
     }
 
 
+def _achievement_delete_confirm() -> dict:
+    """Native Slack confirm on Achievements list Delete selected."""
+    return {
+        "title": {"type": "plain_text", "text": "Delete achievement?"},
+        "text": {
+            "type": "mrkdwn",
+            "text": (
+                "Deletes the selected achievement and every award of that code. "
+                "This cannot be undone. To keep PAX history, Edit and uncheck Enabled instead."
+            ),
+        },
+        "confirm": {"type": "plain_text", "text": "Delete"},
+        "deny": {"type": "plain_text", "text": "Cancel"},
+    }
+
+
 def _achievements_list_modal(
     team_id: str,
     regional_schema: str,
@@ -247,8 +261,9 @@ def _achievements_list_modal(
                     {
                         "type": "button",
                         "action_id": DELETE_ACHIEVEMENT_ACTION_ID,
-                        "text": {"type": "plain_text", "text": "Delete / disable"},
+                        "text": {"type": "plain_text", "text": "Delete selected"},
                         "style": "danger",
+                        "confirm": _achievement_delete_confirm(),
                     },
                     {
                         "type": "button",
@@ -532,65 +547,6 @@ def _achievement_edit_modal(
         "submit": {"type": "plain_text", "text": "Save"},
         "close": {"type": "plain_text", "text": "Cancel"},
         "blocks": blocks,
-    }
-
-
-def _achievement_delete_modal(team_id: str, regional_schema: str, row: dict, award_count: int) -> dict:
-    name = row.get("name") or "this achievement"
-    text = (
-        f"This achievement has {award_count} award(s). Deleting it will also delete those "
-        f"{award_count} awards permanently. To stop awarding it while keeping PAX history, "
-        f"disable it instead."
-    )
-    if award_count == 0:
-        text = f"Delete *{name}*? It has no awards, so only the rule will be removed."
-    return {
-        "type": "modal",
-        "callback_id": ACHIEVEMENT_DELETE_CALLBACK_ID,
-        "private_metadata": _metadata(team_id, regional_schema, row["id"]),
-        "title": {"type": "plain_text", "text": "Delete or disable"},
-        "submit": {"type": "plain_text", "text": "Confirm"},
-        "close": {"type": "plain_text", "text": "Cancel"},
-        "blocks": [
-            {"type": "section", "text": {"type": "mrkdwn", "text": text}},
-            {
-                "type": "input",
-                "block_id": "delete_action",
-                "label": {"type": "plain_text", "text": "What should happen?"},
-                "element": {
-                    "type": "static_select",
-                    "action_id": "val",
-                    "options": [
-                        {
-                            "text": {
-                                "type": "plain_text",
-                                "text": f"Disable and keep {award_count} award(s)",
-                            },
-                            "value": "disable",
-                        },
-                        {
-                            "text": {
-                                "type": "plain_text",
-                                "text": f"Delete achievement and all {award_count} award(s)",
-                            },
-                            "value": "delete",
-                        },
-                    ],
-                    **_with_initial(
-                        [
-                            {
-                                "text": {
-                                    "type": "plain_text",
-                                    "text": f"Disable and keep {award_count} award(s)",
-                                },
-                                "value": "disable",
-                            }
-                        ],
-                        "disable" if award_count else "delete",
-                    ),
-                },
-            },
-        ],
     }
 
 
