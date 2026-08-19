@@ -318,6 +318,25 @@ def get_channel_id(name, logger, client):
     return None
 
 
+def resolve_paxminer_log_channel(region_record, logger, client):
+    """Prefer PaxminerRegion.log_channel; fall back to looking up #paxminer_logs by name."""
+    schema = getattr(region_record, "paxminer_schema", None)
+    if schema:
+        try:
+            rows = DbManager.find_records(
+                PaxminerRegion,
+                [PaxminerRegion.schema_name == schema],
+                schema=paxminer_schema_name(),
+            )
+            if rows:
+                stored = (getattr(rows[0], "log_channel", None) or "").strip()
+                if stored:
+                    return stored
+        except Exception:
+            logger.debug("PaxminerRegion log_channel lookup failed", exc_info=True)
+    return get_channel_id("paxminer_logs", logger, client)
+
+
 def get_user_names(
     array_of_user_ids,
     logger,

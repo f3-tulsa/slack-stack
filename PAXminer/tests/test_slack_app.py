@@ -150,10 +150,11 @@ def test_config_submit_clear_on_success():
         with patch("slack_app._region_context_from_body", return_value=("T1", "f3tulsa_test", region)):
             with patch("slack_app._parse_modal_values", return_value=values):
                 with patch("slack_app.connect_from_env") as mock_conn:
-                    mock_cur = MagicMock()
-                    mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
-                    mock_conn.return_value.cursor.return_value.__exit__.return_value = False
-                    handle_config_submit(ack, body, client, logger)
+                    with patch("schedule_schema.ensure_log_channel_column", return_value=False):
+                        mock_cur = MagicMock()
+                        mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                        mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                        handle_config_submit(ack, body, client, logger)
 
     ack.assert_called_once_with(response_action="clear")
 

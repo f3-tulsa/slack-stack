@@ -447,6 +447,44 @@ def test_post_log_swallows_client_errors():
         post_log(client, "- Schedule (test): FAILED - boom")  # must not raise
 
 
+def test_resolve_log_channel_prefers_stored_id():
+    from unittest.mock import MagicMock, patch
+
+    from slack_util import post_log, resolve_log_channel
+
+    assert resolve_log_channel(None) == "paxminer_logs"
+    assert resolve_log_channel({"log_channel": " CLOG99 "}) == "CLOG99"
+    assert resolve_log_channel({"log_channel": ""}) == "paxminer_logs"
+
+    client = MagicMock()
+    with patch("slack_util.post_message") as post:
+        post_log(client, "hello", region={"log_channel": "CLOG99"})
+    post.assert_called_once()
+    assert post.call_args.args[1] == "CLOG99"
+
+
+def test_ensure_log_channel_column_adds_when_missing():
+    from unittest.mock import MagicMock
+
+    from schedule_schema import ensure_log_channel_column
+
+    cur = MagicMock()
+    cur.fetchone.return_value = {"c": 0}
+    assert ensure_log_channel_column(cur, "paxminer") is True
+    assert "log_channel" in cur.execute.call_args_list[-1][0][0]
+
+
+def test_ensure_log_channel_column_skips_when_present():
+    from unittest.mock import MagicMock
+
+    from schedule_schema import ensure_log_channel_column
+
+    cur = MagicMock()
+    cur.fetchone.return_value = {"c": 1}
+    assert ensure_log_channel_column(cur, "paxminer") is False
+    assert cur.execute.call_count == 1
+
+
 def test_format_run_result_variants():
     from schedule_runner import format_run_result
 

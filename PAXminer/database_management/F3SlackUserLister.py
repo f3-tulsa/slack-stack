@@ -60,7 +60,7 @@ def sanitize_start_date(date_str):
         # Return None if the date is invalid
         return None
     
-def database_slack_user_update(region_db, key, firsttime_run, mydb):
+def database_slack_user_update(region_db, key, firsttime_run, mydb, log_channel=None):
     logging.info("Database_slack_user_update for region " + region_db)
 
     # Set Slack token
@@ -174,7 +174,7 @@ def database_slack_user_update(region_db, key, firsttime_run, mydb):
     if new_count or updated_count:
         try:
             slack.chat_postMessage(
-                channel="paxminer_logs",
+                channel=(log_channel or "").strip() or "paxminer_logs",
                 text=f" - User sync ({region_db}): {new_count} new PAX records, {updated_count} updated",
             )
         except Exception as log_exc:

@@ -94,6 +94,27 @@ def ensure_timezone_column(cur, pm_schema: str) -> bool:
     return True
 
 
+def ensure_log_channel_column(cur, pm_schema: str) -> bool:
+    """Add nullable regions.log_channel (Slack channel ID) if missing."""
+    cur.execute(
+        """
+        SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA=%s AND TABLE_NAME='regions' AND COLUMN_NAME='log_channel'
+        """,
+        (pm_schema,),
+    )
+    if int(cur.fetchone()["c"]) > 0:
+        return False
+    cur.execute(
+        f"""
+        ALTER TABLE `{pm_schema}`.`regions`
+        ADD COLUMN `log_channel` varchar(100) NULL
+        """
+    )
+    LOG.info("Added %s.regions.log_channel", pm_schema)
+    return True
+
+
 def _table_exists(cur, schema: str, table: str) -> bool:
     cur.execute(
         """

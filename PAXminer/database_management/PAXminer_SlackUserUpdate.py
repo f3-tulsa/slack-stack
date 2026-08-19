@@ -54,7 +54,7 @@ def database_management_update():
             sql = f"SELECT * FROM `{db}`.`regions` where active = 1"
             cursor.execute(sql)
             regions = cursor.fetchall()
-            regions_df = pd.DataFrame(regions, columns=['region', 'slack_token', 'schema_name'])
+            regions_df = pd.DataFrame(regions)
     finally:
         mydb1.close()
         logging.info('Getting list of regions that use PAXminer...')
@@ -76,13 +76,19 @@ def database_management_update():
 
         logging.info('Executing user updates for region ' + region)
         try :
-            database_slack_user_update(region_db, key, full_run, init_db(host, port, user, password, region_db))
+            database_slack_user_update(
+                region_db, key, full_run, init_db(host, port, user, password, region_db),
+                log_channel=row.get("log_channel") if hasattr(row, "get") else None,
+            )
         except Exception as e:
             logging.error("An error occurred updating the users for region %s (schema %s)", region, region_db)
             logging.error(e)
 
         try :
-            database_slack_channel_update(region_db, key, init_db(host, port, user, password, region_db))
+            database_slack_channel_update(
+                region_db, key, init_db(host, port, user, password, region_db),
+                log_channel=row.get("log_channel") if hasattr(row, "get") else None,
+            )
         except Exception as e:
             logging.error("An error occurred updating the channels for region %s (schema %s)", region, region_db)
             logging.error(e)

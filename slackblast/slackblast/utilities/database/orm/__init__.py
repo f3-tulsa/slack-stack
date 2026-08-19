@@ -213,6 +213,7 @@ paxminer_region = Table(
     Column("scrape_backblasts", TINYINT),
     Column("send_achievements", TINYINT),
     Column("achievement_channel", String(100)),
+    Column("log_channel", String(100)),
     Column("NO_POST_THRESHOLD", Integer),
     Column("REMINDER_WEEKS", Integer),
     Column("HOME_AO_CAPTURE", Integer),
