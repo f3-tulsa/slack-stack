@@ -6,6 +6,11 @@ import json
 import logging
 import os
 import re
+from datetime import date
+from pathlib import Path
+
+from slack_blocks import confirm_dialog, context, page_nav_elements, pencil_row
+from config_schedule import PAGE_SIZE, _bulk_delete_restore, achievement_subline
 
 LOG = logging.getLogger(__name__)
 
@@ -17,6 +22,13 @@ EDIT_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_edit"
 DELETE_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_delete"
 BACKFILL_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_backfill"
 SELECT_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_select"
+DUPLICATE_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_duplicate"
+DELETE_ALL_ACHIEVEMENTS_ACTION_ID = "paxminer_achievements_delete_all"
+RESTORE_ACHIEVEMENTS_ACTION_ID = "paxminer_achievements_restore_defaults"
+REEVAL_FROM_ACTION_ID = "paxminer_achievement_reeval_from"
+REEVAL_TO_ACTION_ID = "paxminer_achievement_reeval_to"
+ACHIEVEMENTS_PAGE_PREV_ACTION_ID = "paxminer_achievements_page_prev"
+ACHIEVEMENTS_PAGE_NEXT_ACTION_ID = "paxminer_achievements_page_next"
 
 METRICS = ("posts", "qs", "distinct_aos", "posts_at_single_ao")
 PERIODS = ("week", "month", "year")
@@ -47,8 +59,8 @@ def _region_for_team(cur, pm_schema: str, team_id: str) -> dict | None:
     return cur.fetchone()
 
 
-def _metadata(team_id: str, regional_schema: str, achievement_id: int | None = None) -> str:
-    payload = {"team_id": team_id, "regional_schema": regional_schema}
+def _metadata(team_id: str, regional_schema: str, achievement_id: int | None = None, **extra) -> str:
+    payload = {"team_id": team_id, "regional_schema": regional_schema, **extra}
     if achievement_id is not None:
         payload["achievement_id"] = achievement_id
     return json.dumps(payload)
@@ -192,94 +204,173 @@ def _achievements_list_modal(
     regional_schema: str,
     achievements: list[dict],
     notice: str | None = None,
+    page: int = 0,
+    selected_id: int | None = None,
+    reeval_from: str | None = None,
+    reeval_to: str | None = None,
 ) -> dict:
+    today = date.today().isoformat()
+    to_s = (reeval_to or today)[:10]
+    from_s = (reeval_from or today)[:10]
+    total = len(achievements)
+    max_page = max(0, (total - 1) // PAGE_SIZE) if total else 0
+    page = min(max(page, 0), max_page)
+    start = page * PAGE_SIZE
+    page_rows = achievements[start : start + PAGE_SIZE]
+    if selected_id is None and page_rows:
+        selected_id = page_rows[0].get("id")
+    selected = next((a for a in achievements if a.get("id") == selected_id), None)
+
     blocks: list[dict] = []
     if notice:
-        blocks.append(
-            {
-                "type": "context",
-                "elements": [{"type": "mrkdwn", "text": notice}],
-            }
-        )
+        blocks.append(context(notice))
     blocks.append(
         {
             "type": "section",
             "text": {"type": "mrkdwn", "text": f"*Achievements* ({regional_schema})"},
         }
     )
-    if achievements:
-        # Slack caps: static_select ≤100 options; section mrkdwn ≈3000 chars.
-        page = achievements[:100]
-        lines = [_achievement_summary(a) for a in page[:40]]
-        summary = "\n".join(lines)
-        if len(summary) > 2900:
-            summary = summary[:2890] + "\n…"
-        if len(achievements) > len(page):
-            summary += f"\n_Showing {len(page)} of {len(achievements)} — open Edit to manage more._"
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": summary}})
-        blocks.append(
-            {
-                "type": "input",
-                "block_id": "achievement_pick",
-                "optional": True,
-                "label": {"type": "plain_text", "text": "Select achievement to edit or delete"},
-                "element": {
-                    "type": "static_select",
-                    "action_id": SELECT_ACHIEVEMENT_ACTION_ID,
-                    "placeholder": {"type": "plain_text", "text": "Choose…"},
-                    "options": [
-                        {
-                            "text": {"type": "plain_text", "text": f"{a['name']} ({a['code']})"[:75]},
-                            "value": str(a["id"]),
-                        }
-                        for a in page
-                    ],
-                },
-            }
-        )
+    if page_rows:
+        for row in page_rows:
+            blocks.append(
+                pencil_row(row.get("name") or row.get("code") or f"#{row.get('id')}", EDIT_ACHIEVEMENT_ACTION_ID, str(row["id"]))
+            )
+            blocks.append(context(achievement_subline(row)))
     else:
         blocks.append(
-            {"type": "section", "text": {"type": "mrkdwn", "text": "_No achievements defined yet._"}}
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "_No achievements defined yet._ Restore Defaults adds the builtin catalog."},
+            }
         )
-    blocks.extend(
-        [
+    nav = page_nav_elements(
+        page,
+        total,
+        ACHIEVEMENTS_PAGE_PREV_ACTION_ID,
+        ACHIEVEMENTS_PAGE_NEXT_ACTION_ID,
+        page_size=PAGE_SIZE,
+    )
+    if nav:
+        blocks.append({"type": "actions", "block_id": "achievements_nav", "elements": nav})
+    blocks.append(
+        {
+            "type": "actions",
+            "block_id": "achievements_add",
+            "elements": [
+                {
+                    "type": "button",
+                    "action_id": ADD_ACHIEVEMENT_ACTION_ID,
+                    "text": {"type": "plain_text", "text": "Add"},
+                    "style": "primary",
+                }
+            ],
+        }
+    )
+    blocks.append(
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "*Re-evaluate awards*"},
+        }
+    )
+    blocks.append(
+        context(
+            "Grants and revokes for the selected achievement in this date range "
+            "using current rules. No T-claps or PAX DMs — watch the log channel. "
+            "A channel summary posts only if something actually changed."
+        )
+    )
+    if achievements:
+        opts = [
+            {
+                "text": {"type": "plain_text", "text": (a.get("name") or a.get("code") or str(a["id"]))[:75]},
+                "value": str(a["id"]),
+            }
+            for a in achievements[:100]
+        ]
+        pick: dict = {
+            "type": "static_select",
+            "action_id": SELECT_ACHIEVEMENT_ACTION_ID,
+            "placeholder": {"type": "plain_text", "text": "Achievement"},
+            "options": opts,
+        }
+        if selected_id is not None:
+            initial = next((o for o in opts if o["value"] == str(selected_id)), None)
+            if initial:
+                pick["initial_option"] = initial
+        blocks.append({"type": "actions", "block_id": "reeval_pick", "elements": [pick]})
+        blocks.append(
             {
                 "type": "actions",
-                "block_id": "achievement_actions",
+                "block_id": "reeval_dates",
                 "elements": [
                     {
-                        "type": "button",
-                        "action_id": ADD_ACHIEVEMENT_ACTION_ID,
-                        "text": {"type": "plain_text", "text": "Add achievement"},
-                        "style": "primary",
+                        "type": "datepicker",
+                        "action_id": REEVAL_FROM_ACTION_ID,
+                        "initial_date": from_s,
+                        "placeholder": {"type": "plain_text", "text": "From"},
                     },
                     {
-                        "type": "button",
-                        "action_id": EDIT_ACHIEVEMENT_ACTION_ID,
-                        "text": {"type": "plain_text", "text": "Edit selected"},
-                    },
-                    {
-                        "type": "button",
-                        "action_id": DELETE_ACHIEVEMENT_ACTION_ID,
-                        "text": {"type": "plain_text", "text": "Delete selected"},
-                        "style": "danger",
-                        "confirm": _achievement_delete_confirm(),
-                    },
-                    {
-                        "type": "button",
-                        "action_id": BACKFILL_ACHIEVEMENT_ACTION_ID,
-                        "text": {"type": "plain_text", "text": "Backfill / re-run"},
+                        "type": "datepicker",
+                        "action_id": REEVAL_TO_ACTION_ID,
+                        "initial_date": to_s,
+                        "placeholder": {"type": "plain_text", "text": "Through"},
                     },
                 ],
             }
-        ]
+        )
+        label = (selected or {}).get("name") or (selected or {}).get("code") or "this achievement"
+        range_label = f"{from_s} to {to_s}"
+        blocks.append(
+            {
+                "type": "actions",
+                "block_id": "reeval_go",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": BACKFILL_ACHIEVEMENT_ACTION_ID,
+                        "text": {"type": "plain_text", "text": "Re-evaluate"},
+                        "value": str(selected_id or ""),
+                        "confirm": confirm_dialog(
+                            "Re-evaluate awards?",
+                            f"Re-evaluate *{label}* from {range_label} using current rules?",
+                            "Re-evaluate",
+                        ),
+                    }
+                ],
+            }
+        )
+    blocks.append(
+        _bulk_delete_restore(
+            DELETE_ALL_ACHIEVEMENTS_ACTION_ID,
+            RESTORE_ACHIEVEMENTS_ACTION_ID,
+            confirm_dialog(
+                "Delete all achievements?",
+                (
+                    "Deletes every achievement in this region, including every award "
+                    "of those codes. Custom achievements are not restored later. "
+                    "This cannot be undone."
+                ),
+                "Delete All",
+            ),
+            confirm_dialog(
+                "Restore defaults?",
+                "Adds any missing builtin achievement codes. Custom achievements are not removed or overwritten.",
+                "Restore",
+            ),
+        )
     )
     return {
         "type": "modal",
         "callback_id": ACHIEVEMENTS_LIST_CALLBACK_ID,
-        "private_metadata": _metadata(team_id, regional_schema),
+        "private_metadata": _metadata(
+            team_id,
+            regional_schema,
+            page=page,
+            selected_id=selected_id,
+            reeval_from=from_s,
+            reeval_to=to_s,
+        ),
         "title": {"type": "plain_text", "text": "Achievements"},
-        "submit": {"type": "plain_text", "text": "Done"},
         "close": {"type": "plain_text", "text": "Back"},
         "blocks": blocks,
     }
@@ -296,7 +387,7 @@ def _achievement_edit_modal(
 
     from achievements.activity import BUILTIN_ACTIVITY_TYPES, activity_list_from_rule
 
-    is_edit = row is not None
+    is_edit = bool(row and row.get("id"))
     src = dict(row or {})
     options = activity_options or list(BUILTIN_ACTIVITY_TYPES)
     activity_opts = _select_options(tuple(options))
@@ -374,7 +465,7 @@ def _achievement_edit_modal(
                 "element": {
                     "type": "plain_text_input",
                     "action_id": "val",
-                    "initial_value": "",
+                    "initial_value": src.get("code") or "",
                 },
             }
         )
@@ -539,10 +630,45 @@ def _achievement_edit_modal(
                 },
             }
         )
+    is_edit = bool(row and row.get("id"))
+    if is_edit:
+        aid = str(row["id"])
+        code = src.get("code") or aid
+        award_count = int(src.get("award_count") or 0)
+        blocks.append(
+            {
+                "type": "actions",
+                "block_id": "achievement_edit_extras",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": DUPLICATE_ACHIEVEMENT_ACTION_ID,
+                        "text": {"type": "plain_text", "text": "Duplicate"},
+                        "value": aid,
+                    },
+                    {
+                        "type": "button",
+                        "action_id": DELETE_ACHIEVEMENT_ACTION_ID,
+                        "text": {"type": "plain_text", "text": "Delete"},
+                        "style": "danger",
+                        "value": aid,
+                        "confirm": confirm_dialog(
+                            "Delete achievement?",
+                            (
+                                f"Deletes `{code}` and {award_count} award(s). "
+                                "This cannot be undone. Uncheck Enabled to keep history."
+                            ),
+                        ),
+                    },
+                ],
+            }
+        )
     return {
         "type": "modal",
         "callback_id": ACHIEVEMENT_EDIT_CALLBACK_ID,
-        "private_metadata": _metadata(team_id, regional_schema, src["id"] if is_edit else None),
+        "private_metadata": _metadata(
+            team_id, regional_schema, src["id"] if is_edit else None
+        ),
         "title": {"type": "plain_text", "text": "Edit achievement" if is_edit else "Add achievement"},
         "submit": {"type": "plain_text", "text": "Save"},
         "close": {"type": "plain_text", "text": "Cancel"},
@@ -719,12 +845,144 @@ def _load_activity_options(cur, schema: str) -> list[str]:
 
 
 def _selected_achievement_id(payload: dict) -> int | None:
+    action = (payload.get("actions") or [{}])[0]
+    aid = action.get("action_id")
+    if aid in {
+        EDIT_ACHIEVEMENT_ACTION_ID,
+        DELETE_ACHIEVEMENT_ACTION_ID,
+        DUPLICATE_ACHIEVEMENT_ACTION_ID,
+        BACKFILL_ACHIEVEMENT_ACTION_ID,
+    }:
+        raw = action.get("value")
+        try:
+            if raw not in (None, ""):
+                return int(raw)
+        except (TypeError, ValueError):
+            pass
+        sel = action.get("selected_option") or {}
+        try:
+            if sel.get("value"):
+                return int(sel["value"])
+        except (TypeError, ValueError):
+            pass
+    if aid == SELECT_ACHIEVEMENT_ACTION_ID:
+        sel = action.get("selected_option") or {}
+        try:
+            return int(sel["value"])
+        except (TypeError, ValueError, KeyError):
+            pass
+    meta = _parse_metadata((payload.get("view") or {}).get("private_metadata"))
+    for key in ("selected_id", "achievement_id"):
+        if meta.get(key) not in (None, ""):
+            try:
+                return int(meta[key])
+            except (TypeError, ValueError):
+                pass
     state = payload.get("view", {}).get("state", {}).get("values", {})
-    sel = state.get("achievement_pick", {}).get(SELECT_ACHIEVEMENT_ACTION_ID, {}).get("selected_option")
-    if not sel:
-        return None
+    for block in ("reeval_pick", "achievement_pick"):
+        sel = state.get(block, {}).get(SELECT_ACHIEVEMENT_ACTION_ID, {}).get("selected_option")
+        if sel:
+            try:
+                return int(sel["value"])
+            except (TypeError, ValueError, KeyError):
+                continue
+    return None
+
+
+def _reeval_dates_from_payload(payload: dict) -> tuple[str | None, str | None]:
+    meta = _parse_metadata((payload.get("view") or {}).get("private_metadata"))
+    from_s = meta.get("reeval_from")
+    to_s = meta.get("reeval_to")
+    action = (payload.get("actions") or [{}])[0]
+    aid = action.get("action_id")
+    picked = action.get("selected_date")
+    if aid == REEVAL_FROM_ACTION_ID and picked:
+        from_s = picked
+    if aid == REEVAL_TO_ACTION_ID and picked:
+        to_s = picked
+    state = payload.get("view", {}).get("state", {}).get("values", {})
+    dates = state.get("reeval_dates") or {}
+    if dates.get(REEVAL_FROM_ACTION_ID, {}).get("selected_date"):
+        from_s = dates[REEVAL_FROM_ACTION_ID]["selected_date"]
+    if dates.get(REEVAL_TO_ACTION_ID, {}).get("selected_date"):
+        to_s = dates[REEVAL_TO_ACTION_ID]["selected_date"]
+    return from_s, to_s
+
+
+def uniquify_achievement_code(cur, schema: str, base: str) -> str:
+    candidate = f"{base}_copy"
+    n = 2
+    while True:
+        cur.execute(
+            f"SELECT id FROM `{schema}`.`achievements_list` WHERE code=%s",
+            (candidate,),
+        )
+        if not cur.fetchone():
+            return candidate
+        candidate = f"{base}_copy_{n}"
+        n += 1
+
+
+def load_achievement_defaults() -> list[dict]:
+    path = Path(__file__).resolve().parent / "achievement_defaults.json"
+    with path.open(encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, list):
+        raise ValueError("achievement_defaults.json must be a list")
+    return data
+
+
+def restore_achievement_defaults(cur, schema: str) -> int:
+    added = 0
+    for seed in load_achievement_defaults():
+        cur.execute(
+            f"SELECT id FROM `{schema}`.`achievements_list` WHERE code=%s",
+            (seed["code"],),
+        )
+        if cur.fetchone():
+            continue
+        cur.execute(
+            f"""
+            INSERT INTO `{schema}`.`achievements_list`
+            (name, description, verb, code, metric, activity, period, threshold)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                seed["name"],
+                seed["description"],
+                seed["verb"],
+                seed["code"],
+                seed["metric"],
+                seed["activity"],
+                seed["period"],
+                seed["threshold"],
+            ),
+        )
+        added += 1
+    return added
+
+
+def delete_all_achievements(cur, schema: str) -> dict[str, int]:
+    cur.execute(f"DELETE FROM `{schema}`.`achievements_awarded`")
+    awards = int(cur.rowcount or 0)
+    cur.execute(f"DELETE FROM `{schema}`.`achievement_versions`")
+    cur.execute(f"DELETE FROM `{schema}`.`achievements_list`")
+    return {"awards": awards, "achievements": int(cur.rowcount or 0)}
+
+
+def count_achievement_awards(cur, schema: str, achievement_id: int) -> int:
+    cur.execute(
+        f"SELECT COUNT(*) AS c FROM `{schema}`.`achievements_awarded` WHERE achievement_id=%s",
+        (achievement_id,),
+    )
+    return int((cur.fetchone() or {}).get("c") or 0)
+
+
+def earliest_beatdown_date(cur, schema: str) -> str | None:
     try:
-        return int(sel["value"])
-    except (KeyError, TypeError, ValueError):
+        cur.execute(f"SELECT MIN(bd_date) AS d FROM `{schema}`.`beatdowns`")
+        d = (cur.fetchone() or {}).get("d")
+        return str(d)[:10] if d else None
+    except Exception:
         return None
 

@@ -20,11 +20,19 @@ from slack_sdk.errors import SlackApiError
 from config_paxminer import (
     ACHIEVEMENT_EDIT_CALLBACK_ID,
     ACHIEVEMENTS_LIST_CALLBACK_ID,
+    ACHIEVEMENTS_PAGE_NEXT_ACTION_ID,
+    ACHIEVEMENTS_PAGE_PREV_ACTION_ID,
     ADD_ACHIEVEMENT_ACTION_ID,
     BACKFILL_ACHIEVEMENT_ACTION_ID,
     CALLBACK_ID,
     DELETE_ACHIEVEMENT_ACTION_ID,
+    DELETE_ALL_ACHIEVEMENTS_ACTION_ID,
+    DUPLICATE_ACHIEVEMENT_ACTION_ID,
     EDIT_ACHIEVEMENT_ACTION_ID,
+    REEVAL_FROM_ACTION_ID,
+    REEVAL_TO_ACTION_ID,
+    RESTORE_ACHIEVEMENTS_ACTION_ID,
+    SELECT_ACHIEVEMENT_ACTION_ID,
     _achievement_edit_modal,
     _achievements_list_modal,
     _config_modal,
@@ -34,10 +42,16 @@ from config_paxminer import (
     _parse_achievement_form,
     _parse_metadata,
     _parse_modal_values,
+    _reeval_dates_from_payload,
     _region_for_team,
     _registry_db,
     _selected_achievement_id,
     _validate_achievement,
+    count_achievement_awards,
+    delete_all_achievements,
+    earliest_beatdown_date,
+    restore_achievement_defaults,
+    uniquify_achievement_code,
 )
 from paxminer_db import connect_from_env, paxminer_schema_from_env
 from slack_http import is_http_request, is_slack_admin, notify_admin_required
@@ -234,18 +248,65 @@ def handle_add_achievement(ack, body, client, logger):
 app.action(ADD_ACHIEVEMENT_ACTION_ID)(handle_add_achievement)
 
 
-def _refresh_achievements_list(client, body, team_id, regional_schema, notice: str) -> None:
+def _refresh_achievements_list(
+    client,
+    body,
+    team_id,
+    regional_schema,
+    notice: str | None = None,
+    *,
+    page=None,
+    selected_id=None,
+    reeval_from=None,
+    reeval_to=None,
+) -> None:
     """Re-render the list modal with an inline notice (modal actions have no response_url)."""
+    meta = _parse_metadata((body.get("view") or {}).get("private_metadata"))
+    if page is None:
+        try:
+            page = int(meta.get("page") or 0)
+        except (TypeError, ValueError):
+            page = 0
+    if selected_id is None and meta.get("selected_id") not in (None, ""):
+        try:
+            selected_id = int(meta["selected_id"])
+        except (TypeError, ValueError):
+            selected_id = None
+    reeval_from = reeval_from or meta.get("reeval_from")
+    reeval_to = reeval_to or meta.get("reeval_to")
     conn = connect_from_env(_registry_db())
     try:
         with conn.cursor() as cur:
             achievements = _load_achievements(cur, regional_schema)
+            if not reeval_from:
+                chosen = next((a for a in achievements if a.get("id") == selected_id), None)
+                reeval_from = _iso_date((chosen or {}).get("effective_from")) or earliest_beatdown_date(
+                    cur, regional_schema
+                )
         client.views_update(
             view_id=body["view"]["id"],
-            view=_achievements_list_modal(team_id, regional_schema, achievements, notice=notice),
+            view=_achievements_list_modal(
+                team_id,
+                regional_schema,
+                achievements,
+                notice=notice,
+                page=page,
+                selected_id=selected_id,
+                reeval_from=reeval_from,
+                reeval_to=reeval_to,
+            ),
         )
     finally:
         conn.close()
+
+
+def _iso_date(value) -> str | None:
+    if value is None or value == "":
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()[:10]
+    text = str(value).strip()
+    return text[:10] if text else None
 
 
 def handle_edit_achievement(ack, body, client, logger):
@@ -268,6 +329,10 @@ def handle_edit_achievement(ack, body, client, logger):
         with conn.cursor() as cur:
             row = _load_achievement(cur, regional_schema, selected_id)
             options = _load_activity_options(cur, regional_schema)
+            if row:
+                row["award_count"] = count_achievement_awards(
+                    cur, regional_schema, selected_id
+                )
         if not row:
             _refresh_achievements_list(
                 client, body, team_id, regional_schema, "Achievement not found."
@@ -362,9 +427,10 @@ def handle_backfill_achievement(ack, body, client, logger):
     selected_id = _selected_achievement_id(body)
     if not selected_id:
         _refresh_achievements_list(
-            client, body, team_id, regional_schema, "Select an achievement to backfill."
+            client, body, team_id, regional_schema, "Select an achievement to re-evaluate."
         )
         return
+    start, end = _reeval_dates_from_payload(body)
     from slack_schedule import queue_achievement_backfill
 
     try:
@@ -372,18 +438,207 @@ def handle_backfill_achievement(ack, body, client, logger):
             schema=regional_schema,
             achievement_id=selected_id,
             actor=user_id,
+            start=start,
+            end=end,
         )
+        range_s = f"{start or '…'} to {end or '…'}"
         _refresh_achievements_list(
-            client, body, team_id, regional_schema, "Backfill queued. Watch #paxminer_logs."
+            client,
+            body,
+            team_id,
+            regional_schema,
+            f"Re-evaluate queued for {range_s}. Watch the log channel.",
+            selected_id=selected_id,
+            reeval_from=start,
+            reeval_to=end,
         )
     except Exception:
         logger.exception("queue achievement backfill failed")
         _refresh_achievements_list(
-            client, body, team_id, regional_schema, "Could not queue backfill."
+            client, body, team_id, regional_schema, "Could not queue re-evaluate."
         )
 
 
 app.action(BACKFILL_ACHIEVEMENT_ACTION_ID)(handle_backfill_achievement)
+
+
+def handle_duplicate_achievement(ack, body, client, logger):
+    user_id = (body.get("user") or {}).get("id", "")
+    ack()
+    if not is_slack_admin(user_id, client=client):
+        notify_admin_required(client, body)
+        return
+    team_id, regional_schema, region = _region_context_from_body(body)
+    if not region or not regional_schema:
+        return
+    selected_id = _selected_achievement_id(body)
+    if not selected_id:
+        _refresh_achievements_list(
+            client, body, team_id, regional_schema, "Open an achievement with the pencil first."
+        )
+        return
+    from config_schedule import duplicate_name
+
+    conn = connect_from_env(_registry_db())
+    try:
+        with conn.cursor() as cur:
+            row = _load_achievement(cur, regional_schema, selected_id)
+            options = _load_activity_options(cur, regional_schema)
+            if not row:
+                _refresh_achievements_list(
+                    client, body, team_id, regional_schema, "Achievement not found."
+                )
+                return
+            draft = dict(row)
+            draft.pop("id", None)
+            draft["code"] = uniquify_achievement_code(
+                cur, regional_schema, row.get("code") or "achievement"
+            )
+            draft["name"] = duplicate_name(row.get("name"), row.get("code"))
+        client.views_update(
+            view_id=body["view"]["id"],
+            view=_achievement_edit_modal(
+                team_id, regional_schema, draft, activity_options=options
+            ),
+        )
+    finally:
+        conn.close()
+
+
+app.action(DUPLICATE_ACHIEVEMENT_ACTION_ID)(handle_duplicate_achievement)
+
+
+def handle_delete_all_achievements(ack, body, client, logger):
+    user_id = (body.get("user") or {}).get("id", "")
+    ack()
+    if not is_slack_admin(user_id, client=client):
+        notify_admin_required(client, body)
+        return
+    team_id, regional_schema, region = _region_context_from_body(body)
+    if not region or not regional_schema:
+        return
+    conn = connect_from_env(_registry_db())
+    try:
+        with conn.cursor() as cur:
+            counts = delete_all_achievements(cur, regional_schema)
+            conn.commit()
+        _refresh_achievements_list(
+            client,
+            body,
+            team_id,
+            regional_schema,
+            (
+                f"Deleted {counts['achievements']} achievement(s) and "
+                f"{counts['awards']} award(s)."
+            ),
+            page=0,
+        )
+    except Exception:
+        logger.exception("delete all achievements failed")
+        _refresh_achievements_list(
+            client, body, team_id, regional_schema, "Could not delete all achievements."
+        )
+    finally:
+        conn.close()
+
+
+app.action(DELETE_ALL_ACHIEVEMENTS_ACTION_ID)(handle_delete_all_achievements)
+
+
+def handle_restore_achievements(ack, body, client, logger):
+    user_id = (body.get("user") or {}).get("id", "")
+    ack()
+    if not is_slack_admin(user_id, client=client):
+        notify_admin_required(client, body)
+        return
+    team_id, regional_schema, region = _region_context_from_body(body)
+    if not region or not regional_schema:
+        return
+    conn = connect_from_env(_registry_db())
+    try:
+        with conn.cursor() as cur:
+            added = restore_achievement_defaults(cur, regional_schema)
+            conn.commit()
+        _refresh_achievements_list(
+            client,
+            body,
+            team_id,
+            regional_schema,
+            f"Restored defaults ({added} missing builtin(s) added).",
+            page=0,
+        )
+    except Exception:
+        logger.exception("restore achievement defaults failed")
+        _refresh_achievements_list(
+            client, body, team_id, regional_schema, "Could not restore achievement defaults."
+        )
+    finally:
+        conn.close()
+
+
+app.action(RESTORE_ACHIEVEMENTS_ACTION_ID)(handle_restore_achievements)
+
+
+def handle_achievements_page(ack, body, client, logger):
+    user_id = (body.get("user") or {}).get("id", "")
+    ack()
+    if not is_slack_admin(user_id, client=client):
+        notify_admin_required(client, body)
+        return
+    team_id, regional_schema, region = _region_context_from_body(body)
+    if not region or not regional_schema:
+        return
+    action = (body.get("actions") or [{}])[0]
+    try:
+        page = int(action.get("value") or 0)
+    except ValueError:
+        page = 0
+    _refresh_achievements_list(
+        client, body, team_id, regional_schema, page=page
+    )
+
+
+app.action(ACHIEVEMENTS_PAGE_PREV_ACTION_ID)(handle_achievements_page)
+app.action(ACHIEVEMENTS_PAGE_NEXT_ACTION_ID)(handle_achievements_page)
+
+
+def handle_reeval_controls(ack, body, client, logger):
+    user_id = (body.get("user") or {}).get("id", "")
+    ack()
+    if not is_slack_admin(user_id, client=client):
+        notify_admin_required(client, body)
+        return
+    team_id, regional_schema, region = _region_context_from_body(body)
+    if not region or not regional_schema:
+        return
+    action = (body.get("actions") or [{}])[0]
+    aid = action.get("action_id")
+    selected_id = _selected_achievement_id(body)
+    start, end = _reeval_dates_from_payload(body)
+    if aid == SELECT_ACHIEVEMENT_ACTION_ID:
+        conn = connect_from_env(_registry_db())
+        try:
+            with conn.cursor() as cur:
+                row = _load_achievement(cur, regional_schema, selected_id) if selected_id else None
+                start = _iso_date((row or {}).get("effective_from")) or earliest_beatdown_date(
+                    cur, regional_schema
+                )
+        finally:
+            conn.close()
+    _refresh_achievements_list(
+        client,
+        body,
+        team_id,
+        regional_schema,
+        selected_id=selected_id,
+        reeval_from=start,
+        reeval_to=end,
+    )
+
+
+app.action(SELECT_ACHIEVEMENT_ACTION_ID)(handle_reeval_controls)
+app.action(REEVAL_FROM_ACTION_ID)(handle_reeval_controls)
+app.action(REEVAL_TO_ACTION_ID)(handle_reeval_controls)
 
 
 def handle_achievements_list_submit(ack, body, client, logger):
