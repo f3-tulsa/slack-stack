@@ -464,14 +464,14 @@ def is_calendar_month(start: date, end: date) -> bool:
 
 
 def format_window_label(start: date, end: date) -> str:
-    """Human label for chart titles: 'July 2026' or 'Jun 01 - Jul 27, 2026'."""
+    """Human label for chart titles: 'July 2026' or 'Jun 01 to Jul 27, 2026'."""
     if is_calendar_month(start, end):
         return start.strftime("%B %Y")
     if start == end:
         return start.strftime("%b %d, %Y")
     if start.year == end.year:
-        return f"{start.strftime('%b %d')} - {end.strftime('%b %d, %Y')}"
-    return f"{start.strftime('%b %d, %Y')} - {end.strftime('%b %d, %Y')}"
+        return f"{start.strftime('%b %d')} to {end.strftime('%b %d, %Y')}"
+    return f"{start.strftime('%b %d, %Y')} to {end.strftime('%b %d, %Y')}"
 
 
 def window_file_tag(start: date, end: date) -> str:
