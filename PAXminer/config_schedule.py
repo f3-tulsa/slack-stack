@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date, datetime
 from typing import Any
 
+from slack_blocks import confirm_dialog, context, page_nav_elements, pencil_row
 from scheduling import (
     ALLOWED_SOURCES,
     DESTINATION_TYPES,
@@ -54,8 +56,15 @@ DUPLICATE_REPORT_ACTION_ID = "paxminer_report_duplicate"
 SELECT_REPORT_ACTION_ID = "paxminer_report_select"
 REPORT_WINDOW_ACTION_ID = "paxminer_report_window"
 LOAD_DEFAULTS_ACTION_ID = "paxminer_load_defaults"
+DUPLICATE_SCHEDULE_ACTION_ID = "paxminer_schedule_duplicate"
+DELETE_ALL_REPORTS_ACTION_ID = "paxminer_reports_delete_all"
+RESTORE_REPORTS_ACTION_ID = "paxminer_reports_restore_defaults"
+SCHEDULE_PAGE_PREV_ACTION_ID = "paxminer_schedule_page_prev"
+SCHEDULE_PAGE_NEXT_ACTION_ID = "paxminer_schedule_page_next"
+REPORTS_PAGE_PREV_ACTION_ID = "paxminer_reports_page_prev"
+REPORTS_PAGE_NEXT_ACTION_ID = "paxminer_reports_page_next"
 
-PAGE_SIZE = 8
+PAGE_SIZE = 15
 
 # report_type values rendered by dedicated Python (not the custom builder).
 CODE_RENDERED_REPORT_TYPES = frozenset(
@@ -207,6 +216,190 @@ def load_definition(cur, pm_schema: str, definition_id: int) -> dict | None:
     return cur.fetchone()
 
 
+def action_row_id(payload: dict) -> int | None:
+    """Integer `value` on the clicked button (pencil / edit-screen actions)."""
+    action = (payload.get("actions") or [{}])[0]
+    raw = action.get("value")
+    try:
+        return int(raw) if raw not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+_WINDOW_LABELS = {
+    "last_month": "Last month",
+    "ytd": "YTD",
+    "custom": "Custom",
+}
+
+_FREQ_LABELS = {
+    "hourly": "Hourly",
+    "daily": "Daily",
+    "weekly": "Weekly",
+    "monthly": "Monthly",
+    "custom": "Custom",
+}
+
+_METRIC_HINTS = {
+    "posts": "posts",
+    "qs": "Qs",
+    "distinct_aos": "AOs",
+    "posts_at_single_ao": "posts at one AO",
+}
+
+
+def _iso_date(value) -> str | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value).strip()
+    return text[:10] if text else None
+
+
+def _last_run_phrase(row: dict) -> str:
+    status = (row.get("last_run_status") or "").strip().lower()
+    on = _iso_date(row.get("last_run_on"))
+    if not status and not on:
+        return "Last run: never"
+    label = status or "unknown"
+    if on:
+        return f"Last run: {label} ({on})"
+    return f"Last run: {label}"
+
+
+def _freq_phrase(row: dict) -> str:
+    freq = row.get("frequency_type") or "monthly"
+    tod = parse_time_of_day(row.get("time_of_day"))
+    if freq == "hourly":
+        return f"Hourly @ :{tod.minute:02d}"
+    label = _FREQ_LABELS.get(freq, str(freq).title())
+    return f"{label} @ {tod.strftime('%H:%M')}"
+
+
+def schedule_subline(row: dict) -> str:
+    enabled = "Enabled" if row.get("enabled") else "Disabled"
+    dest = destination_label(row.get("destination_type"))
+    return f"{enabled} | {dest} | {_freq_phrase(row)} | {_last_run_phrase(row)}"
+
+
+def report_window_phrase(row: dict) -> str | None:
+    if not supports_time_window(row.get("report_type")):
+        return None
+    wtype = row.get("time_window_type") or "last_month"
+    if wtype == "relative_days":
+        return f"Last {row.get('window_days') or 30} days"
+    if wtype == "custom":
+        start = _iso_date(row.get("window_start"))
+        end = _iso_date(row.get("window_end"))
+        if start and end:
+            return f"{start} to {end}"
+        return "Custom"
+    return _WINDOW_LABELS.get(wtype, str(wtype).replace("_", " ").title())
+
+
+def report_subline(row: dict) -> str:
+    kind = "Builtin" if row.get("is_builtin") else "Custom"
+    window = report_window_phrase(row)
+    return f"{kind} | {window}" if window else kind
+
+
+def duplicate_report_draft(cur, pm_schema: str, regional_schema: str, row: dict) -> dict:
+    """Prefill Add-report without inserting. Code/name get a `_copy` suffix."""
+    from schedule_schema import uniquify_definition_code
+
+    fields = row.get("fields")
+    if isinstance(fields, str):
+        try:
+            fields = json.loads(fields)
+        except json.JSONDecodeError:
+            fields = []
+    return {
+        "name": duplicate_name(row.get("name"), row.get("code")),
+        "code": uniquify_definition_code(
+            cur, pm_schema, regional_schema, row.get("code") or "report"
+        ),
+        "kind": row.get("kind") or "table",
+        "source": row.get("source") or "bd_attendance",
+        "fields": fields or [],
+        "metric": row.get("metric") or "posts",
+        "group_by": row.get("group_by") or "PAX",
+        "top_n": str(row.get("top_n") or 20),
+        "time_window_type": row.get("time_window_type") or "last_month",
+        "window_days": str(row.get("window_days") or 30),
+        "window_start": str(row.get("window_start") or ""),
+        "window_end": str(row.get("window_end") or ""),
+        "report_type": row.get("report_type") or "custom_report",
+        "is_builtin": 0,
+    }
+
+
+def schedule_as_new_draft(schedule: dict) -> dict:
+    """Prefill Add-schedule from an existing row (no id, no `_copy` suffix)."""
+    return {
+        "report_definition_id": str(schedule.get("report_definition_id") or ""),
+        "destination_type": schedule.get("destination_type") or "specific_channels",
+        "destination_channels": _json_list(schedule.get("destination_channels")),
+        "destination_users": _json_list(schedule.get("destination_users")),
+        "frequency_type": schedule.get("frequency_type") or "monthly",
+        "day_of_week": str(
+            schedule.get("day_of_week") if schedule.get("day_of_week") is not None else "6"
+        ),
+        "month_day_mode": schedule.get("month_day_mode") or "first",
+        "day_of_month": str(schedule.get("day_of_month") or 1),
+        "time_of_day": parse_time_of_day(schedule.get("time_of_day")).strftime("%H:%M"),
+        "interval_days": str(
+            (_json_obj(schedule.get("custom_spec")) or {}).get("interval_days") or 7
+        ),
+        "enabled": bool(schedule.get("enabled", 1)),
+    }
+
+
+def achievement_rule_hint(row: dict) -> str:
+    period = str(row.get("period") or "year").title()
+    metric = _METRIC_HINTS.get(row.get("metric") or "posts", row.get("metric") or "posts")
+    return f"{period} - {row.get('threshold') or 1} {metric}"
+
+
+def achievement_subline(row: dict) -> str:
+    enabled = "Enabled" if int(row.get("enabled") or 1) else "Disabled"
+    return f"{enabled} | {achievement_rule_hint(row)}"
+
+
+def duplicate_name(name: str | None, code: str | None) -> str:
+    base = (name or code or "copy").rstrip()
+    return f"{base}_copy"
+
+
+def _bulk_delete_restore(
+    delete_id: str,
+    restore_id: str,
+    delete_confirm: dict,
+    restore_confirm: dict,
+) -> dict:
+    return {
+        "type": "actions",
+        "block_id": "bulk_actions",
+        "elements": [
+            {
+                "type": "button",
+                "action_id": delete_id,
+                "text": {"type": "plain_text", "text": "Delete All"},
+                "style": "danger",
+                "confirm": delete_confirm,
+            },
+            {
+                "type": "button",
+                "action_id": restore_id,
+                "text": {"type": "plain_text", "text": "Restore Defaults"},
+                "confirm": restore_confirm,
+            },
+        ],
+    }
+
+
 def _schedules_list_modal(
     team_id: str,
     regional_schema: str,
@@ -217,11 +410,10 @@ def _schedules_list_modal(
     notice: str | None = None,
     selected_schedule_id: int | None = None,
 ) -> dict:
+    del selected_schedule_id  # pencil rows replace the old dropdown
     blocks: list[dict] = []
     if notice:
-        blocks.append(
-            {"type": "context", "elements": [{"type": "mrkdwn", "text": notice}]}
-        )
+        blocks.append(context(notice))
     blocks.append(
         {
             "type": "section",
@@ -229,191 +421,81 @@ def _schedules_list_modal(
                 "type": "mrkdwn",
                 "text": (
                     f"*Schedule* ({regional_schema})\n"
-                    f"Times are *{timezone_name}* (region TZ).\n"
-                    "_Default items are enabled. Set a channel/destination for "
-                    "specific-channel reports, and disable any you do not want "
-                    "(especially PAX chart DMs and all-AO fan-out)._"
+                    f"Times are *{timezone_name}* (region TZ). "
+                    "Pencil opens Edit. Disable items you do not want "
+                    "(especially PAX chart DMs and all-AO fan-out)."
                 ),
             },
         }
     )
+    total = len(schedules)
+    max_page = max(0, (total - 1) // PAGE_SIZE) if total else 0
+    page = min(max(page, 0), max_page)
     start = page * PAGE_SIZE
     page_rows = schedules[start : start + PAGE_SIZE]
     if page_rows:
-        lines = [
-            format_schedule_summary(
-                s, {"name": s.get("definition_name"), "id": s.get("id")}
-            )
-            for s in page_rows
-        ]
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}})
-        options = [
-            _opt(
-                str(s["id"]),
-                f"{s.get('definition_name') or s['id']} ({'on' if s.get('enabled') else 'off'})",
-            )
-            for s in page_rows
-        ]
-        pick_element: dict = {
-            "type": "static_select",
-            "action_id": SELECT_SCHEDULE_ACTION_ID,
-            "placeholder": {"type": "plain_text", "text": "Choose…"},
-            "options": options,
-        }
-        if selected_schedule_id is not None:
-            initial = _find_option(options, str(selected_schedule_id))
-            if initial:
-                pick_element["initial_option"] = initial
-        blocks.append(
-            {
-                "type": "input",
-                "block_id": "schedule_pick",
-                "optional": True,
-                "label": {"type": "plain_text", "text": "Select schedule item"},
-                "element": pick_element,
-            }
-        )
+        for row in page_rows:
+            name = row.get("definition_name") or f"Schedule #{row.get('id')}"
+            blocks.append(pencil_row(name, EDIT_SCHEDULE_ACTION_ID, str(row["id"])))
+            blocks.append(context(schedule_subline(row)))
     else:
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": (
-                        "_No scheduled items yet._ Use *Load defaults* to add the "
-                        "builtin reports and schedules from `report_defaults.json`."
-                    ),
+                    "text": "_No scheduled items yet._ Restore Defaults adds the builtin set.",
                 },
             }
         )
-        blocks.append(
-            {
-                "type": "actions",
-                "block_id": "schedule_load_defaults",
-                "elements": [
-                    {
-                        "type": "button",
-                        "action_id": LOAD_DEFAULTS_ACTION_ID,
-                        "text": {"type": "plain_text", "text": "Load defaults"},
-                        "style": "primary",
-                    }
-                ],
-            }
-        )
-
-    nav: list[dict] = []
-    if page > 0:
-        nav.append(
-            {
-                "type": "button",
-                "action_id": "paxminer_schedule_page_prev",
-                "text": {"type": "plain_text", "text": "← Prev"},
-                "value": str(page - 1),
-            }
-        )
-    if start + PAGE_SIZE < len(schedules):
-        nav.append(
-            {
-                "type": "button",
-                "action_id": "paxminer_schedule_page_next",
-                "text": {"type": "plain_text", "text": "Next →"},
-                "value": str(page + 1),
-            }
-        )
+    nav = page_nav_elements(
+        page,
+        total,
+        SCHEDULE_PAGE_PREV_ACTION_ID,
+        SCHEDULE_PAGE_NEXT_ACTION_ID,
+        page_size=PAGE_SIZE,
+    )
     if nav:
         blocks.append({"type": "actions", "block_id": "schedule_nav", "elements": nav})
-
     blocks.append(
         {
             "type": "actions",
-            "block_id": "schedule_actions",
+            "block_id": "schedule_add",
             "elements": [
                 {
                     "type": "button",
                     "action_id": ADD_SCHEDULE_ACTION_ID,
-                    "text": {"type": "plain_text", "text": "Add item"},
+                    "text": {"type": "plain_text", "text": "Add"},
                     "style": "primary",
-                },
-                {
-                    "type": "button",
-                    "action_id": EDIT_SCHEDULE_ACTION_ID,
-                    "text": {"type": "plain_text", "text": "Edit selected"},
-                },
-                {
-                    "type": "button",
-                    "action_id": TOGGLE_SCHEDULE_ACTION_ID,
-                    "text": {"type": "plain_text", "text": "Enable/Disable"},
-                },
-                {
-                    "type": "button",
-                    "action_id": RUN_NOW_SCHEDULE_ACTION_ID,
-                    "text": {"type": "plain_text", "text": "Run Now"},
-                },
-                {
-                    "type": "button",
-                    "action_id": DELETE_SCHEDULE_ACTION_ID,
-                    "text": {"type": "plain_text", "text": "Delete selected"},
-                    "style": "danger",
-                    "confirm": {
-                        "title": {"type": "plain_text", "text": "Delete schedule?"},
-                        "text": {"type": "mrkdwn", "text": "Remove this scheduled item?"},
-                        "confirm": {"type": "plain_text", "text": "Delete"},
-                        "deny": {"type": "plain_text", "text": "Cancel"},
-                    },
-                },
+                }
             ],
         }
     )
     blocks.append(
-        {
-            "type": "actions",
-            "block_id": "schedule_bulk",
-            "elements": [
-                {
-                    "type": "button",
-                    "action_id": DELETE_ALL_SCHEDULES_ACTION_ID,
-                    "text": {"type": "plain_text", "text": "Delete All"},
-                    "style": "danger",
-                    "confirm": {
-                        "title": {"type": "plain_text", "text": "Delete all schedules?"},
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": "Removes every schedule line item for this region. Report definitions are kept.",
-                        },
-                        "confirm": {"type": "plain_text", "text": "Delete All"},
-                        "deny": {"type": "plain_text", "text": "Cancel"},
-                    },
-                },
-                {
-                    "type": "button",
-                    "action_id": RESTORE_DEFAULTS_ACTION_ID,
-                    "text": {"type": "plain_text", "text": "Restore Defaults"},
-                    "confirm": {
-                        "title": {"type": "plain_text", "text": "Restore defaults?"},
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": (
-                                "Adds any missing builtin schedule rows (enabled). "
-                                "Existing schedules are not deleted. Builtin reports "
-                                "you have edited (`is_customized`) keep their edits; "
-                                "missing builtins are re-added from defaults. Then set "
-                                "channels for specific-channel reports and disable any "
-                                "you do not want."
-                            ),
-                        },
-                        "confirm": {"type": "plain_text", "text": "Restore"},
-                        "deny": {"type": "plain_text", "text": "Cancel"},
-                    },
-                },
-            ],
-        }
+        _bulk_delete_restore(
+            DELETE_ALL_SCHEDULES_ACTION_ID,
+            RESTORE_DEFAULTS_ACTION_ID,
+            confirm_dialog(
+                "Delete all schedules?",
+                "Removes every schedule line for this region. Report definitions are kept.",
+                "Delete All",
+            ),
+            confirm_dialog(
+                "Restore defaults?",
+                (
+                    "Adds any missing builtin schedule rows (enabled). "
+                    "Existing schedules are not deleted. Customized builtin reports keep "
+                    "their edits; missing builtins are re-added."
+                ),
+                "Restore",
+            ),
+        )
     )
     return {
         "type": "modal",
         "callback_id": SCHEDULE_LIST_CALLBACK_ID,
         "private_metadata": _metadata(team_id, regional_schema, page=page),
         "title": {"type": "plain_text", "text": "Schedule"},
-        "submit": {"type": "plain_text", "text": "Done"},
         "close": {"type": "plain_text", "text": "Back"},
         "blocks": blocks,
     }
@@ -663,30 +745,75 @@ def _schedule_edit_modal(
             },
         }
     )
-    enabled_opts = [_opt("1", "Enabled"), _opt("0", "Disabled")]
-    en = "1" if draft.get("enabled") not in (False, 0, "0", "false", "False") else "0"
+    enabled_opt = {
+        "text": {"type": "plain_text", "text": "Run this schedule"},
+        "value": "1",
+    }
+    enabled_el: dict[str, Any] = {
+        "type": "checkboxes",
+        "action_id": "val",
+        "options": [enabled_opt],
+    }
+    if draft.get("enabled") not in (False, 0, "0", "false", "False"):
+        enabled_el["initial_options"] = [enabled_opt]
     blocks.append(
         {
             "type": "input",
             "block_id": "enabled",
+            "optional": True,
             "label": {"type": "plain_text", "text": "Enabled"},
-            "element": {
-                "type": "static_select",
-                "action_id": "val",
-                "options": enabled_opts,
-                **_with_initial(enabled_opts, en),
-            },
+            "element": enabled_el,
         }
     )
 
-    schedule_id = schedule["id"] if schedule else None
+    schedule_id = (schedule or {}).get("id")
+    is_edit = bool(schedule_id)
+    if is_edit:
+        sid = str(schedule_id)
+        name = (
+            (schedule or {}).get("definition_name")
+            or draft.get("definition_name")
+            or f"#{sid}"
+        )
+        blocks.append(
+            {
+                "type": "actions",
+                "block_id": "schedule_edit_extras",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": DUPLICATE_SCHEDULE_ACTION_ID,
+                        "text": {"type": "plain_text", "text": "Duplicate"},
+                        "value": sid,
+                    },
+                    {
+                        "type": "button",
+                        "action_id": RUN_NOW_SCHEDULE_ACTION_ID,
+                        "text": {"type": "plain_text", "text": "Run Now"},
+                        "value": sid,
+                    },
+                    {
+                        "type": "button",
+                        "action_id": DELETE_SCHEDULE_ACTION_ID,
+                        "text": {"type": "plain_text", "text": "Delete"},
+                        "style": "danger",
+                        "value": sid,
+                        "confirm": confirm_dialog(
+                            "Delete schedule?",
+                            f"Remove the schedule for *{name}*?",
+                        ),
+                    },
+                ],
+            }
+        )
+
     return {
         "type": "modal",
         "callback_id": SCHEDULE_EDIT_CALLBACK_ID,
         "private_metadata": _metadata(
             team_id, regional_schema, schedule_id=schedule_id, draft=draft
         ),
-        "title": {"type": "plain_text", "text": "Edit schedule" if schedule else "Add schedule"},
+        "title": {"type": "plain_text", "text": "Edit schedule" if is_edit else "Add schedule"},
         "submit": {"type": "plain_text", "text": "Save"},
         "close": {"type": "plain_text", "text": "Cancel"},
         "blocks": blocks,
@@ -726,9 +853,8 @@ def draft_from_schedule_state(state: dict, meta_draft: dict | None = None) -> di
     tod = _state_selected(state, "time_of_day")
     if tod:
         draft["time_of_day"] = tod
-    en = _state_selected(state, "enabled")
-    if en != "":
-        draft["enabled"] = en == "1"
+    if "enabled" in state:
+        draft["enabled"] = "1" in _state_checkboxes(state, "enabled", "val")
 
     # Drop stale keys for fields hidden by the current frequency / destination.
     dest_type = draft.get("destination_type") or "specific_channels"
@@ -818,10 +944,11 @@ def _reports_list_modal(
     regional_schema: str,
     definitions: list[dict],
     notice: str | None = None,
+    page: int = 0,
 ) -> dict:
     blocks: list[dict] = []
     if notice:
-        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": notice}]})
+        blocks.append(context(notice))
     blocks.append(
         {
             "type": "section",
@@ -829,120 +956,84 @@ def _reports_list_modal(
                 "type": "mrkdwn",
                 "text": (
                     f"*PAX Reports* ({regional_schema})\n"
-                    "Builtin reports render from code — you can rename, re-window, "
-                    "schedule, duplicate, and delete them. Custom reports are fully "
+                    "Builtin reports render from code — rename, re-window, "
+                    "schedule, duplicate, or delete them. Custom reports are fully "
                     "builder-editable."
                 ),
             },
         }
     )
-    lines = []
-    for d in definitions:
-        if d.get("is_builtin"):
-            customized = " · edited" if d.get("is_customized") else ""
-            window = d.get("time_window_type") or "—"
-            lines.append(
-                f"• *{d['name']}* (`{d['code']}`) — builtin / {d['report_type']}"
-                f" / window={window}{customized}"
+    total = len(definitions)
+    max_page = max(0, (total - 1) // PAGE_SIZE) if total else 0
+    page = min(max(page, 0), max_page)
+    start = page * PAGE_SIZE
+    page_rows = definitions[start : start + PAGE_SIZE]
+    if page_rows:
+        for row in page_rows:
+            blocks.append(
+                pencil_row(row.get("name") or row.get("code") or f"#{row.get('id')}", EDIT_REPORT_ACTION_ID, str(row["id"]))
             )
-        else:
-            lines.append(
-                f"• *{d['name']}* (`{d['code']}`) — {d.get('kind') or 'custom'} / "
-                f"{d.get('source') or d.get('report_type') or '-'}"
-            )
-    if lines:
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines[:40])}})
+            blocks.append(context(report_subline(row)))
     else:
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": (
-                        "_No reports yet._ Use *Load defaults* to add the builtin "
-                        "reports and schedules from `report_defaults.json`."
-                    ),
+                    "text": "_No reports yet._ Restore Defaults adds the builtin reports and schedules.",
                 },
             }
         )
-        blocks.append(
-            {
-                "type": "actions",
-                "block_id": "reports_load_defaults",
-                "elements": [
-                    {
-                        "type": "button",
-                        "action_id": LOAD_DEFAULTS_ACTION_ID,
-                        "text": {"type": "plain_text", "text": "Load defaults"},
-                        "style": "primary",
-                    }
-                ],
-            }
-        )
-
-    if definitions:
-        blocks.append(
-            {
-                "type": "input",
-                "block_id": "report_pick",
-                "optional": True,
-                "label": {"type": "plain_text", "text": "Select report"},
-                "element": {
-                    "type": "static_select",
-                    "action_id": SELECT_REPORT_ACTION_ID,
-                    "options": [
-                        _opt(str(d["id"]), f"{d['name']} ({d['code']})") for d in definitions
-                    ],
-                },
-            }
-        )
+    nav = page_nav_elements(
+        page,
+        total,
+        REPORTS_PAGE_PREV_ACTION_ID,
+        REPORTS_PAGE_NEXT_ACTION_ID,
+        page_size=PAGE_SIZE,
+    )
+    if nav:
+        blocks.append({"type": "actions", "block_id": "reports_nav", "elements": nav})
     blocks.append(
         {
             "type": "actions",
+            "block_id": "reports_add",
             "elements": [
                 {
                     "type": "button",
                     "action_id": ADD_REPORT_ACTION_ID,
-                    "text": {"type": "plain_text", "text": "Add custom report"},
+                    "text": {"type": "plain_text", "text": "Add"},
                     "style": "primary",
-                },
-                {
-                    "type": "button",
-                    "action_id": EDIT_REPORT_ACTION_ID,
-                    "text": {"type": "plain_text", "text": "Edit selected"},
-                },
-                {
-                    "type": "button",
-                    "action_id": DUPLICATE_REPORT_ACTION_ID,
-                    "text": {"type": "plain_text", "text": "Duplicate selected"},
-                },
-                {
-                    "type": "button",
-                    "action_id": DELETE_REPORT_ACTION_ID,
-                    "text": {"type": "plain_text", "text": "Delete selected"},
-                    "style": "danger",
-                    "confirm": {
-                        "title": {"type": "plain_text", "text": "Delete report?"},
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": (
-                                "Deletes this report and any schedules that reference it. "
-                                "You can restore builtins later with Load/Restore defaults."
-                            ),
-                        },
-                        "confirm": {"type": "plain_text", "text": "Delete"},
-                        "deny": {"type": "plain_text", "text": "Cancel"},
-                    },
-                },
+                }
             ],
         }
+    )
+    blocks.append(
+        _bulk_delete_restore(
+            DELETE_ALL_REPORTS_ACTION_ID,
+            RESTORE_REPORTS_ACTION_ID,
+            confirm_dialog(
+                "Delete all reports?",
+                (
+                    "Deletes every report definition for this region and every "
+                    "schedule that references them. This cannot be undone."
+                ),
+                "Delete All",
+            ),
+            confirm_dialog(
+                "Restore defaults?",
+                (
+                    "Adds any missing builtin reports and their default schedules. "
+                    "Custom reports and customized builtins (`is_customized`) keep their edits."
+                ),
+                "Restore",
+            ),
+        )
     )
     return {
         "type": "modal",
         "callback_id": REPORTS_LIST_CALLBACK_ID,
-        "private_metadata": _metadata(team_id, regional_schema),
+        "private_metadata": _metadata(team_id, regional_schema, page=page),
         "title": {"type": "plain_text", "text": "PAX Reports"},
-        "submit": {"type": "plain_text", "text": "Done"},
         "close": {"type": "plain_text", "text": "Back"},
         "blocks": blocks,
     }
@@ -1182,17 +1273,50 @@ def _report_edit_modal(
             }
         )
 
+    is_edit = bool(row and row.get("id"))
+    if is_edit:
+        rid = str(row["id"])
+        code = row.get("code") or draft.get("code") or rid
+        blocks.append(
+            {
+                "type": "actions",
+                "block_id": "report_edit_extras",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": DUPLICATE_REPORT_ACTION_ID,
+                        "text": {"type": "plain_text", "text": "Duplicate"},
+                        "value": rid,
+                    },
+                    {
+                        "type": "button",
+                        "action_id": DELETE_REPORT_ACTION_ID,
+                        "text": {"type": "plain_text", "text": "Delete"},
+                        "style": "danger",
+                        "value": rid,
+                        "confirm": confirm_dialog(
+                            "Delete report?",
+                            (
+                                f"Deletes `{code}` and any schedules that reference it. "
+                                "Restore Defaults can bring builtins back."
+                            ),
+                        ),
+                    },
+                ],
+            }
+        )
+
     return {
         "type": "modal",
         "callback_id": REPORT_EDIT_CALLBACK_ID,
         "private_metadata": _metadata(
             team_id,
             regional_schema,
-            definition_id=row["id"] if row else None,
+            definition_id=row["id"] if is_edit else None,
             draft=draft,
             report_type=report_type,
         ),
-        "title": {"type": "plain_text", "text": "Edit report" if row else "Add report"},
+        "title": {"type": "plain_text", "text": "Edit report" if is_edit else "Add report"},
         "submit": {"type": "plain_text", "text": "Save"},
         "close": {"type": "plain_text", "text": "Cancel"},
         "blocks": blocks,
@@ -1354,6 +1478,24 @@ def parse_kotter_form(payload: dict) -> dict:
 
 
 def selected_schedule_id(payload: dict) -> int | None:
+    action = (payload.get("actions") or [{}])[0]
+    aid = action.get("action_id")
+    if aid in {
+        EDIT_SCHEDULE_ACTION_ID,
+        DELETE_SCHEDULE_ACTION_ID,
+        DUPLICATE_SCHEDULE_ACTION_ID,
+        RUN_NOW_SCHEDULE_ACTION_ID,
+        TOGGLE_SCHEDULE_ACTION_ID,
+    }:
+        rid = action_row_id(payload)
+        if rid is not None:
+            return rid
+    meta = _parse_metadata((payload.get("view") or {}).get("private_metadata"))
+    if meta.get("schedule_id") not in (None, ""):
+        try:
+            return int(meta["schedule_id"])
+        except (TypeError, ValueError):
+            pass
     state = payload.get("view", {}).get("state", {}).get("values", {})
     sel = state.get("schedule_pick", {}).get(SELECT_SCHEDULE_ACTION_ID, {}).get("selected_option")
     if not sel:
@@ -1365,6 +1507,22 @@ def selected_schedule_id(payload: dict) -> int | None:
 
 
 def selected_report_id(payload: dict) -> int | None:
+    action = (payload.get("actions") or [{}])[0]
+    aid = action.get("action_id")
+    if aid in {
+        EDIT_REPORT_ACTION_ID,
+        DELETE_REPORT_ACTION_ID,
+        DUPLICATE_REPORT_ACTION_ID,
+    }:
+        rid = action_row_id(payload)
+        if rid is not None:
+            return rid
+    meta = _parse_metadata((payload.get("view") or {}).get("private_metadata"))
+    if meta.get("definition_id") not in (None, ""):
+        try:
+            return int(meta["definition_id"])
+        except (TypeError, ValueError):
+            pass
     state = payload.get("view", {}).get("state", {}).get("values", {})
     sel = state.get("report_pick", {}).get(SELECT_REPORT_ACTION_ID, {}).get("selected_option")
     if not sel:

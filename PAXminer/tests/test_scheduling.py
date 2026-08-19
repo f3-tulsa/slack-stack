@@ -365,11 +365,13 @@ def test_reports_list_and_edit_modals_have_submit():
 
     for view in (
         _reports_list_modal("T1", "f3test", []),
-        _report_edit_modal("T1", "f3test", None),
         _schedules_list_modal("T1", "f3test", []),
     ):
         assert view.get("type") == "modal"
-        assert view.get("submit")
+        assert "submit" not in view
+        assert view.get("close")["text"] == "Back"
+    edit = _report_edit_modal("T1", "f3test", None)
+    assert edit.get("submit")
 
 
 def test_format_schedule_summary_includes_last_run():
@@ -391,8 +393,8 @@ def test_format_schedule_summary_includes_last_run():
     assert "last run: success (2026-07-18)" in line
 
 
-def test_schedules_list_preserves_selected_option():
-    from config_schedule import SELECT_SCHEDULE_ACTION_ID, _schedules_list_modal
+def test_schedules_list_uses_pencil_rows_and_subline():
+    from config_schedule import EDIT_SCHEDULE_ACTION_ID, _schedules_list_modal
 
     schedules = [
         {
@@ -406,13 +408,24 @@ def test_schedules_list_preserves_selected_option():
             "last_run_on": date(2026, 7, 18),
         }
     ]
-    view = _schedules_list_modal(
-        "T1", "f3test", schedules, selected_schedule_id=9
+    view = _schedules_list_modal("T1", "f3test", schedules, selected_schedule_id=9)
+    pencils = [
+        b["accessory"]
+        for b in view["blocks"]
+        if b.get("type") == "section" and b.get("accessory")
+    ]
+    assert pencils[0]["action_id"] == EDIT_SCHEDULE_ACTION_ID
+    assert pencils[0]["value"] == "9"
+    sub = " ".join(
+        el.get("text") or ""
+        for b in view["blocks"]
+        if b.get("type") == "context"
+        for el in b.get("elements") or []
     )
-    pick = next(b for b in view["blocks"] if b.get("block_id") == "schedule_pick")
-    assert pick["element"]["action_id"] == SELECT_SCHEDULE_ACTION_ID
-    assert pick["element"]["initial_option"]["value"] == "9"
-    assert "last run: skipped" in view["blocks"][1]["text"]["text"]
+    assert "Enabled" in sub
+    assert "Weekly @ 07:00" in sub
+    assert "Last run: skipped (2026-07-18)" in sub
+    assert "submit" not in view
 
 
 def test_post_log_swallows_client_errors():
@@ -1031,20 +1044,25 @@ def test_format_window_label_and_calendar_month():
     assert w == (date(2026, 6, 1), date(2026, 6, 30))
 
 
-def test_reports_list_empty_shows_load_defaults():
-    from config_schedule import LOAD_DEFAULTS_ACTION_ID, _reports_list_modal, _schedules_list_modal
+def test_reports_list_empty_shows_restore_defaults():
+    from config_schedule import (
+        RESTORE_DEFAULTS_ACTION_ID,
+        RESTORE_REPORTS_ACTION_ID,
+        _reports_list_modal,
+        _schedules_list_modal,
+    )
 
     reports = _reports_list_modal("T1", "f3test", [])
     actions = [b for b in reports["blocks"] if b.get("type") == "actions"]
     assert any(
-        LOAD_DEFAULTS_ACTION_ID in [e.get("action_id") for e in a.get("elements", [])]
+        RESTORE_REPORTS_ACTION_ID in [e.get("action_id") for e in a.get("elements", [])]
         for a in actions
     )
 
     schedules = _schedules_list_modal("T1", "f3test", [])
     actions = [b for b in schedules["blocks"] if b.get("type") == "actions"]
     assert any(
-        LOAD_DEFAULTS_ACTION_ID in [e.get("action_id") for e in a.get("elements", [])]
+        RESTORE_DEFAULTS_ACTION_ID in [e.get("action_id") for e in a.get("elements", [])]
         for a in actions
     )
 
@@ -1094,28 +1112,39 @@ def test_report_edit_modal_code_rendered_vs_custom():
     assert "kind" in custom_ids
 
 
-def test_reports_list_has_duplicate_action():
-    from config_schedule import DUPLICATE_REPORT_ACTION_ID, _reports_list_modal
-
-    view = _reports_list_modal(
-        "T1",
-        "f3test",
-        [
-            {
-                "id": 1,
-                "name": "Kotter",
-                "code": "kotter",
-                "report_type": "kotter",
-                "is_builtin": 1,
-            }
-        ],
+def test_reports_list_has_pencil_not_duplicate():
+    from config_schedule import (
+        DUPLICATE_REPORT_ACTION_ID,
+        EDIT_REPORT_ACTION_ID,
+        _report_edit_modal,
+        _reports_list_modal,
     )
+
+    row = {
+        "id": 1,
+        "name": "Kotter",
+        "code": "kotter",
+        "report_type": "kotter",
+        "is_builtin": 1,
+    }
+    view = _reports_list_modal("T1", "f3test", [row])
     action_ids = []
     for b in view["blocks"]:
+        acc = b.get("accessory") or {}
+        if acc.get("action_id"):
+            action_ids.append(acc["action_id"])
         for e in b.get("elements") or []:
             if e.get("action_id"):
                 action_ids.append(e["action_id"])
-    assert DUPLICATE_REPORT_ACTION_ID in action_ids
+    assert EDIT_REPORT_ACTION_ID in action_ids
+    assert DUPLICATE_REPORT_ACTION_ID not in action_ids
+    edit = _report_edit_modal("T1", "f3test", row)
+    edit_ids = [
+        e.get("action_id")
+        for b in edit["blocks"]
+        for e in b.get("elements") or []
+    ]
+    assert DUPLICATE_REPORT_ACTION_ID in edit_ids
 
 
 def test_uniquify_and_duplicate_definition():
@@ -1475,7 +1504,7 @@ def test_add_edit_report_and_schedule_update_view_not_push():
     assert callbacks[3] == "paxminer-schedule-edit-id"
 
 
-def test_duplicate_report_updates_list_and_does_not_push():
+def test_duplicate_report_opens_add_form_and_does_not_push():
     from config_schedule import DUPLICATE_REPORT_ACTION_ID
     from unittest.mock import MagicMock, patch
 
@@ -1487,13 +1516,7 @@ def test_duplicate_report_updates_list_and_does_not_push():
     client = MagicMock()
     logger = MagicMock()
     body = _modal_action_body()
-    body["view"]["state"] = {
-        "values": {
-            "report_pick": {
-                "paxminer_report_select": {"selected_option": {"value": "9"}}
-            }
-        }
-    }
+    body["actions"] = [{"action_id": DUPLICATE_REPORT_ACTION_ID, "value": "9"}]
     region = {"region": "t", "schema_name": "f3test"}
     with patch("slack_schedule.is_slack_admin", return_value=True):
         with patch(
@@ -1506,17 +1529,91 @@ def test_duplicate_report_updates_list_and_does_not_push():
                 mock_conn.return_value.cursor.return_value.__exit__.return_value = False
                 with patch(
                     "slack_schedule.load_definition",
-                    return_value={"id": 9, "code": "pax", "name": "PAX"},
+                    return_value={"id": 9, "code": "pax", "name": "PAX", "report_type": "pax_charts"},
                 ):
                     with patch(
-                        "slack_schedule.duplicate_definition",
-                        return_value={"id": 10, "code": "pax_copy", "name": "PAX (copy)"},
-                    ):
-                        with patch("slack_schedule.load_definitions", return_value=[]):
-                            app.actions[DUPLICATE_REPORT_ACTION_ID](
-                                ack, body, client, logger
-                            )
+                        "slack_schedule.duplicate_report_draft",
+                        return_value={"code": "pax_copy", "name": "PAX_copy", "report_type": "pax_charts"},
+                    ) as draft_fn:
+                        app.actions[DUPLICATE_REPORT_ACTION_ID](
+                            ack, body, client, logger
+                        )
+    draft_fn.assert_called_once()
     client.views_push.assert_not_called()
     client.views_update.assert_called_once()
-    assert client.views_update.call_args.kwargs["view"]["callback_id"] == "paxminer-reports-list-id"
+    view = client.views_update.call_args.kwargs["view"]
+    assert view["callback_id"] == "paxminer-report-edit-id"
+    assert "Add" in view["title"]["text"]
+
+
+def test_reports_and_achievements_lists_paginate():
+    from config_paxminer import ACHIEVEMENTS_PAGE_NEXT_ACTION_ID, _achievements_list_modal
+    from config_schedule import PAGE_SIZE, REPORTS_PAGE_NEXT_ACTION_ID, _reports_list_modal
+
+    defs = [
+        {"id": i, "name": f"Report {i}", "code": f"r{i}", "report_type": "custom_report", "is_builtin": 0}
+        for i in range(1, PAGE_SIZE + 2)
+    ]
+    page0 = _reports_list_modal("T1", "f3test", defs, page=0)
+    page1 = _reports_list_modal("T1", "f3test", defs, page=1)
+    p0_ids = [
+        (b.get("accessory") or {}).get("value")
+        for b in page0["blocks"]
+        if (b.get("accessory") or {}).get("action_id")
+    ]
+    p1_ids = [
+        (b.get("accessory") or {}).get("value")
+        for b in page1["blocks"]
+        if (b.get("accessory") or {}).get("action_id")
+    ]
+    assert "1" in p0_ids
+    assert str(PAGE_SIZE + 1) in p1_ids
+    assert any(
+        e.get("action_id") == REPORTS_PAGE_NEXT_ACTION_ID
+        for b in page0["blocks"]
+        for e in b.get("elements") or []
+    )
+
+    ach = [
+        {
+            "id": i,
+            "name": f"A{i}",
+            "code": f"a{i}",
+            "enabled": 1,
+            "period": "month",
+            "metric": "qs",
+            "threshold": 6,
+        }
+        for i in range(1, PAGE_SIZE + 2)
+    ]
+    a0 = _achievements_list_modal("T1", "f3test", ach, page=0)
+    assert any(
+        e.get("action_id") == ACHIEVEMENTS_PAGE_NEXT_ACTION_ID
+        for b in a0["blocks"]
+        for e in b.get("elements") or []
+    )
+    assert any(
+        e.get("action_id") == "paxminer_achievement_backfill"
+        for b in a0["blocks"]
+        for e in b.get("elements") or []
+    )
+    a1 = _achievements_list_modal("T1", "f3test", ach, page=1)
+    assert any(
+        e.get("action_id") == "paxminer_achievement_backfill"
+        for b in a1["blocks"]
+        for e in b.get("elements") or []
+    )
+
+
+def test_achievement_defaults_json_matches_seeds():
+    import json
+    from pathlib import Path
+
+    from achievements.achievement_rules import ACHIEVEMENT_SEEDS
+
+    path = Path(__file__).resolve().parent.parent / "achievement_defaults.json"
+    catalog = json.loads(path.read_text(encoding="utf-8"))
+    assert catalog == ACHIEVEMENT_SEEDS
+    assert len(catalog) == 14
+    assert {s["code"] for s in catalog} == {s["code"] for s in ACHIEVEMENT_SEEDS}
 

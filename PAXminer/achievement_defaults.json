@@ -1,0 +1,142 @@
+[
+  {
+    "name": "The Priest",
+    "description": "Post for 25 Qsource lessons",
+    "verb": "posting for 25 Qsource lessons",
+    "code": "the_priest",
+    "metric": "posts",
+    "activity": "qsource",
+    "period": "year",
+    "threshold": 25
+  },
+  {
+    "name": "The Monk",
+    "description": "Post at 4 QSources in a month",
+    "verb": "posting at 4 Qsources in a month",
+    "code": "the_monk",
+    "metric": "posts",
+    "activity": "qsource",
+    "period": "month",
+    "threshold": 4
+  },
+  {
+    "name": "Leader of Men",
+    "description": "Q at 4 beatdowns in a month",
+    "verb": "Qing at 4 beatdowns in a month",
+    "code": "leader_of_men",
+    "metric": "qs",
+    "activity": "beatdown",
+    "period": "month",
+    "threshold": 4
+  },
+  {
+    "name": "The Boss",
+    "description": "Q at 6 beatdowns in a month",
+    "verb": "Qing at 6 beatdowns in a month",
+    "code": "the_boss",
+    "metric": "qs",
+    "activity": "beatdown",
+    "period": "month",
+    "threshold": 6
+  },
+  {
+    "name": "Be the Hammer, Not the Nail",
+    "description": "Q at 6 beatdowns in a week",
+    "verb": "Qing at 6 beatdowns in a week",
+    "code": "be_the_hammer_not_the_nail",
+    "metric": "qs",
+    "activity": "beatdown",
+    "period": "week",
+    "threshold": 6
+  },
+  {
+    "name": "Cadre",
+    "description": "Q at 7 different AOs in a month",
+    "verb": "Qing at 7 different AOs in a month",
+    "code": "cadre",
+    "metric": "distinct_aos",
+    "activity": "beatdown",
+    "period": "month",
+    "threshold": 7
+  },
+  {
+    "name": "El Presidente",
+    "description": "Q at 20 beatdowns in a year",
+    "verb": "Qing at 20 beatdowns in a year",
+    "code": "el_presidente",
+    "metric": "qs",
+    "activity": "beatdown",
+    "period": "year",
+    "threshold": 20
+  },
+  {
+    "name": "El Quatro",
+    "description": "Post at 25 beatdowns in a year",
+    "verb": "posting at 25 beatdowns in a year",
+    "code": "el_quatro",
+    "metric": "posts",
+    "activity": "beatdown",
+    "period": "year",
+    "threshold": 25
+  },
+  {
+    "name": "Golden Boy",
+    "description": "Post at 50 beatdowns in a year",
+    "verb": "posting at 50 beatdowns in a year",
+    "code": "golden_boy",
+    "metric": "posts",
+    "activity": "beatdown",
+    "period": "year",
+    "threshold": 50
+  },
+  {
+    "name": "Centurion",
+    "description": "Post at 100 beatdowns in a year",
+    "verb": "posting at 100 beatdowns in a year",
+    "code": "centurion",
+    "metric": "posts",
+    "activity": "beatdown",
+    "period": "year",
+    "threshold": 100
+  },
+  {
+    "name": "Karate Kid",
+    "description": "Post at 150 beatdowns in a year",
+    "verb": "posting at 150 beatdowns in a year",
+    "code": "karate_kid",
+    "metric": "posts",
+    "activity": "beatdown",
+    "period": "year",
+    "threshold": 150
+  },
+  {
+    "name": "Crazy Person",
+    "description": "Post at 200 beatdowns in a year",
+    "verb": "posting at 200 beatdowns in a year",
+    "code": "crazy_person",
+    "metric": "posts",
+    "activity": "beatdown",
+    "period": "year",
+    "threshold": 200
+  },
+  {
+    "name": "6 pack",
+    "description": "Post at 6 beatdowns in a week",
+    "verb": "posting at 6 beatdowns in a week",
+    "code": "6_pack",
+    "metric": "posts",
+    "activity": "beatdown",
+    "period": "week",
+    "threshold": 6
+  },
+  {
+    "name": "Holding Down the Fort",
+    "description": "Post 50 times at an AO",
+    "verb": "posting 50 times at an AO",
+    "code": "holding_down_the_fort",
+    "metric": "posts_at_single_ao",
+    "activity": "beatdown",
+    "period": "year",
+    "threshold": 50
+  }
+]

@@ -70,3 +70,52 @@ def chunk_messages(blocks: list[dict], *, max_blocks: int = MAX_BLOCKS) -> list[
     if not blocks:
         return []
     return [blocks[i : i + max_blocks] for i in range(0, len(blocks), max_blocks)]
+
+
+def pencil_row(title: str, action_id: str, value: str) -> dict:
+    """Name on the left, pencil accessory on the right (one accessory per section)."""
+    return {
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": f"*{title}*"[:MAX_SECTION_TEXT]},
+        "accessory": {
+            "type": "button",
+            "action_id": action_id,
+            "text": {"type": "plain_text", "text": "✏️", "emoji": True},
+            "value": str(value),
+        },
+    }
+
+
+def page_nav_elements(
+    page: int, total: int, prev_id: str, next_id: str, *, page_size: int
+) -> list[dict]:
+    start = max(page, 0) * page_size
+    elements: list[dict] = []
+    if page > 0:
+        elements.append(
+            {
+                "type": "button",
+                "action_id": prev_id,
+                "text": {"type": "plain_text", "text": "← Prev"},
+                "value": str(page - 1),
+            }
+        )
+    if start + page_size < total:
+        elements.append(
+            {
+                "type": "button",
+                "action_id": next_id,
+                "text": {"type": "plain_text", "text": "Next →"},
+                "value": str(page + 1),
+            }
+        )
+    return elements
+
+
+def confirm_dialog(title: str, text: str, confirm: str = "Delete") -> dict:
+    return {
+        "title": {"type": "plain_text", "text": title[:100]},
+        "text": {"type": "mrkdwn", "text": text[:300]},
+        "confirm": {"type": "plain_text", "text": confirm[:30]},
+        "deny": {"type": "plain_text", "text": "Cancel"},
+    }

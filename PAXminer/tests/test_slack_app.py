@@ -201,21 +201,31 @@ def test_modals_with_input_blocks_include_submit():
     ]
     _assert_modals_with_inputs_have_submit(views)
     list_with = _achievements_list_modal("T1", "f3tulsa_test", achievements)
-    assert list_with["submit"]["text"] == "Done"
-    delete_btn = next(
-        el
+    assert "submit" not in list_with
+    accessory_ids = [
+        (b.get("accessory") or {}).get("action_id")
         for b in list_with["blocks"]
-        if b.get("block_id") == "achievement_actions"
-        for el in b["elements"]
-        if el.get("action_id") == "paxminer_achievement_delete"
-    )
-    assert "confirm" in delete_btn
-    assert "code" in delete_btn["confirm"]["text"]["text"].lower()
+        if b.get("type") == "section"
+    ]
+    assert "paxminer_achievement_edit" in accessory_ids
+    sublines = [
+        el.get("text")
+        for b in list_with["blocks"]
+        if b.get("type") == "context"
+        for el in b.get("elements") or []
+    ]
+    assert any("Week - 6 posts" in (t or "") for t in sublines)
     assert any(
         el.get("action_id") == "paxminer_achievement_backfill"
         for b in list_with["blocks"]
-        if b.get("block_id") == "achievement_actions"
-        for el in b["elements"]
+        if b.get("type") == "actions"
+        for el in b.get("elements") or []
+    )
+    assert any(
+        el.get("action_id") == "paxminer_achievements_restore_defaults"
+        for b in list_with["blocks"]
+        if b.get("type") == "actions"
+        for el in b.get("elements") or []
     )
     edit = _achievement_edit_modal("T1", "f3tulsa_test", achievements[0])
     edit_ids = [b.get("block_id") for b in edit["blocks"] if b.get("block_id")]
@@ -453,12 +463,17 @@ def test_backfill_button_queues_worker():
             "private_metadata": '{"team_id":"T1","regional_schema":"f3test"}',
             "state": {
                 "values": {
-                    "achievement_pick": {
+                    "reeval_pick": {
                         "paxminer_achievement_select": {"selected_option": {"value": "4"}}
-                    }
+                    },
+                    "reeval_dates": {
+                        "paxminer_achievement_reeval_from": {"selected_date": "2026-01-01"},
+                        "paxminer_achievement_reeval_to": {"selected_date": "2026-08-18"},
+                    },
                 }
             },
         },
+        "actions": [{"action_id": "paxminer_achievement_backfill", "value": "4"}],
     }
     with patch("slack_app.is_slack_admin", return_value=True):
         with patch(
@@ -471,6 +486,8 @@ def test_backfill_button_queues_worker():
     ack.assert_called_once_with()
     queue.assert_called_once()
     assert queue.call_args.kwargs["achievement_id"] == 4
+    assert queue.call_args.kwargs["start"] == "2026-01-01"
+    assert queue.call_args.kwargs["end"] == "2026-08-18"
 
 
 def test_delete_achievement_posts_admin_notice():
@@ -662,6 +679,25 @@ def test_slack_dockerfile_copies_imported_achievement_modules():
 
     missing = sorted(path for path in needed if path not in copied)
     assert missing == [], f"Dockerfile.slack missing {missing}"
+
+    # Data files opened by copied modules (JSON catalogs) must also be COPY'd.
+    import re
+
+    data_needed: set[str] = set()
+    for rel in list(seen):
+        path = root / rel
+        if not path.is_file() or not rel.endswith(".py"):
+            continue
+        text = path.read_text(encoding="utf-8")
+        for name in re.findall(r'["\']([A-Za-z0-9_\-]+\.json)["\']', text):
+            if (root / name).is_file():
+                data_needed.add(name)
+            else:
+                candidate = path.parent / name
+                if candidate.is_file():
+                    data_needed.add(str(candidate.relative_to(root)))
+    missing_data = sorted(p for p in data_needed if p not in copied)
+    assert missing_data == [], f"Dockerfile.slack missing data files {missing_data}"
 
 
 def test_copied_achievement_modules_stay_pandas_free():
