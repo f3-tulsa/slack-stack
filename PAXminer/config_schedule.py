@@ -367,7 +367,7 @@ def achievement_rule_hint(row: dict) -> str:
 
 
 def achievement_subline(row: dict) -> str:
-    enabled = "Enabled" if int(row.get("enabled") or 1) else "Disabled"
+    enabled = "Enabled" if int(row.get("enabled") or 0) else "Disabled"
     return f"{enabled} | {achievement_rule_hint(row)}"
 
 

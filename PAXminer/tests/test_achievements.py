@@ -920,6 +920,29 @@ def test_parse_achievement_form_missing_enabled_block_is_disabled():
     assert values["enabled"] == 0
 
 
+def test_achievement_subline_shows_disabled_when_enabled_is_zero():
+    from config_paxminer import _achievements_list_modal
+    from config_schedule import achievement_subline
+
+    row = {
+        "id": 3,
+        "name": "6 pack",
+        "code": "six_pack",
+        "metric": "posts",
+        "period": "month",
+        "threshold": 6,
+        "enabled": 0,
+    }
+    assert achievement_subline(row) == "Disabled | Month - 6 posts"
+    modal = _achievements_list_modal("T1", "f3test", [row])
+    texts = [
+        (b.get("elements") or [{}])[0].get("text")
+        for b in modal["blocks"]
+        if b.get("type") == "context"
+    ]
+    assert any(t and t.startswith("Disabled |") for t in texts)
+
+
 def test_achievement_edit_modal_disabled_row_is_unchecked():
     from config_paxminer import _achievement_edit_modal, _achievement_summary
 
