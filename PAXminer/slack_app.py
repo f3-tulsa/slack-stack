@@ -818,23 +818,7 @@ def handle_achievement_edit_submit(ack, body, client, logger):
                         achievement_id,
                     ),
                 )
-                was_enabled = int(existing.get("enabled") or 1)
-                if not was_enabled and values["enabled"]:
-                    from_date, to_date = date.today().isoformat(), None
-                    supersede_and_insert(
-                        cur,
-                        regional_schema,
-                        achievement_id=int(achievement_id),
-                        code=values["code"],
-                        metric=values["metric"],
-                        activity_list=values["activity_list"],
-                        period=values["period"],
-                        threshold=values["threshold"],
-                        effective_from=from_date,
-                        effective_to=to_date,
-                        created_by=user_id,
-                    )
-                elif params_changed(existing, values):
+                if params_changed(existing, values):
                     inherit = existing.get("effective_from")
                     if values.get("apply_mode") == "retroactive":
                         from_date, to_date = inherit, values.get("effective_to")

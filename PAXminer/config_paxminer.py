@@ -95,7 +95,7 @@ def _achievement_summary(row: dict) -> str:
     activities = activity_list_from_rule(row)
     activity_label = ", ".join(activities) if activities else "all activities"
     version = row.get("version") or row.get("version_key") or "v?"
-    enabled = "on" if int(row.get("enabled") or 1) else "off"
+    enabled = "on" if int(row.get("enabled") or 0) else "off"
     return (
         f"*{row['name']}* (`{row['code']}` {version}) — "
         f"{row.get('metric')}/{row.get('period')} ≥ {row.get('threshold')} · {activity_label} · {enabled}"
@@ -400,7 +400,7 @@ def _achievement_edit_modal(
     activity_opts = _select_options(tuple(options))
     selected_activities = activity_list_from_rule(src)
     initial_activities = [o for o in activity_opts if o["value"] in selected_activities]
-    enabled = int(src.get("enabled") or 1) == 1
+    enabled = int(src.get("enabled") or 0) == 1 if is_edit else True
     range_mode = "going_forward" if not is_edit else "all_previous"
     if src.get("effective_from") is None and is_edit:
         range_mode = "all_previous"
@@ -725,17 +725,8 @@ def _parse_achievement_form(payload: dict) -> dict:
         opts = (state.get(block_id, {}).get("val", {}) or {}).get("selected_options") or []
         return any(o.get("value") == "1" for o in opts)
 
-    raw_threshold = _text("threshold").strip()
-    if not raw_threshold:
-        threshold = 1
-    else:
-        threshold = _to_int(raw_threshold, None)
-
-    enabled_state = state.get("enabled")
-    if enabled_state is None:
-        enabled = 1
-    else:
-        enabled = 1 if _checked("enabled") else 0
+    threshold = _to_int(_text("threshold").strip(), None)
+    enabled = 1 if _checked("enabled") else 0
 
     return {
         "name": _text("name").strip(),

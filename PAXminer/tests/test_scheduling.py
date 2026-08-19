@@ -1743,3 +1743,86 @@ def test_pax_chart_dm_text_mentions_slack_user():
     text = pax_chart_dm_text("U01ABCDEF12", "Nacho", None, "July 2026")
     assert text.startswith("Hey <@U01ABCDEF12>")
     assert "July 2026" in text
+
+
+def test_draft_from_report_state_clears_fields_and_keeps_typed_name():
+    import json
+
+    from config_schedule import REPORT_WINDOW_ACTION_ID, draft_from_report_state, parse_report_form
+
+    meta_draft = {
+        "name": "Old name",
+        "fields": ["Date", "AO"],
+        "time_window_type": "last_month",
+    }
+    after_window = {
+        "name": {"val": {"value": "Q Counts"}},
+        "fields": {"val": {"selected_options": [{"value": "Date"}, {"value": "AO"}]}},
+        "time_window_type": {
+            REPORT_WINDOW_ACTION_ID: {"selected_option": {"value": "this_month"}}
+        },
+    }
+    draft = draft_from_report_state(after_window, meta_draft)
+    assert draft["name"] == "Q Counts"
+    assert draft["fields"] == ["Date", "AO"]
+    assert draft["time_window_type"] == "this_month"
+
+    cleared = {
+        "name": {"val": {"value": "Q Counts"}},
+        "fields": {"val": {"selected_options": []}},
+        "time_window_type": {
+            REPORT_WINDOW_ACTION_ID: {"selected_option": {"value": "this_month"}}
+        },
+    }
+    draft = draft_from_report_state(cleared, draft)
+    assert draft["name"] == "Q Counts"
+    assert draft["fields"] == []
+
+    parsed = parse_report_form(
+        {
+            "view": {
+                "private_metadata": json.dumps(
+                    {"draft": draft, "report_type": "custom_report"}
+                ),
+                "state": {"values": cleared},
+            }
+        }
+    )
+    assert parsed["name"] == "Q Counts"
+    assert parsed["fields"] == []
+
+
+def test_kotter_empty_threshold_acks_errors_without_writing():
+    from unittest.mock import MagicMock, patch
+
+    from config_schedule import KOTTER_CONFIG_CALLBACK_ID
+
+    app = _schedule_handlers()
+    ack = MagicMock()
+    body = {
+        "user": {"id": "U1"},
+        "view": {
+            "private_metadata": '{"team_id":"T1","regional_schema":"f3test"}',
+            "state": {
+                "values": {
+                    "NO_POST_THRESHOLD": {"val": {"value": ""}},
+                    "REMINDER_WEEKS": {"val": {"value": "2"}},
+                    "HOME_AO_CAPTURE": {"val": {"value": "8"}},
+                    "NO_Q_THRESHOLD_WEEKS": {"val": {"value": "4"}},
+                    "NO_Q_THRESHOLD_POSTS": {"val": {"value": "4"}},
+                }
+            },
+        },
+    }
+    with patch("slack_schedule.is_slack_admin", return_value=True):
+        with patch(
+            "slack_app._region_context_from_body",
+            return_value=("T1", "f3test", {"region": "tulsa"}),
+        ):
+            with patch("slack_schedule.connect_from_env") as mock_conn:
+                app.views[KOTTER_CONFIG_CALLBACK_ID](ack, body, MagicMock(), MagicMock())
+    ack.assert_called_once()
+    kwargs = ack.call_args.kwargs
+    assert kwargs["response_action"] == "errors"
+    assert "NO_POST_THRESHOLD" in kwargs["errors"]
+    mock_conn.assert_not_called()
