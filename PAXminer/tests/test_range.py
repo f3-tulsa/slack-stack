@@ -31,14 +31,14 @@ def test_normalize_legacy_and_null_modes():
 
 def test_resolve_four_modes():
     mode, start, end = resolve_stored_range(
-        {"range_mode": RANGE_FROM_CREATED, "no_end_date": True},
+        {"range_mode": RANGE_FROM_CREATED},
         first_created="2026-01-15",
         version_created="2026-02-01",
     )
     assert (mode, start, end) == (RANGE_FROM_CREATED, "2026-01-15", None)
 
     mode, start, end = resolve_stored_range(
-        {"range_mode": RANGE_SINCE_RULES_CHANGED, "no_end_date": True},
+        {"range_mode": RANGE_SINCE_RULES_CHANGED},
         first_created="2026-01-15",
         version_created="2026-04-01",
         minting=True,
@@ -47,7 +47,7 @@ def test_resolve_four_modes():
     assert (mode, start, end) == (RANGE_SINCE_RULES_CHANGED, "2026-08-19", None)
 
     mode, start, end = resolve_stored_range(
-        {"range_mode": RANGE_ALL_ATTENDANCE, "no_end_date": True},
+        {"range_mode": RANGE_ALL_ATTENDANCE},
         first_created="2026-01-15",
         version_created="2026-04-01",
     )
@@ -58,26 +58,41 @@ def test_resolve_four_modes():
             "range_mode": RANGE_CUSTOM,
             "effective_from": "2026-02-01",
             "effective_to": "2026-12-31",
-            "no_end_date": False,
         }
     )
     assert (mode, start, end) == (RANGE_CUSTOM, "2026-02-01", "2026-12-31")
 
+    mode, start, end = resolve_stored_range(
+        {
+            "range_mode": RANGE_FROM_CREATED,
+            "effective_from": "2020-01-01",
+            "effective_to": "2020-12-31",
+        },
+        first_created="2026-01-15",
+        version_created="2026-02-01",
+    )
+    assert (mode, start, end) == (RANGE_FROM_CREATED, "2026-01-15", None)
 
-def test_custom_requires_start_and_non_custom_rejects_mismatch():
+    mode, start, end = resolve_stored_range(
+        {"range_mode": RANGE_CUSTOM, "effective_from": "2026-02-01", "effective_to": None}
+    )
+    assert (mode, start, end) == (RANGE_CUSTOM, "2026-02-01", None)
+
+
+def test_custom_requires_start_and_non_custom_ignores_pickers():
     errors = range_validation_errors(
-        {"range_mode": RANGE_CUSTOM, "no_end_date": True, "effective_from": None}
+        {"range_mode": RANGE_CUSTOM, "effective_from": None}
     )
     assert "effective_from" in errors
     errors = range_validation_errors(
         {
             "range_mode": RANGE_FROM_CREATED,
-            "no_end_date": True,
             "effective_from": "2026-06-01",
+            "effective_to": "2026-07-01",
         },
         first_created="2026-01-01",
     )
-    assert "effective_from" in errors
+    assert errors == {}
 
 
 def test_window_narrowed_and_auto_queue_rules():

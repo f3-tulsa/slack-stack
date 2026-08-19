@@ -285,7 +285,7 @@ def test_modals_with_input_blocks_include_submit():
     edit_ids = [b.get("block_id") for b in edit["blocks"] if b.get("block_id")]
     assert "enabled" in edit_ids
     assert "apply_mode" not in edit_ids
-    assert "no_end_date" in edit_ids
+    assert "no_end_date" not in edit_ids
     assert "range_mode" in edit_ids
     range_block = next(b for b in edit["blocks"] if b.get("block_id") == "range_mode")
     range_labels = [o["text"]["text"] for o in range_block["element"]["options"]]
@@ -293,6 +293,21 @@ def test_modals_with_input_blocks_include_submit():
     assert "Since the earning rules last changed" in range_labels
     assert "All attendance dates" in range_labels
     assert "Custom" in range_labels
+    start_el = next(b for b in edit["blocks"] if b.get("block_id") == "effective_from")["element"]
+    end_el = next(b for b in edit["blocks"] if b.get("block_id") == "effective_to")["element"]
+    assert "initial_date" not in start_el
+    assert "initial_date" not in end_el
+    custom_row = {
+        **achievements[0],
+        "range_mode": "custom",
+        "effective_from": "2026-02-01",
+        "effective_to": "2026-12-31",
+    }
+    custom = _achievement_edit_modal("T1", "f3tulsa_test", custom_row)
+    custom_start = next(b for b in custom["blocks"] if b.get("block_id") == "effective_from")["element"]
+    custom_end = next(b for b in custom["blocks"] if b.get("block_id") == "effective_to")["element"]
+    assert custom_start.get("initial_date") == "2026-02-01"
+    assert custom_end.get("initial_date") == "2026-12-31"
     code_block = next(b for b in edit["blocks"] if b.get("block_id") == "code")
     assert code_block["type"] == "section"
     create = _achievement_edit_modal("T1", "f3tulsa_test", None)
@@ -874,7 +889,6 @@ def test_custom_missing_start_errors():
             "period": "week",
             "threshold": 6,
             "range_mode": "custom",
-            "no_end_date": True,
             "effective_from": None,
             "effective_to": None,
         }
@@ -882,7 +896,7 @@ def test_custom_missing_start_errors():
     assert "effective_from" in errors
 
 
-def test_non_custom_start_mismatch_errors():
+def test_non_custom_leftover_picker_dates_are_ignored():
     from config_paxminer import _validate_achievement
 
     errors = _validate_achievement(
@@ -893,26 +907,24 @@ def test_non_custom_start_mismatch_errors():
             "period": "week",
             "threshold": 6,
             "range_mode": "from_created",
-            "no_end_date": True,
             "effective_from": "2026-06-01",
-            "effective_to": None,
+            "effective_to": "2026-07-01",
         },
         first_created="2026-01-01",
         version_created="2026-01-01",
         earliest_beatdown="2025-01-01",
     )
-    assert "effective_from" in errors
+    assert errors == {}
 
 
-def test_no_end_date_stores_null_to():
+def test_empty_end_date_stores_null_to():
     from achievements.range import resolve_stored_range
 
     mode, from_date, to_date = resolve_stored_range(
         {
             "range_mode": "custom",
             "effective_from": "2026-02-01",
-            "effective_to": "2026-12-31",
-            "no_end_date": True,
+            "effective_to": None,
         }
     )
     assert mode == "custom"

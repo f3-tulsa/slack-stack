@@ -389,8 +389,6 @@ def _achievement_edit_modal(
     *,
     activity_options: list[str] | None = None,
 ) -> dict:
-    from datetime import date as _date
-
     from achievements.activity import (
         BUILTIN_ACTIVITY_TYPES,
         activity_list_from_rule,
@@ -406,10 +404,11 @@ def _achievement_edit_modal(
     initial_activities = [o for o in activity_opts if o["value"] in selected_activities]
     enabled = int(src.get("enabled") or 0) == 1 if is_edit else True
     from achievements.range import (
+        RANGE_CUSTOM,
         RANGE_FROM_CREATED,
-        display_start,
         iso_date,
         normalize_range_mode,
+        range_mode_hint,
         range_mode_options,
     )
 
@@ -418,18 +417,16 @@ def _achievement_edit_modal(
         if not is_edit
         else normalize_range_mode(src.get("range_mode"), effective_from=src.get("effective_from"))
     )
-    today = _date.today().isoformat()
-    start_display = display_start(
+    is_custom = range_mode == RANGE_CUSTOM
+    start_display = iso_date(src.get("effective_from")) if is_custom else None
+    end_display = iso_date(src.get("effective_to")) if is_custom else None
+    range_opts = range_mode_options()
+    range_hint = range_mode_hint(
         range_mode,
         first_created=src.get("first_created"),
         version_created=src.get("version_created"),
-        custom_from=src.get("effective_from"),
         earliest_beatdown=src.get("earliest_beatdown"),
-        today=today,
     )
-    no_end = src.get("effective_to") is None
-    end_display = iso_date(src.get("effective_to"))
-    range_opts = range_mode_options()
     blocks: list[dict] = []
     if is_edit:
         blocks.append(
@@ -584,9 +581,7 @@ def _achievement_edit_modal(
                 "elements": [
                     {
                         "type": "mrkdwn",
-                        "text": (
-                            "Start and end dates are set automatically unless you choose Custom."
-                        ),
+                        "text": range_hint,
                     }
                 ],
             },
@@ -598,35 +593,7 @@ def _achievement_edit_modal(
                 "element": {
                     "type": "datepicker",
                     "action_id": "val",
-                    "initial_date": start_display,
-                },
-            },
-            {
-                "type": "input",
-                "block_id": "no_end_date",
-                "optional": True,
-                "label": {"type": "plain_text", "text": "End date"},
-                "element": {
-                    "type": "checkboxes",
-                    "action_id": "val",
-                    "options": [
-                        {
-                            "text": {"type": "plain_text", "text": "No end date"},
-                            "value": "1",
-                        }
-                    ],
-                    **(
-                        {
-                            "initial_options": [
-                                {
-                                    "text": {"type": "plain_text", "text": "No end date"},
-                                    "value": "1",
-                                }
-                            ]
-                        }
-                        if no_end
-                        else {}
-                    ),
+                    **({"initial_date": start_display} if start_display else {}),
                 },
             },
             {
@@ -750,7 +717,6 @@ def _parse_achievement_form(payload: dict) -> dict:
         "range_mode": _select("range_mode") or "from_created",
         "effective_from": _date("effective_from"),
         "effective_to": _date("effective_to"),
-        "no_end_date": _checked("no_end_date"),
     }
 
 
