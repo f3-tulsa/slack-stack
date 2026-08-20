@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from uuid import uuid4
 
 from achievements.activity import (
     activity_json_for_version,
@@ -12,9 +13,11 @@ from achievements.activity import (
 )
 
 
-def version_key_for(code: str, when: datetime | None = None) -> str:
-    stamp = (when or datetime.utcnow()).strftime("%Y%m%d%H%M")
-    return f"{code}_{stamp}"
+def version_key_for(code: str, version: int = 1, when: datetime | None = None) -> str:
+    """Globally unique per row. Minute-only stamps collided on Slack retries / same-minute saves."""
+    stamp = (when or datetime.utcnow()).strftime("%Y%m%d%H%M%S")
+    slug = (code or "achievement").strip() or "achievement"
+    return f"{slug}_v{int(version)}_{stamp}_{uuid4().hex[:8]}"
 
 
 def insert_version(
@@ -33,7 +36,7 @@ def insert_version(
     version: int = 1,
     range_mode: str | None = None,
 ) -> int:
-    key = version_key_for(code)
+    key = version_key_for(code, version)
     cur.execute(
         f"""
         INSERT INTO `{schema}`.`achievement_versions`
