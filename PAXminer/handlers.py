@@ -215,11 +215,30 @@ def schedule_handler(event, context):
     dry_run = bool(event.get("dry_run")) or event.get("source") == "smoke"
 
     if event.get("source") == "achievement_rule_backfill":
+        from achievements.range import clear_reeval_lock
         from achievements.runner import reconcile_rule_awards
 
         conn = connect_from_env(registry_db)
+        schema = event.get("schema") or ""
+        raw_id = event.get("achievement_id")
+        reached_reconcile = False
+
+        def _unlock():
+            if not schema or raw_id in (None, ""):
+                return
+            try:
+                with conn.cursor() as cur:
+                    clear_reeval_lock(cur, schema, int(raw_id))
+                conn.commit()
+            except Exception:
+                logging.warning(
+                    "failed to clear reeval lock after backfill early exit schema=%s id=%s",
+                    schema,
+                    raw_id,
+                    exc_info=True,
+                )
+
         try:
-            schema = event.get("schema") or ""
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT * FROM `{pm}`.`regions` WHERE schema_name=%s LIMIT 1",
@@ -233,12 +252,14 @@ def schedule_handler(event, context):
                 start = date.fromisoformat(str(event["start"])[:10])
             if event.get("end"):
                 end = date.fromisoformat(str(event["end"])[:10])
+            achievement_id = int(event["achievement_id"])
+            reached_reconcile = True
             result = reconcile_rule_awards(
                 conn,
                 pm_schema=pm,
                 regional_schema=schema,
                 region_row=region_row,
-                achievement_id=int(event["achievement_id"]),
+                achievement_id=achievement_id,
                 actor=event.get("actor"),
                 start=start,
                 end=end,
@@ -249,6 +270,8 @@ def schedule_handler(event, context):
             logging.exception("achievement_rule_backfill failed")
             return {"statusCode": 500, "body": json.dumps({"ok": False, "error": traceback.format_exc()})}
         finally:
+            if not reached_reconcile:
+                _unlock()
             conn.close()
 
     # Fan-out / Run Now path

@@ -19,7 +19,6 @@ from config_schedule import (
     EDIT_REPORT_ACTION_ID,
     EDIT_SCHEDULE_ACTION_ID,
     KOTTER_CONFIG_CALLBACK_ID,
-    LOAD_DEFAULTS_ACTION_ID,
     OPEN_ACHIEVEMENTS_ACTION_ID,
     OPEN_KOTTER_CONFIG_ACTION_ID,
     OPEN_REPORTS_ACTION_ID,
@@ -327,6 +326,9 @@ def register_schedule_listeners(app) -> None:
         )
         try:
             with conn.cursor() as cur:
+                from achievements.range import ensure_achievement_range_columns
+
+                ensure_achievement_range_columns(cur, regional_schema)
                 achievements = _load_achievements(cur, regional_schema)
             client.views_push(
                 trigger_id=body["trigger_id"],
@@ -558,7 +560,7 @@ def register_schedule_listeners(app) -> None:
                 conn.commit()
                 schedules = load_schedules(cur, pm, regional_schema)
             selected = schedules[0]["id"] if schedules else None
-            notice = f"Restored defaults ({n} schedule row(s) added)."
+            notice = f"Added missing defaults ({n} schedule row(s) added)."
             if customized:
                 notice += (
                     f" Kept {customized} customized builtin report(s); "
@@ -573,46 +575,6 @@ def register_schedule_listeners(app) -> None:
                 notice=notice,
                 selected_id=selected,
             )
-        finally:
-            conn.close()
-
-    @app.action(LOAD_DEFAULTS_ACTION_ID)
-    def load_defaults(ack, body, client, logger):
-        """Same as Restore Defaults; shown on empty Reports / Schedule lists."""
-        if not _admin_ack(ack, body, client):
-            return
-        team_id, regional_schema, region = _ctx(body)
-        if not region or not regional_schema:
-            return
-        pm = paxminer_schema_from_env()
-        conn = connect_from_env(
-            os.environ.get("PAXMINER_REGISTRY_DATABASE")
-            or os.environ.get("PAXMINER_SCHEMA")
-            or "paxminer"
-        )
-        try:
-            with conn.cursor() as cur:
-                n = restore_defaults(cur, pm, region)
-                conn.commit()
-                defs = load_definitions(cur, pm, regional_schema)
-                schedules = load_schedules(cur, pm, regional_schema)
-            view_cb = (body.get("view") or {}).get("callback_id")
-            notice = f"Loaded defaults ({n} schedule row(s), {len(defs)} report(s))."
-            if view_cb == REPORTS_LIST_CALLBACK_ID:
-                _refresh_reports_list(
-                    client, body, team_id, regional_schema, notice=notice
-                )
-            else:
-                selected = schedules[0]["id"] if schedules else None
-                _refresh_schedule_list(
-                    client,
-                    body,
-                    team_id,
-                    regional_schema,
-                    region,
-                    notice=notice,
-                    selected_id=selected,
-                )
         finally:
             conn.close()
 
@@ -956,7 +918,7 @@ def register_schedule_listeners(app) -> None:
                 conn.commit()
                 defs = load_definitions(cur, pm, regional_schema)
             notice = (
-                f"Restored defaults ({n} schedule row(s) added, {len(defs)} report(s) now)."
+                f"Added missing defaults ({n} schedule row(s) added, {len(defs)} report(s) now)."
             )
             if customized:
                 notice += (

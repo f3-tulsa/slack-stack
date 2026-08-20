@@ -298,6 +298,9 @@ def _refresh_achievements_list(
     conn = connect_from_env(_registry_db())
     try:
         with conn.cursor() as cur:
+            from achievements.range import ensure_achievement_range_columns
+
+            ensure_achievement_range_columns(cur, regional_schema)
             achievements = _load_achievements(cur, regional_schema)
             if not reeval_from:
                 chosen = next((a for a in achievements if a.get("id") == selected_id), None)
@@ -882,7 +885,7 @@ def handle_restore_achievements(ack, body, client, logger):
                     )
                     clear_reeval_lock(cur, regional_schema, achievement_id)
                     conn.commit()
-        notice = f"Restored defaults ({added} missing builtin(s) added)."
+        notice = f"Added missing defaults ({added} missing builtin(s) added)."
         if queued:
             notice += " Re-evaluate queued for each."
         _refresh_achievements_list(
@@ -896,7 +899,7 @@ def handle_restore_achievements(ack, body, client, logger):
     except Exception:
         logger.exception("restore achievement defaults failed")
         _refresh_achievements_list(
-            client, body, team_id, regional_schema, "Could not restore achievement defaults."
+            client, body, team_id, regional_schema, "Could not add missing achievement defaults."
         )
     finally:
         conn.close()
@@ -1130,6 +1133,12 @@ def handle_achievement_edit_submit(ack, body, client, logger):
             ensure_achievement_range_columns(cur, regional_schema)
             earliest = earliest_beatdown_date(cur, regional_schema)
             existing = _load_achievement(cur, regional_schema, achievement_id) if achievement_id else None
+            if values.get("activity_list") is None:
+                from achievements.activity import activity_list_from_rule
+
+                values["activity_list"] = (
+                    activity_list_from_rule(existing) if existing else []
+                )
             errors = _validate_achievement(
                 values,
                 require_code=not bool(achievement_id),

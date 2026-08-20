@@ -6,12 +6,15 @@ attendance dates — resolved to the earliest beatdown at evaluation time.
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timedelta
 
 RANGE_FROM_CREATED = "from_created"
 RANGE_SINCE_RULES_CHANGED = "since_rules_changed"
 RANGE_ALL_ATTENDANCE = "all_attendance"
 RANGE_CUSTOM = "custom"
+
+LOG = logging.getLogger(__name__)
 
 RANGE_MODES = (
     RANGE_FROM_CREATED,
@@ -355,7 +358,12 @@ def clear_reeval_lock(cur, schema: str, achievement_id: int) -> None:
             (achievement_id,),
         )
     except Exception:
-        pass
+        LOG.warning(
+            "failed to clear reeval lock schema=%s id=%s",
+            schema,
+            achievement_id,
+            exc_info=True,
+        )
 
 
 def range_confirm_text(award_count: int, pax_count: int) -> str:

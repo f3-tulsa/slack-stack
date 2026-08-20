@@ -1011,6 +1011,33 @@ def test_draft_from_schedule_state_clears_stale_fields():
     assert "interval_days" not in draft
 
 
+def test_draft_from_schedule_state_keeps_cleared_day_and_interval():
+    from config_schedule import draft_from_schedule_state
+
+    monthly = draft_from_schedule_state(
+        {
+            "frequency_type": {
+                "paxminer_schedule_freq": {"selected_option": {"value": "monthly"}}
+            },
+            "month_day_mode": {"val": {"selected_option": {"value": "day"}}},
+            "day_of_month": {"val": {"value": ""}},
+        },
+        {"frequency_type": "monthly", "month_day_mode": "day", "day_of_month": "15"},
+    )
+    assert monthly["day_of_month"] == ""
+
+    custom = draft_from_schedule_state(
+        {
+            "frequency_type": {
+                "paxminer_schedule_freq": {"selected_option": {"value": "custom"}}
+            },
+            "interval_days": {"val": {"value": ""}},
+        },
+        {"frequency_type": "custom", "interval_days": "7"},
+    )
+    assert custom["interval_days"] == ""
+
+
 def test_restore_defaults_is_idempotent():
     from unittest.mock import MagicMock, patch
 
@@ -1874,6 +1901,27 @@ def test_draft_from_report_state_clears_fields_and_keeps_typed_name():
     )
     assert parsed["name"] == "Q Counts"
     assert parsed["fields"] == []
+
+    dated = {
+        "name": {"val": {"value": "Q Counts"}},
+        "fields": {"val": {"selected_options": []}},
+        "time_window_type": {
+            REPORT_WINDOW_ACTION_ID: {"selected_option": {"value": "custom"}}
+        },
+        "window_start": {"val": {"selected_date": "2026-01-01"}},
+        "window_end": {"val": {"selected_date": "2026-01-31"}},
+    }
+    draft = draft_from_report_state(dated, draft)
+    assert draft["window_start"] == "2026-01-01"
+    assert draft["window_end"] == "2026-01-31"
+    cleared_dates = {
+        **dated,
+        "window_start": {"val": {"selected_date": None}},
+        "window_end": {"val": {"selected_date": None}},
+    }
+    draft = draft_from_report_state(cleared_dates, draft)
+    assert draft["window_start"] is None
+    assert draft["window_end"] is None
 
 
 def test_kotter_empty_threshold_acks_errors_without_writing():
