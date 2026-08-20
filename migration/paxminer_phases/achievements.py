@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import sys
 from datetime import date
@@ -18,7 +17,11 @@ from achievements.achievement_rules import (  # noqa: E402
     ACHIEVEMENTS_VIEW_DDL,
     AWARDED_PERIOD_COLUMNS,
 )
-from achievements.activity import classify_activity_type, legacy_activity_to_list  # noqa: E402
+from achievements.activity import (  # noqa: E402
+    activity_json_for_version,
+    classify_activity_type,
+    legacy_activity_to_list,
+)
 from achievements.period import period_bounds, period_key_for_date  # noqa: E402
 
 from paxminer_phases.db import (  # noqa: E402
@@ -145,7 +148,7 @@ def _seed_version_1(cur, schema: str) -> int:
         )
         if cur.fetchone():
             continue
-        activity = legacy_activity_to_list(row.get("activity"))
+        activity_json = activity_json_for_version(legacy_activity_to_list(row.get("activity")))
         version_key = f"{row.get('code') or 'achievement'}_v1"
         cur.execute(
             f"""
@@ -163,7 +166,7 @@ def _seed_version_1(cur, schema: str) -> int:
                 row["id"],
                 version_key,
                 row.get("metric") or "posts",
-                json.dumps(activity),
+                activity_json,
                 row.get("period") or "year",
                 int(row.get("threshold") or 1),
                 row["id"],

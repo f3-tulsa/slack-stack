@@ -2338,7 +2338,7 @@ def test_load_activity_options_uses_slackblast_event_types_in_order():
                     "beatdown",
                     "Bootcamp",
                 ],
-                "enabled": False,
+                "enabled": True,
             }
         }
     }
@@ -2375,6 +2375,7 @@ def test_achievement_edit_modal_activity_options_are_case_insensitive():
     values = [o["value"] for o in activity["element"]["options"]]
     assert values == catalog
     assert "beatdown" not in values
+    assert activity.get("optional") is True
     initial = [o["value"] for o in activity["element"].get("initial_options") or []]
     assert initial == ["Bootcamp"]
 
@@ -2426,6 +2427,41 @@ def test_achievement_edit_modal_activity_options_are_case_insensitive():
         }
     )
     assert bootcamp_only["activity_list"] == ["Bootcamp"]
+
+
+def test_parse_achievement_form_absent_activity_is_none():
+    from config_paxminer import _parse_achievement_form
+
+    payload = _achievement_form_state()
+    del payload["view"]["state"]["values"]["activity"]
+    parsed = _parse_achievement_form(payload)
+    assert parsed["activity_list"] is None
+
+    cleared = _parse_achievement_form(
+        _achievement_form_state(activity={"val": {"selected_options": []}})
+    )
+    assert cleared["activity_list"] == []
+
+
+def test_event_type_options_hidden_when_disabled():
+    from achievements.activity import event_type_options_from_custom_fields
+
+    catalog = {
+        "Event Type": {
+            "name": "Event Type",
+            "type": "Dropdown",
+            "options": ["Bootcamp", "QSource", "Rucking", "2nd F"],
+            "enabled": False,
+        }
+    }
+    assert event_type_options_from_custom_fields(catalog) == []
+    catalog["Event Type"]["enabled"] = True
+    assert event_type_options_from_custom_fields(catalog) == [
+        "Bootcamp",
+        "QSource",
+        "Rucking",
+        "2nd F",
+    ]
 
 
 def test_old_beatdown_sentinel_reopens_with_nothing_selected():

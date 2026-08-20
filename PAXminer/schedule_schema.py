@@ -228,7 +228,7 @@ def upsert_builtin_definitions(
 ) -> dict[str, int]:
     """Upsert builtin definitions by (schema_name, code). Return code -> id map.
 
-    When reset_customized=False (Load/Restore defaults merge), rows an admin has
+    When reset_customized=False (Add Missing Defaults merge), rows an admin has
     customized (is_customized=1) keep their name/window; only missing codes are
     inserted and non-customized builtins are refreshed from JSON.
 
@@ -325,7 +325,7 @@ def seed_default_schedules(
     and skip until an admin picks a channel. dm_all_pax / all_ao_channels will
     fire on the next due tick unless disabled.
 
-    When merge_only=True (Restore Defaults), skip inserting a default whose
+    When merge_only=True (Add Missing Defaults), skip inserting a default whose
     definition already has at least one schedule row (idempotent restore).
 
     When skip_if_any_schedules=True (initial migration), skip inserting schedules

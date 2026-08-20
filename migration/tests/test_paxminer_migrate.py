@@ -181,6 +181,7 @@ def test_achievements_phase_seeds_version_one_and_is_idempotent():
     assert first == 1
     insert = next(c for c in cur.execute.call_args_list if "INSERT INTO" in str(c.args[0]))
     assert insert.args[1][0] == 42
+    assert insert.args[1][3] is None
     assert "WHERE NOT EXISTS" in insert.args[0]
 
     cur.reset_mock()

@@ -62,7 +62,6 @@ DUPLICATE_REPORT_ACTION_ID = "paxminer_report_duplicate"
 SELECT_REPORT_ACTION_ID = "paxminer_report_select"
 REPORT_WINDOW_ACTION_ID = "paxminer_report_window"
 REPORT_TEMPLATE_ACTION_ID = "paxminer_report_template"
-LOAD_DEFAULTS_ACTION_ID = "paxminer_load_defaults"
 DUPLICATE_SCHEDULE_ACTION_ID = "paxminer_schedule_duplicate"
 DELETE_ALL_REPORTS_ACTION_ID = "paxminer_reports_delete_all"
 RESTORE_REPORTS_ACTION_ID = "paxminer_reports_restore_defaults"
@@ -317,7 +316,7 @@ def schedule_delete_warning(name: str) -> str:
 def report_delete_warning(code: str) -> str:
     return (
         f"Deletes `{code}` and any schedules that reference it. "
-        "Restore Defaults can bring builtins back."
+        "Add Missing Defaults can bring builtins back."
     )
 
 
@@ -416,7 +415,7 @@ def _bulk_delete_restore(
             {
                 "type": "button",
                 "action_id": restore_id,
-                "text": {"type": "plain_text", "text": "Restore Defaults"},
+                "text": {"type": "plain_text", "text": "Add Missing Defaults"},
                 "confirm": restore_confirm,
             },
         ],
@@ -474,7 +473,7 @@ def _schedules_list_modal(
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "_No scheduled items yet._ Restore Defaults adds the builtin set.",
+                    "text": "_No scheduled items yet._ Add Missing Defaults adds the builtin set.",
                 },
             }
         )
@@ -511,13 +510,13 @@ def _schedules_list_modal(
                 "Delete All",
             ),
             confirm_dialog(
-                "Restore defaults?",
+                "Add missing defaults?",
                 (
-                    "Adds any missing builtin schedule rows (enabled). "
-                    "Existing schedules are not deleted. Customized builtin reports keep "
-                    "their edits; missing builtins are re-added."
+                    "Adds only builtin schedule rows that are not already present. "
+                    "Existing rows are left as-is, including builtins you have edited. "
+                    "For a true reset, Delete All first, then Add Missing Defaults."
                 ),
-                "Restore",
+                "Add Missing",
             ),
         )
     )
@@ -832,12 +831,10 @@ def draft_from_schedule_state(state: dict, meta_draft: dict | None = None) -> di
     mode = _state_selected(state, "month_day_mode")
     if mode:
         draft["month_day_mode"] = mode
-    dom = _state_text(state, "day_of_month")
-    if dom:
-        draft["day_of_month"] = dom
-    interval = _state_text(state, "interval_days")
-    if interval:
-        draft["interval_days"] = interval
+    if "day_of_month" in state:
+        draft["day_of_month"] = _state_text(state, "day_of_month")
+    if "interval_days" in state:
+        draft["interval_days"] = _state_text(state, "interval_days")
     tod = _state_selected(state, "time_of_day")
     if tod:
         draft["time_of_day"] = tod
@@ -973,7 +970,7 @@ def _reports_list_modal(
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "_No reports yet._ Restore Defaults adds the builtin reports and schedules.",
+                    "text": "_No reports yet._ Add Missing Defaults adds the builtin reports and schedules.",
                 },
             }
         )
@@ -1013,12 +1010,13 @@ def _reports_list_modal(
                 "Delete All",
             ),
             confirm_dialog(
-                "Restore defaults?",
+                "Add missing defaults?",
                 (
-                    "Adds any missing builtin reports and their default schedules. "
-                    "Custom reports and customized builtins (`is_customized`) keep their edits."
+                    "Adds only builtin reports (and their default schedules) that are not "
+                    "already present. Existing rows are left as-is, including builtins you "
+                    "have edited. For a true reset, Delete All first, then Add Missing Defaults."
                 ),
-                "Restore",
+                "Add Missing",
             ),
         )
     )
@@ -1345,9 +1343,7 @@ def draft_from_report_state(state: dict, meta_draft: dict | None = None) -> dict
         draft["fields"] = [o["value"] for o in fields]
     for key in ("window_start", "window_end"):
         if key in state:
-            d = state.get(key, {}).get("val", {}).get("selected_date")
-            if d:
-                draft[key] = d
+            draft[key] = state.get(key, {}).get("val", {}).get("selected_date")
     return draft
 
 

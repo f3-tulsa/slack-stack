@@ -146,6 +146,8 @@ def event_type_options_from_custom_fields(raw: Any) -> list[str]:
             break
     if not isinstance(field, dict):
         return []
+    if not field.get("enabled"):
+        return []
     options = field.get("options") or []
     if not isinstance(options, list):
         return []

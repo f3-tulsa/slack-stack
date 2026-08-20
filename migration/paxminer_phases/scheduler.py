@@ -77,7 +77,7 @@ def run_scheduler(cur, stage: str) -> dict:
         backfill.get("skipped"),
     )
     LOG.info(
-        "Defaults not seeded by migration — use Load defaults / Restore Defaults in Slack"
+        "Defaults not seeded by migration — use Add Missing Defaults in Slack"
     )
 
     return {
