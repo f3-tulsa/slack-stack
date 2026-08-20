@@ -397,7 +397,6 @@ def _achievement_edit_modal(
     activity_options: list[str] | None = None,
 ) -> dict:
     from achievements.activity import (
-        BUILTIN_ACTIVITY_TYPES,
         activity_list_from_rule,
         map_activities_to_options,
         unique_activity_labels,
@@ -405,7 +404,13 @@ def _achievement_edit_modal(
 
     is_edit = bool(row and row.get("id"))
     src = dict(row or {})
-    options = unique_activity_labels(activity_options or list(BUILTIN_ACTIVITY_TYPES))
+    options = unique_activity_labels(
+        [
+            o
+            for o in (activity_options or [])
+            if str(o).strip() and str(o).strip().lower() != "beatdown"
+        ]
+    )
     activity_opts = _select_options(tuple(options))
     selected_activities = map_activities_to_options(activity_list_from_rule(src), options)
     initial_activities = [o for o in activity_opts if o["value"] in selected_activities]
@@ -503,31 +508,59 @@ def _achievement_edit_modal(
                 },
             }
         )
-    blocks.extend(
-        [
-            {
-                "type": "input",
-                "block_id": "metric",
-                "label": {"type": "plain_text", "text": "Metric"},
-                "element": {
-                    "type": "static_select",
-                    "action_id": "val",
-                    "options": _select_options(METRICS),
-                    **_with_initial(_select_options(METRICS), src.get("metric") or "posts"),
-                },
+    blocks.append(
+        {
+            "type": "input",
+            "block_id": "metric",
+            "label": {"type": "plain_text", "text": "Metric"},
+            "element": {
+                "type": "static_select",
+                "action_id": "val",
+                "options": _select_options(METRICS),
+                **_with_initial(_select_options(METRICS), src.get("metric") or "posts"),
             },
+        }
+    )
+    if activity_opts:
+        blocks.append(
             {
                 "type": "input",
                 "block_id": "activity",
                 "optional": True,
-                "label": {"type": "plain_text", "text": "Activity types (empty = all)"},
+                "label": {
+                    "type": "plain_text",
+                    "text": "Event types (empty = any event)",
+                },
+                "hint": {
+                    "type": "plain_text",
+                    "text": "Slackblast Event Types. Empty matches unlabeled posts too.",
+                },
                 "element": {
                     "type": "multi_static_select",
                     "action_id": "val",
                     "options": activity_opts,
                     **({"initial_options": initial_activities} if initial_activities else {}),
                 },
-            },
+            }
+        )
+    else:
+        blocks.append(
+            {
+                "type": "context",
+                "block_id": "activity",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": (
+                            "_No Slackblast Event Types configured. "
+                            "This achievement matches every event, including unlabeled posts._"
+                        ),
+                    }
+                ],
+            }
+        )
+    blocks.extend(
+        [
             {
                 "type": "input",
                 "block_id": "period",
@@ -629,7 +662,7 @@ def _parse_modal_values(payload: dict) -> dict:
 
 
 def _parse_achievement_form(payload: dict) -> dict:
-    from achievements.activity import unique_activity_labels
+    from achievements.activity import canonicalize_activity_filter, unique_activity_labels
 
     state = payload.get("view", {}).get("state", {}).get("values", {})
 
@@ -643,8 +676,10 @@ def _parse_achievement_form(payload: dict) -> dict:
 
     def _multi(block_id: str) -> list[str]:
         opts = (state.get(block_id, {}).get("val", {}) or {}).get("selected_options") or []
-        return unique_activity_labels(
-            [str(o.get("value")).strip() for o in opts if o.get("value")]
+        return canonicalize_activity_filter(
+            unique_activity_labels(
+                [str(o.get("value")).strip() for o in opts if o.get("value")]
+            )
         )
 
     def _date(block_id: str) -> str | None:
@@ -765,22 +800,26 @@ def _load_achievement(cur, schema: str, achievement_id: int) -> dict | None:
     return row
 
 
-def _load_activity_options(cur, schema: str) -> list[str]:
-    from achievements.activity import BUILTIN_ACTIVITY_TYPES, unique_activity_labels
+def _load_activity_options(cur, schema: str, team_id: str | None = None) -> list[str]:
+    """Event Type options from slackblast.regions.custom_fields. No builtins, no beatdown."""
+    from achievements.activity import event_type_options_from_custom_fields
 
-    found: list[str] = []
+    sb_schema = os.environ.get("SLACKBLAST_SCHEMA") or f"slackblast_{os.environ.get('STAGE', 'test')}"
     try:
-        cur.execute(
-            f"""
-            SELECT DISTINCT activity_type FROM `{schema}`.`beatdowns`
-            WHERE activity_type IS NOT NULL AND activity_type != ''
-            ORDER BY activity_type
-            """
-        )
-        found = [str(r["activity_type"]) for r in (cur.fetchall() or []) if r.get("activity_type")]
+        if team_id:
+            cur.execute(
+                f"SELECT custom_fields FROM `{sb_schema}`.`regions` WHERE team_id=%s LIMIT 1",
+                (team_id,),
+            )
+        else:
+            cur.execute(
+                f"SELECT custom_fields FROM `{sb_schema}`.`regions` WHERE paxminer_schema=%s LIMIT 1",
+                (schema,),
+            )
+        row = cur.fetchone() or {}
     except Exception:
-        found = []
-    return unique_activity_labels([*found, *BUILTIN_ACTIVITY_TYPES])[:100]
+        return []
+    return event_type_options_from_custom_fields(row.get("custom_fields"))
 
 
 def _selected_achievement_id(payload: dict) -> int | None:

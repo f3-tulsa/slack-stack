@@ -256,7 +256,7 @@ def handle_add_achievement(ack, body, client, logger):
     conn = connect_from_env(_registry_db())
     try:
         with conn.cursor() as cur:
-            options = _load_activity_options(cur, regional_schema)
+            options = _load_activity_options(cur, regional_schema, team_id)
             draft = _hydrate_range_row(cur, regional_schema, {})
         view = _achievement_edit_modal(team_id, regional_schema, draft, activity_options=options)
         client.views_update(view_id=body["view"]["id"], view=view)
@@ -349,7 +349,7 @@ def handle_edit_achievement(ack, body, client, logger):
     try:
         with conn.cursor() as cur:
             row = _load_achievement(cur, regional_schema, selected_id)
-            options = _load_activity_options(cur, regional_schema)
+            options = _load_activity_options(cur, regional_schema, team_id)
             if row:
                 awards, pax = achievement_award_impact(
                     cur, regional_schema, selected_id
@@ -664,7 +664,7 @@ def handle_duplicate_achievement(ack, body, client, logger):
     try:
         with conn.cursor() as cur:
             row = _load_achievement(cur, regional_schema, selected_id)
-            options = _load_activity_options(cur, regional_schema)
+            options = _load_activity_options(cur, regional_schema, team_id)
             if not row:
                 _refresh_achievements_list(
                     client, body, team_id, regional_schema, "Achievement not found."
