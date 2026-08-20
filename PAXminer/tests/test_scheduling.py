@@ -1783,6 +1783,30 @@ def test_this_month_and_report_title_contract():
     assert "YTD" not in format_report_title("Region leaderboard", (date(2026, 7, 1), date(2026, 7, 31)))
 
 
+def test_caption_with_window_does_not_repeat_period():
+    from scheduling import caption_with_window, format_report_title
+
+    titled = format_report_title("PAX Charts", (date(2026, 7, 1), date(2026, 7, 31)))
+    assert titled == "PAX Charts (July 2026)"
+    assert caption_with_window(titled, "July 2026", "your posting summary") == "PAX Charts (July 2026)"
+    assert (
+        caption_with_window(None, "July 2026", "your posting summary")
+        == "your posting summary for July 2026"
+    )
+    assert caption_with_window("PAX Charts", "July 2026", "x") == "PAX Charts for July 2026"
+
+
+def test_pax_and_q_captions_use_caption_with_window():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    pax = (root / "monthly_charts" / "PAXcharter.py").read_text()
+    q = (root / "monthly_charts" / "Qcharter.py").read_text()
+    assert "caption_with_window" in pax
+    assert "caption_with_window" in q
+    assert '+ " for "' not in pax.split("def pax_chart_dm_text", 1)[1].split("def run_pax_charter", 1)[0]
+
+
 def test_region_leaderboard_drops_bonus_ytd_and_honors_top_n():
     import inspect
 

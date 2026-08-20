@@ -875,55 +875,6 @@ def load_achievement_defaults() -> list[dict]:
     return data
 
 
-def restore_achievement_defaults(cur, schema: str) -> int:
-    added = 0
-    for seed in load_achievement_defaults():
-        cur.execute(
-            f"SELECT id FROM `{schema}`.`achievements_list` WHERE code=%s",
-            (seed["code"],),
-        )
-        if cur.fetchone():
-            continue
-        cur.execute(
-            f"""
-            INSERT INTO `{schema}`.`achievements_list`
-            (name, description, verb, code, metric, activity, period, threshold)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                seed["name"],
-                seed["description"],
-                seed["verb"],
-                seed["code"],
-                seed["metric"],
-                seed["activity"],
-                seed["period"],
-                seed["threshold"],
-            ),
-        )
-        added += 1
-    return added
-
-
-def delete_all_achievements(cur, schema: str) -> dict[str, int]:
-    """Wipe awards, versions, and rules. Counts awards/PAX before the delete."""
-    cur.execute(
-        f"SELECT COUNT(*) AS awards, COUNT(DISTINCT pax_id) AS pax "
-        f"FROM `{schema}`.`achievements_awarded`"
-    )
-    row = cur.fetchone() or {}
-    awards = int(row.get("awards") or 0)
-    pax = int(row.get("pax") or 0)
-    cur.execute(f"DELETE FROM `{schema}`.`achievements_awarded`")
-    cur.execute(f"DELETE FROM `{schema}`.`achievement_versions`")
-    cur.execute(f"DELETE FROM `{schema}`.`achievements_list`")
-    return {
-        "awards": awards,
-        "pax": pax,
-        "achievements": int(cur.rowcount or 0),
-    }
-
-
 def achievement_delete_confirm_text(code: str, award_count: int, pax_count: int) -> str:
     """Native Slack confirm copy for deleting one achievement from the edit modal."""
     awards = counted_noun(award_count, "award")
