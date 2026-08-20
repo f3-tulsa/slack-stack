@@ -2563,3 +2563,42 @@ def test_insert_version_stores_sql_null_for_empty_activity():
         created_by="U1",
     )
     assert cur.execute.call_args[0][1][4] == '["Bootcamp"]'
+
+
+def test_version_key_includes_version_and_is_unique_for_same_minute_saves():
+    from datetime import datetime
+    from unittest.mock import patch
+    from uuid import UUID
+
+    from achievements.versions import insert_version, version_key_for
+
+    when = datetime(2026, 8, 20, 15, 54, 1)
+    with patch(
+        "achievements.versions.uuid4",
+        return_value=UUID("12345678-1234-5678-1234-567812345678"),
+    ):
+        key = version_key_for("the_priest", 3, when=when)
+    assert key == "the_priest_v3_20260820155401_12345678"
+    assert version_key_for("the_priest", 2, when=when) != version_key_for(
+        "the_priest", 3, when=when
+    )
+    keys = {version_key_for("the_priest", 3) for _ in range(8)}
+    assert len(keys) == 8
+
+    cur = MagicMock()
+    cur.lastrowid = 12
+    insert_version(
+        cur,
+        "f3test",
+        achievement_id=3,
+        code="the_priest",
+        metric="posts",
+        activity_list=[],
+        period="year",
+        threshold=25,
+        effective_from=None,
+        effective_to=None,
+        created_by="U1",
+        version=3,
+    )
+    assert cur.execute.call_args[0][1][2].startswith("the_priest_v3_")
