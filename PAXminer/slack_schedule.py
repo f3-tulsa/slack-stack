@@ -24,6 +24,9 @@ from config_schedule import (
     OPEN_KOTTER_CONFIG_ACTION_ID,
     OPEN_REPORTS_ACTION_ID,
     OPEN_SCHEDULE_ACTION_ID,
+    MORE_REPORT_ACTION_ID,
+    MORE_SCHEDULE_ACTION_ID,
+    REPORT_DELETE_CONFIRM_CALLBACK_ID,
     REPORT_EDIT_CALLBACK_ID,
     REPORT_TEMPLATE_ACTION_ID,
     REPORT_WINDOW_ACTION_ID,
@@ -33,6 +36,7 @@ from config_schedule import (
     RESTORE_DEFAULTS_ACTION_ID,
     RESTORE_REPORTS_ACTION_ID,
     RUN_NOW_SCHEDULE_ACTION_ID,
+    SCHEDULE_DELETE_CONFIRM_CALLBACK_ID,
     SCHEDULE_DEST_TYPE_ACTION_ID,
     SCHEDULE_EDIT_CALLBACK_ID,
     SCHEDULE_FREQ_ACTION_ID,
@@ -57,11 +61,15 @@ from config_schedule import (
     parse_kotter_form,
     parse_report_form,
     parse_schedule_form,
+    report_delete_warning,
     schedule_as_new_draft,
+    schedule_delete_warning,
     selected_report_id,
     selected_schedule_id,
+    validate_kotter_form,
     validate_report_form,
     validate_schedule_form,
+    _metadata,
 )
 from config_paxminer import (
     _achievements_list_modal,
@@ -74,7 +82,17 @@ from schedule_schema import (
     delete_all_definitions_and_schedules,
     delete_all_schedules,
     delete_definition_and_schedules,
+    ensure_report_enabled_column,
     restore_defaults,
+)
+from slack_blocks import (
+    OVERFLOW_DELETE,
+    OVERFLOW_DISABLE,
+    OVERFLOW_DUPLICATE,
+    OVERFLOW_EDIT,
+    OVERFLOW_ENABLE,
+    delete_confirm_modal,
+    parse_overflow_action,
 )
 from slack_http import is_slack_admin, notify_admin_required
 
@@ -118,6 +136,7 @@ def queue_achievement_backfill(
     actor: str,
     start: str | None = None,
     end: str | None = None,
+    automatic: bool = False,
 ) -> None:
     """Ack-friendly async invoke of reconcile_rule_awards via ScheduleFunction."""
     import boto3
@@ -137,6 +156,8 @@ def queue_achievement_backfill(
         payload["start"] = start_s
     if end_s:
         payload["end"] = end_s
+    if automatic:
+        payload["automatic"] = True
     boto3.client("lambda").invoke(
         FunctionName=fn,
         InvocationType="Event",
@@ -161,6 +182,9 @@ def register_schedule_listeners(app) -> None:
             return False
         return True
 
+    def _noop_ack(*_a, **_k):
+        return None
+
     def _refresh_schedule_list(
         client,
         body,
@@ -178,10 +202,11 @@ def register_schedule_listeners(app) -> None:
             or "paxminer"
         )
         try:
+            meta = _parse_metadata((body.get("view") or {}).get("private_metadata"))
             with conn.cursor() as cur:
                 schedules = load_schedules(cur, pm, regional_schema)
             client.views_update(
-                view_id=body["view"]["id"],
+                view_id=meta.get("list_view_id") or body["view"]["id"],
                 view=_schedules_list_modal(
                     team_id,
                     regional_schema,
@@ -196,8 +221,8 @@ def register_schedule_listeners(app) -> None:
             conn.close()
 
     def _refresh_reports_list(client, body, team_id, regional_schema, notice=None, page=None):
+        meta = _parse_metadata((body.get("view") or {}).get("private_metadata"))
         if page is None:
-            meta = _parse_metadata((body.get("view") or {}).get("private_metadata"))
             try:
                 page = int(meta.get("page") or 0)
             except (TypeError, ValueError):
@@ -210,9 +235,11 @@ def register_schedule_listeners(app) -> None:
         )
         try:
             with conn.cursor() as cur:
+                ensure_report_enabled_column(cur, pm)
                 defs = load_definitions(cur, pm, regional_schema)
+            conn.commit()
             client.views_update(
-                view_id=body["view"]["id"],
+                view_id=meta.get("list_view_id") or body["view"]["id"],
                 view=_reports_list_modal(
                     team_id, regional_schema, defs, notice=notice, page=page
                 ),
@@ -263,7 +290,9 @@ def register_schedule_listeners(app) -> None:
         )
         try:
             with conn.cursor() as cur:
+                ensure_report_enabled_column(cur, pm)
                 defs = load_definitions(cur, pm, regional_schema)
+            conn.commit()
             client.views_push(
                 trigger_id=body["trigger_id"],
                 view=_reports_list_modal(team_id, regional_schema, defs),
@@ -691,7 +720,7 @@ def register_schedule_listeners(app) -> None:
                         SET report_definition_id=%s, destination_type=%s,
                             destination_channels=%s, destination_users=%s,
                             frequency_type=%s, day_of_week=%s, month_day_mode=%s,
-                            day_of_month=%s, time_of_day=%s, custom_spec=%s, enabled=%s
+                            day_of_month=%s, time_of_day=%s, custom_spec=%s
                         WHERE id=%s
                         """,
                         (
@@ -707,7 +736,6 @@ def register_schedule_listeners(app) -> None:
                             if len(values["time_of_day"]) == 5
                             else values["time_of_day"],
                             custom,
-                            values["enabled"],
                             values["schedule_id"],
                         ),
                     )
@@ -735,7 +763,7 @@ def register_schedule_listeners(app) -> None:
                             if len(values["time_of_day"]) == 5
                             else values["time_of_day"],
                             custom,
-                            values["enabled"],
+                            1,
                         ),
                     )
                 conn.commit()
@@ -811,7 +839,7 @@ def register_schedule_listeners(app) -> None:
         rid = selected_report_id(body)
         if not rid:
             _refresh_reports_list(
-                client, body, team_id, regional_schema, notice="Open a report with the pencil first."
+                client, body, team_id, regional_schema, notice="Open a report from More first."
             )
             return
         pm = paxminer_schema_from_env()
@@ -849,7 +877,7 @@ def register_schedule_listeners(app) -> None:
                 team_id,
                 regional_schema,
                 region or {},
-                notice="Open a schedule with the pencil first.",
+                notice="Open a schedule from More first.",
             )
             return
         pm = paxminer_schema_from_env()
@@ -989,6 +1017,186 @@ def register_schedule_listeners(app) -> None:
             _refresh_reports_list(client, body, team_id, regional_schema, notice=notice)
         finally:
             conn.close()
+
+    def _push_schedule_delete_confirm(body, client, logger, schedule_id: int) -> None:
+        team_id, regional_schema, region = _ctx(body)
+        pm = paxminer_schema_from_env()
+        conn = connect_from_env(
+            os.environ.get("PAXMINER_REGISTRY_DATABASE")
+            or os.environ.get("PAXMINER_SCHEMA")
+            or "paxminer"
+        )
+        try:
+            with conn.cursor() as cur:
+                row = load_schedule(cur, pm, schedule_id)
+            if not row:
+                _refresh_schedule_list(
+                    client,
+                    body,
+                    team_id,
+                    regional_schema,
+                    region or {},
+                    notice="Schedule not found.",
+                )
+                return
+            name = row.get("definition_name") or f"#{schedule_id}"
+            client.views_push(
+                trigger_id=body["trigger_id"],
+                view=delete_confirm_modal(
+                    callback_id=SCHEDULE_DELETE_CONFIRM_CALLBACK_ID,
+                    title="Delete schedule?",
+                    warning=schedule_delete_warning(name),
+                    metadata=_metadata(
+                        team_id,
+                        regional_schema,
+                        schedule_id=schedule_id,
+                        list_view_id=body["view"]["id"],
+                    ),
+                ),
+            )
+        except Exception:
+            logger.exception("schedule delete confirm failed id=%s", schedule_id)
+            _refresh_schedule_list(
+                client,
+                body,
+                team_id,
+                regional_schema,
+                region or {},
+                notice="Could not open delete confirmation.",
+            )
+        finally:
+            conn.close()
+
+    def _toggle_report_enabled(body, client, logger, definition_id: int) -> None:
+        team_id, regional_schema, region = _ctx(body)
+        pm = paxminer_schema_from_env()
+        conn = connect_from_env(
+            os.environ.get("PAXMINER_REGISTRY_DATABASE")
+            or os.environ.get("PAXMINER_SCHEMA")
+            or "paxminer"
+        )
+        try:
+            with conn.cursor() as cur:
+                ensure_report_enabled_column(cur, pm)
+                cur.execute(
+                    f"UPDATE `{pm}`.`region_report_definitions` "
+                    "SET enabled = 1 - COALESCE(enabled, 0) WHERE id=%s",
+                    (definition_id,),
+                )
+                row = load_definition(cur, pm, definition_id)
+                conn.commit()
+            enabled = int((row or {}).get("enabled") or 0) == 1
+            code = (row or {}).get("code") or definition_id
+            notice = f"Enabled `{code}`." if enabled else f"Disabled `{code}`."
+            _refresh_reports_list(client, body, team_id, regional_schema, notice=notice)
+        except Exception:
+            logger.exception("report toggle failed id=%s", definition_id)
+            _refresh_reports_list(
+                client,
+                body,
+                team_id,
+                regional_schema,
+                notice="Could not update enabled flag — try again.",
+            )
+        finally:
+            conn.close()
+
+    def _push_report_delete_confirm(body, client, logger, definition_id: int) -> None:
+        team_id, regional_schema, region = _ctx(body)
+        pm = paxminer_schema_from_env()
+        conn = connect_from_env(
+            os.environ.get("PAXMINER_REGISTRY_DATABASE")
+            or os.environ.get("PAXMINER_SCHEMA")
+            or "paxminer"
+        )
+        try:
+            with conn.cursor() as cur:
+                row = load_definition(cur, pm, definition_id)
+            if not row:
+                _refresh_reports_list(
+                    client, body, team_id, regional_schema, notice="Report not found."
+                )
+                return
+            code = row.get("code") or str(definition_id)
+            client.views_push(
+                trigger_id=body["trigger_id"],
+                view=delete_confirm_modal(
+                    callback_id=REPORT_DELETE_CONFIRM_CALLBACK_ID,
+                    title="Delete report?",
+                    warning=report_delete_warning(code),
+                    metadata=_metadata(
+                        team_id,
+                        regional_schema,
+                        definition_id=definition_id,
+                        list_view_id=body["view"]["id"],
+                    ),
+                ),
+            )
+        except Exception:
+            logger.exception("report delete confirm failed id=%s", definition_id)
+            _refresh_reports_list(
+                client,
+                body,
+                team_id,
+                regional_schema,
+                notice="Could not open delete confirmation.",
+            )
+        finally:
+            conn.close()
+
+    @app.action(MORE_SCHEDULE_ACTION_ID)
+    def handle_schedule_more(ack, body, client, logger):
+        if not _admin_ack(ack, body, client):
+            return
+        action = (body.get("actions") or [{}])[0]
+        verb, row_id = parse_overflow_action(action)
+        team_id, regional_schema, region = _ctx(body)
+        if not verb or not row_id:
+            _refresh_schedule_list(
+                client,
+                body,
+                team_id,
+                regional_schema,
+                region or {},
+                notice="Could not read that menu action.",
+            )
+            return
+        inner = dict(body)
+        inner["actions"] = [{**action, "value": str(row_id), "action_id": action.get("action_id")}]
+        if verb == OVERFLOW_EDIT:
+            edit_schedule(_noop_ack, inner, client, logger)
+        elif verb == OVERFLOW_DUPLICATE:
+            duplicate_schedule(_noop_ack, inner, client, logger)
+        elif verb in (OVERFLOW_DISABLE, OVERFLOW_ENABLE):
+            toggle_schedule(_noop_ack, inner, client, logger)
+        elif verb == OVERFLOW_DELETE:
+            _push_schedule_delete_confirm(body, client, logger, row_id)
+
+    @app.action(MORE_REPORT_ACTION_ID)
+    def handle_report_more(ack, body, client, logger):
+        if not _admin_ack(ack, body, client):
+            return
+        action = (body.get("actions") or [{}])[0]
+        verb, row_id = parse_overflow_action(action)
+        team_id, regional_schema, _region = _ctx(body)
+        if not verb or not row_id:
+            _refresh_reports_list(
+                client, body, team_id, regional_schema, notice="Could not read that menu action."
+            )
+            return
+        inner = dict(body)
+        inner["actions"] = [{**action, "value": str(row_id), "action_id": action.get("action_id")}]
+        if verb == OVERFLOW_EDIT:
+            edit_report(_noop_ack, inner, client, logger)
+        elif verb == OVERFLOW_DUPLICATE:
+            duplicate_report(_noop_ack, inner, client, logger)
+        elif verb in (OVERFLOW_DISABLE, OVERFLOW_ENABLE):
+            _toggle_report_enabled(body, client, logger, row_id)
+        elif verb == OVERFLOW_DELETE:
+            _push_report_delete_confirm(body, client, logger, row_id)
+
+    app.view(SCHEDULE_DELETE_CONFIRM_CALLBACK_ID)(delete_schedule)
+    app.view(REPORT_DELETE_CONFIRM_CALLBACK_ID)(delete_report)
 
     @app.action(REPORT_WINDOW_ACTION_ID)
     def report_window_change(ack, body, client, logger):
@@ -1184,6 +1392,10 @@ def register_schedule_listeners(app) -> None:
             ack(response_action="errors", errors={"NO_POST_THRESHOLD": "Region key missing"})
             return
         values = parse_kotter_form(body)
+        errors = validate_kotter_form(values)
+        if errors:
+            ack(response_action="errors", errors=errors)
+            return
         pm = paxminer_schema_from_env()
         try:
             conn = connect_from_env(

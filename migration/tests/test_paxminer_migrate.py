@@ -339,3 +339,35 @@ def test_weaselbot_seed_update_is_cosmetic_only():
     assert updates
     assert "SET name=%s, description=%s, verb=%s" in updates[0]
     assert "metric=%s" not in updates[0]
+
+
+def test_achievements_phase_adds_range_mode_and_backfills():
+    from paxminer_phases import achievements as ach
+
+    cur = MagicMock()
+    with (
+        patch.object(ach, "_column_exists", return_value=False),
+        patch.object(ach, "_index_exists", return_value=True),
+        patch.object(ach, "_table_exists", return_value=True),
+        patch.object(ach, "_seed_version_1", return_value=0),
+        patch.object(ach, "_backfill_award_periods", return_value=0),
+        patch.object(
+            ach,
+            "_enforce_award_period_unique",
+            return_value={
+                "duplicates_deleted": 0,
+                "null_period_key": 0,
+                "unique_added": False,
+                "unique_already_present": True,
+            },
+        ),
+        patch.object(ach, "_classify_activity_types", return_value=0),
+        patch.object(ach, "_refresh_view", return_value=True),
+        patch("achievements.range.backfill_range_mode", return_value=7) as bf,
+    ):
+        result = ach.migrate_regional_schema(cur, "f3test")
+    sql = " ".join(str(c) for c in cur.execute.call_args_list)
+    assert "range_mode" in sql
+    assert "reeval_queued_at" in sql
+    bf.assert_called_once()
+    assert result["range_modes_backfilled"] == 7

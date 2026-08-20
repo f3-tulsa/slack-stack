@@ -7,7 +7,7 @@ import logging
 from datetime import date, datetime
 from typing import Any
 
-from slack_blocks import confirm_dialog, context, page_nav_elements, pencil_row
+from slack_blocks import confirm_dialog, context, overflow_row, page_nav_elements, parse_overflow_action
 from scheduling import (
     ALLOWED_SOURCES,
     DESTINATION_TYPES,
@@ -41,7 +41,9 @@ OPEN_ACHIEVEMENTS_ACTION_ID = "paxminer_open_achievements_hub"
 
 ADD_SCHEDULE_ACTION_ID = "paxminer_schedule_add"
 EDIT_SCHEDULE_ACTION_ID = "paxminer_schedule_edit"
+MORE_SCHEDULE_ACTION_ID = "paxminer_schedule_more"
 DELETE_SCHEDULE_ACTION_ID = "paxminer_schedule_delete"
+SCHEDULE_DELETE_CONFIRM_CALLBACK_ID = "paxminer-schedule-delete-confirm-id"
 TOGGLE_SCHEDULE_ACTION_ID = "paxminer_schedule_toggle"
 DELETE_ALL_SCHEDULES_ACTION_ID = "paxminer_schedule_delete_all"
 RESTORE_DEFAULTS_ACTION_ID = "paxminer_schedule_restore_defaults"
@@ -53,7 +55,9 @@ SCHEDULE_REPORT_ACTION_ID = "paxminer_schedule_report"
 
 ADD_REPORT_ACTION_ID = "paxminer_report_add"
 EDIT_REPORT_ACTION_ID = "paxminer_report_edit"
+MORE_REPORT_ACTION_ID = "paxminer_report_more"
 DELETE_REPORT_ACTION_ID = "paxminer_report_delete"
+REPORT_DELETE_CONFIRM_CALLBACK_ID = "paxminer-report-delete-confirm-id"
 DUPLICATE_REPORT_ACTION_ID = "paxminer_report_duplicate"
 SELECT_REPORT_ACTION_ID = "paxminer_report_select"
 REPORT_WINDOW_ACTION_ID = "paxminer_report_window"
@@ -218,8 +222,11 @@ def load_definition(cur, pm_schema: str, definition_id: int) -> dict | None:
 
 
 def action_row_id(payload: dict) -> int | None:
-    """Integer `value` on the clicked button (pencil / edit-screen actions)."""
+    """Integer id from a button `value` or overflow `verb:id` selection."""
     action = (payload.get("actions") or [{}])[0]
+    _verb, oid = parse_overflow_action(action)
+    if oid is not None:
+        return oid
     raw = action.get("value")
     try:
         return int(raw) if raw not in (None, "") else None
@@ -303,10 +310,23 @@ def report_window_phrase(row: dict) -> str | None:
     return _WINDOW_LABELS.get(wtype, str(wtype).replace("_", " ").title())
 
 
+def schedule_delete_warning(name: str) -> str:
+    return f"Remove the schedule for *{name}*?"
+
+
+def report_delete_warning(code: str) -> str:
+    return (
+        f"Deletes `{code}` and any schedules that reference it. "
+        "Restore Defaults can bring builtins back."
+    )
+
+
 def report_subline(row: dict) -> str:
+    enabled = "Enabled" if int(row.get("enabled") if row.get("enabled") is not None else 1) else "Disabled"
     kind = "Builtin" if row.get("is_builtin") else "Custom"
     window = report_window_phrase(row)
-    return f"{kind} | {window}" if window else kind
+    prefix = f"{enabled} | {kind}"
+    return f"{prefix} | {window}" if window else prefix
 
 
 def duplicate_report_draft(cur, pm_schema: str, regional_schema: str, row: dict) -> dict:
@@ -367,7 +387,7 @@ def achievement_rule_hint(row: dict) -> str:
 
 
 def achievement_subline(row: dict) -> str:
-    enabled = "Enabled" if int(row.get("enabled") or 1) else "Disabled"
+    enabled = "Enabled" if int(row.get("enabled") or 0) else "Disabled"
     return f"{enabled} | {achievement_rule_hint(row)}"
 
 
@@ -413,7 +433,7 @@ def _schedules_list_modal(
     notice: str | None = None,
     selected_schedule_id: int | None = None,
 ) -> dict:
-    del selected_schedule_id  # pencil rows replace the old dropdown
+    del selected_schedule_id  # overflow rows replace the old dropdown
     blocks: list[dict] = []
     if notice:
         blocks.append(context(notice))
@@ -425,7 +445,7 @@ def _schedules_list_modal(
                 "text": (
                     f"*Schedule* ({regional_schema})\n"
                     f"Times are *{timezone_name}* (region TZ). "
-                    "Pencil opens Edit. Disable items you do not want "
+                    "Use ⋯ More on a row to Edit, Duplicate, Disable, or Delete "
                     "(especially PAX chart DMs and all-AO fan-out)."
                 ),
             },
@@ -439,7 +459,14 @@ def _schedules_list_modal(
     if page_rows:
         for row in page_rows:
             name = row.get("definition_name") or f"Schedule #{row.get('id')}"
-            blocks.append(pencil_row(name, EDIT_SCHEDULE_ACTION_ID, str(row["id"])))
+            blocks.append(
+                overflow_row(
+                    name,
+                    MORE_SCHEDULE_ACTION_ID,
+                    row["id"],
+                    enabled=int(row.get("enabled") or 0) == 1,
+                )
+            )
             blocks.append(context(schedule_subline(row)))
     else:
         blocks.append(
@@ -748,36 +775,11 @@ def _schedule_edit_modal(
             },
         }
     )
-    enabled_opt = {
-        "text": {"type": "plain_text", "text": "Run this schedule"},
-        "value": "1",
-    }
-    enabled_el: dict[str, Any] = {
-        "type": "checkboxes",
-        "action_id": "val",
-        "options": [enabled_opt],
-    }
-    if draft.get("enabled") not in (False, 0, "0", "false", "False"):
-        enabled_el["initial_options"] = [enabled_opt]
-    blocks.append(
-        {
-            "type": "input",
-            "block_id": "enabled",
-            "optional": True,
-            "label": {"type": "plain_text", "text": "Enabled"},
-            "element": enabled_el,
-        }
-    )
 
     schedule_id = (schedule or {}).get("id")
     is_edit = bool(schedule_id)
     if is_edit:
         sid = str(schedule_id)
-        name = (
-            (schedule or {}).get("definition_name")
-            or draft.get("definition_name")
-            or f"#{sid}"
-        )
         blocks.append(
             {
                 "type": "actions",
@@ -785,26 +787,9 @@ def _schedule_edit_modal(
                 "elements": [
                     {
                         "type": "button",
-                        "action_id": DUPLICATE_SCHEDULE_ACTION_ID,
-                        "text": {"type": "plain_text", "text": "Duplicate"},
-                        "value": sid,
-                    },
-                    {
-                        "type": "button",
                         "action_id": RUN_NOW_SCHEDULE_ACTION_ID,
                         "text": {"type": "plain_text", "text": "Run Now"},
                         "value": sid,
-                    },
-                    {
-                        "type": "button",
-                        "action_id": DELETE_SCHEDULE_ACTION_ID,
-                        "text": {"type": "plain_text", "text": "Delete"},
-                        "style": "danger",
-                        "value": sid,
-                        "confirm": confirm_dialog(
-                            "Delete schedule?",
-                            f"Remove the schedule for *{name}*?",
-                        ),
                     },
                 ],
             }
@@ -974,7 +959,12 @@ def _reports_list_modal(
     if page_rows:
         for row in page_rows:
             blocks.append(
-                pencil_row(row.get("name") or row.get("code") or f"#{row.get('id')}", EDIT_REPORT_ACTION_ID, str(row["id"]))
+                overflow_row(
+                    row.get("name") or row.get("code") or f"#{row.get('id')}",
+                    MORE_REPORT_ACTION_ID,
+                    row["id"],
+                    enabled=int(row.get("enabled") if row.get("enabled") is not None else 1) == 1,
+                )
             )
             blocks.append(context(report_subline(row)))
     else:
@@ -1309,39 +1299,7 @@ def _report_edit_modal(
             }
         )
 
-    is_edit = bool(row and row.get("id"))
-    if is_edit:
-        rid = str(row["id"])
-        code = row.get("code") or draft.get("code") or rid
-        blocks.append(
-            {
-                "type": "actions",
-                "block_id": "report_edit_extras",
-                "elements": [
-                    {
-                        "type": "button",
-                        "action_id": DUPLICATE_REPORT_ACTION_ID,
-                        "text": {"type": "plain_text", "text": "Duplicate"},
-                        "value": rid,
-                    },
-                    {
-                        "type": "button",
-                        "action_id": DELETE_REPORT_ACTION_ID,
-                        "text": {"type": "plain_text", "text": "Delete"},
-                        "style": "danger",
-                        "value": rid,
-                        "confirm": confirm_dialog(
-                            "Delete report?",
-                            (
-                                f"Deletes `{code}` and any schedules that reference it. "
-                                "Restore Defaults can bring builtins back."
-                            ),
-                        ),
-                    },
-                ],
-            }
-        )
-
+    is_edit = not is_add
     return {
         "type": "modal",
         "callback_id": REPORT_EDIT_CALLBACK_ID,
@@ -1362,31 +1320,34 @@ def _report_edit_modal(
 def draft_from_report_state(state: dict, meta_draft: dict | None = None) -> dict:
     draft = dict(meta_draft or {})
     for key in ("name", "code", "top_n", "window_days"):
-        val = _state_text(state, key)
-        if val:
-            draft[key] = val
+        if key in state:
+            draft[key] = _state_text(state, key)
     for key, action in (
         ("kind", "val"),
         ("source", "val"),
         ("metric", "val"),
         ("group_by", "val"),
     ):
-        sel = _state_selected(state, key, action)
-        if sel:
-            draft[key] = sel
-    w = _state_selected(state, "time_window_type", REPORT_WINDOW_ACTION_ID)
-    if w:
-        draft["time_window_type"] = w
-    tmpl = _state_selected(state, "report_type", REPORT_TEMPLATE_ACTION_ID)
-    if tmpl:
-        draft["report_type"] = tmpl
-    fields = state.get("fields", {}).get("val", {}).get("selected_options") or []
-    if fields:
+        if key in state:
+            sel = _state_selected(state, key, action)
+            if sel:
+                draft[key] = sel
+    if "time_window_type" in state:
+        w = _state_selected(state, "time_window_type", REPORT_WINDOW_ACTION_ID)
+        if w:
+            draft["time_window_type"] = w
+    if "report_type" in state:
+        tmpl = _state_selected(state, "report_type", REPORT_TEMPLATE_ACTION_ID)
+        if tmpl:
+            draft["report_type"] = tmpl
+    if "fields" in state:
+        fields = state.get("fields", {}).get("val", {}).get("selected_options") or []
         draft["fields"] = [o["value"] for o in fields]
     for key in ("window_start", "window_end"):
-        d = state.get(key, {}).get("val", {}).get("selected_date")
-        if d:
-            draft[key] = d
+        if key in state:
+            d = state.get(key, {}).get("val", {}).get("selected_date")
+            if d:
+                draft[key] = d
     return draft
 
 
@@ -1510,22 +1471,37 @@ def parse_kotter_form(payload: dict) -> dict:
 
     state = payload.get("view", {}).get("state", {}).get("values", {})
     return {
-        "NO_POST_THRESHOLD": _to_int(state.get("NO_POST_THRESHOLD", {}).get("val", {}).get("value"), 2),
-        "REMINDER_WEEKS": _to_int(state.get("REMINDER_WEEKS", {}).get("val", {}).get("value"), 2),
-        "HOME_AO_CAPTURE": _to_int(state.get("HOME_AO_CAPTURE", {}).get("val", {}).get("value"), 8),
+        "NO_POST_THRESHOLD": _to_int(state.get("NO_POST_THRESHOLD", {}).get("val", {}).get("value"), None),
+        "REMINDER_WEEKS": _to_int(state.get("REMINDER_WEEKS", {}).get("val", {}).get("value"), None),
+        "HOME_AO_CAPTURE": _to_int(state.get("HOME_AO_CAPTURE", {}).get("val", {}).get("value"), None),
         "NO_Q_THRESHOLD_WEEKS": _to_int(
-            state.get("NO_Q_THRESHOLD_WEEKS", {}).get("val", {}).get("value"), 4
+            state.get("NO_Q_THRESHOLD_WEEKS", {}).get("val", {}).get("value"), None
         ),
         "NO_Q_THRESHOLD_POSTS": _to_int(
-            state.get("NO_Q_THRESHOLD_POSTS", {}).get("val", {}).get("value"), 4
+            state.get("NO_Q_THRESHOLD_POSTS", {}).get("val", {}).get("value"), None
         ),
     }
+
+
+def validate_kotter_form(values: dict) -> dict[str, str]:
+    errors: dict[str, str] = {}
+    for key in (
+        "NO_POST_THRESHOLD",
+        "REMINDER_WEEKS",
+        "HOME_AO_CAPTURE",
+        "NO_Q_THRESHOLD_WEEKS",
+        "NO_Q_THRESHOLD_POSTS",
+    ):
+        if values.get(key) is None:
+            errors[key] = "Enter a whole number"
+    return errors
 
 
 def selected_schedule_id(payload: dict) -> int | None:
     action = (payload.get("actions") or [{}])[0]
     aid = action.get("action_id")
     if aid in {
+        MORE_SCHEDULE_ACTION_ID,
         EDIT_SCHEDULE_ACTION_ID,
         DELETE_SCHEDULE_ACTION_ID,
         DUPLICATE_SCHEDULE_ACTION_ID,
@@ -1555,6 +1531,7 @@ def selected_report_id(payload: dict) -> int | None:
     action = (payload.get("actions") or [{}])[0]
     aid = action.get("action_id")
     if aid in {
+        MORE_REPORT_ACTION_ID,
         EDIT_REPORT_ACTION_ID,
         DELETE_REPORT_ACTION_ID,
         DUPLICATE_REPORT_ACTION_ID,

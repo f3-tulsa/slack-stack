@@ -27,6 +27,7 @@ if str(_PAX_ROOT) not in sys.path:
     sys.path.insert(0, str(_PAX_ROOT))
 
 from scheduling import (  # noqa: E402
+    caption_with_window,
     default_chart_window,
     format_window_label,
     window_file_tag,
@@ -40,9 +41,7 @@ def pax_chart_dm_text(user_id, pax, title, label) -> str:
         "Hey "
         + mention(user_id, pax)
         + "! Here is "
-        + (title or "your posting summary")
-        + " for "
-        + label
+        + caption_with_window(title, label, "your posting summary")
         + ". \nPush yourself, get those bars higher every month! SYITG!"
     )
 

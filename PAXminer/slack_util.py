@@ -151,20 +151,96 @@ def mention(
 
     Preference order:
     1. ``<@U…>`` when the ID is Slack-shaped and (if known_ids given) in-roster
-    2. Inline-code user ID when we cannot mention but have an ID
-    3. Inline-code display name when that is all we have
-    4. `` `unknown PAX` `` when neither is usable
+    2. Inline-code display name when we cannot mention
+    3. `` `unknown PAX` `` when neither is usable
+
+    Never puts a Slack user ID in code ticks.
     """
     uid = _clean_str(user_id)
     display = _clean_str(name)
     if uid and is_slack_user_id(uid):
         if known_ids is None or uid in known_ids:
             return f"<@{uid}>"
-    if uid:
-        return f"`{uid}`"
     if display:
         return f"`{display}`"
+    if uid and not is_slack_user_id(uid):
+        return f"`{uid}`"
     return "`unknown PAX`"
+
+
+def ticked_display_name(name: str | None, *, fallback: str = "admin") -> str:
+    """Wrap a display name in code ticks. Never ticks a Slack user ID."""
+    cleaned = _clean_str(name) or ""
+    if not cleaned or is_slack_user_id(cleaned):
+        cleaned = fallback
+    return f"`{cleaned}`"
+
+
+def resolve_display_name(client, user_id: str, *, fallback: str = "admin") -> str:
+    """Current Slack display name for logs. Never returns a Slack user ID."""
+    uid = (user_id or "").strip()
+    if not uid:
+        return fallback
+    if not is_slack_user_id(uid):
+        return uid
+    if client is None:
+        return fallback
+    name = slack_display_name(client, uid)
+    if not isinstance(name, str) or not name.strip() or is_slack_user_id(name):
+        return fallback
+    return name.strip()
+
+
+def strip_leading_log_dashes(text: str) -> str:
+    """Drop the legacy `` - `` / ``- `` prefix from each line of a log blob."""
+    lines = []
+    for line in (text or "").splitlines():
+        if line.startswith(" - "):
+            line = line[3:]
+        elif line.startswith("- "):
+            line = line[2:]
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def format_log_message(
+    header: str,
+    *,
+    status: str,
+    duration_s: float | None = None,
+    detail: str | None = None,
+    fields: list[tuple[str, str]] | None = None,
+    body: str | None = None,
+    message_count: int | None = None,
+    destinations: str | None = None,
+) -> str:
+    """Shared paxminer_logs envelope: header, Status, optional fields, optional body, optional footer.
+
+    Schedule runs, achievement re-evaluate, and miner/sync jobs use this helper.
+    """
+    status_bit = str(status)
+    if duration_s is not None:
+        status_bit = f"{status} ({float(duration_s):.1f}s)"
+    lines = [header, f"Status: {status_bit}"]
+    if detail and status != "success":
+        lines.append(str(detail))
+    labeled = [(k, v) for k, v in (fields or []) if v]
+    extra = strip_leading_log_dashes(body).strip() if body else ""
+    footer: list[str] = []
+    if message_count is not None:
+        footer.append(f"Number of Messages: {message_count}")
+    if destinations is not None:
+        footer.append(f"Destination(s): {destinations}")
+    if labeled:
+        lines.append("")
+        lines.extend(f"{k}: {v}" for k, v in labeled)
+    if extra:
+        lines.append("")
+        lines.append(extra)
+    if footer:
+        lines.append("")
+        lines.extend(footer)
+    return "\n".join(lines)
 
 
 def plain_name(user_id: Any = None, name: Any = None) -> str:

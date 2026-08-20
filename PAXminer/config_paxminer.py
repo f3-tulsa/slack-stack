@@ -9,7 +9,7 @@ import re
 from datetime import date
 from pathlib import Path
 
-from slack_blocks import confirm_dialog, context, page_nav_elements, pencil_row
+from slack_blocks import confirm_dialog, context, counted_noun, overflow_row, page_nav_elements, parse_overflow_action
 from config_schedule import PAGE_SIZE, _bulk_delete_restore, achievement_subline
 
 LOG = logging.getLogger(__name__)
@@ -17,9 +17,12 @@ LOG = logging.getLogger(__name__)
 CALLBACK_ID = "paxminer-config-id"
 ACHIEVEMENTS_LIST_CALLBACK_ID = "paxminer-achievements-list-id"
 ACHIEVEMENT_EDIT_CALLBACK_ID = "paxminer-achievement-edit-id"
+ACHIEVEMENT_RANGE_CONFIRM_CALLBACK_ID = "paxminer-achievement-range-confirm-id"
 ADD_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_add"
 EDIT_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_edit"
+MORE_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_more"
 DELETE_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_delete"
+ACHIEVEMENT_DELETE_CONFIRM_CALLBACK_ID = "paxminer-achievement-delete-confirm-id"
 BACKFILL_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_backfill"
 SELECT_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_select"
 DUPLICATE_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_duplicate"
@@ -32,8 +35,6 @@ ACHIEVEMENTS_PAGE_NEXT_ACTION_ID = "paxminer_achievements_page_next"
 
 METRICS = ("posts", "qs", "distinct_aos", "posts_at_single_ao")
 PERIODS = ("week", "month", "year")
-RANGE_MODES = ("going_forward", "all_previous", "custom")
-APPLY_MODES = ("going_forward", "retroactive")
 
 _CODE_RE = re.compile(r"^[a-z0-9_]+$")
 
@@ -95,7 +96,7 @@ def _achievement_summary(row: dict) -> str:
     activities = activity_list_from_rule(row)
     activity_label = ", ".join(activities) if activities else "all activities"
     version = row.get("version") or row.get("version_key") or "v?"
-    enabled = "on" if int(row.get("enabled") or 1) else "off"
+    enabled = "on" if int(row.get("enabled") or 0) else "off"
     return (
         f"*{row['name']}* (`{row['code']}` {version}) — "
         f"{row.get('metric')}/{row.get('period')} ≥ {row.get('threshold')} · {activity_label} · {enabled}"
@@ -206,22 +207,6 @@ def _config_modal(region: dict) -> dict:
     }
 
 
-def _achievement_delete_confirm() -> dict:
-    """Native Slack confirm on Achievements list Delete selected."""
-    return {
-        "title": {"type": "plain_text", "text": "Delete achievement?"},
-        "text": {
-            "type": "mrkdwn",
-            "text": (
-                "Deletes the selected achievement and every award of that code. "
-                "This cannot be undone. To keep PAX history, Edit and uncheck Enabled instead."
-            ),
-        },
-        "confirm": {"type": "plain_text", "text": "Delete"},
-        "deny": {"type": "plain_text", "text": "Cancel"},
-    }
-
-
 def _achievements_list_modal(
     team_id: str,
     regional_schema: str,
@@ -256,7 +241,12 @@ def _achievements_list_modal(
     if page_rows:
         for row in page_rows:
             blocks.append(
-                pencil_row(row.get("name") or row.get("code") or f"#{row.get('id')}", EDIT_ACHIEVEMENT_ACTION_ID, str(row["id"]))
+                overflow_row(
+                    row.get("name") or row.get("code") or f"#{row.get('id')}",
+                    MORE_ACHIEVEMENT_ACTION_ID,
+                    row["id"],
+                    enabled=int(row.get("enabled") or 0) == 1,
+                )
             )
             blocks.append(context(achievement_subline(row)))
     else:
@@ -406,22 +396,48 @@ def _achievement_edit_modal(
     *,
     activity_options: list[str] | None = None,
 ) -> dict:
-    from datetime import date as _date
-
-    from achievements.activity import BUILTIN_ACTIVITY_TYPES, activity_list_from_rule
+    from achievements.activity import (
+        activity_list_from_rule,
+        map_activities_to_options,
+        unique_activity_labels,
+    )
 
     is_edit = bool(row and row.get("id"))
     src = dict(row or {})
-    options = activity_options or list(BUILTIN_ACTIVITY_TYPES)
+    options = unique_activity_labels(
+        [
+            o
+            for o in (activity_options or [])
+            if str(o).strip() and str(o).strip().lower() != "beatdown"
+        ]
+    )
     activity_opts = _select_options(tuple(options))
-    selected_activities = activity_list_from_rule(src)
+    selected_activities = map_activities_to_options(activity_list_from_rule(src), options)
     initial_activities = [o for o in activity_opts if o["value"] in selected_activities]
-    enabled = int(src.get("enabled") or 1) == 1
-    range_mode = "going_forward" if not is_edit else "all_previous"
-    if src.get("effective_from") is None and is_edit:
-        range_mode = "all_previous"
-    elif src.get("effective_from"):
-        range_mode = "custom" if is_edit else "going_forward"
+    from achievements.range import (
+        RANGE_CUSTOM,
+        RANGE_FROM_CREATED,
+        iso_date,
+        normalize_range_mode,
+        range_mode_hint,
+        range_mode_options,
+    )
+
+    range_mode = (
+        RANGE_FROM_CREATED
+        if not is_edit
+        else normalize_range_mode(src.get("range_mode"), effective_from=src.get("effective_from"))
+    )
+    is_custom = range_mode == RANGE_CUSTOM
+    start_display = iso_date(src.get("effective_from")) if is_custom else None
+    end_display = iso_date(src.get("effective_to")) if is_custom else None
+    range_opts = range_mode_options()
+    range_hint = range_mode_hint(
+        range_mode,
+        first_created=src.get("first_created"),
+        version_created=src.get("version_created"),
+        earliest_beatdown=src.get("earliest_beatdown"),
+    )
     blocks: list[dict] = []
     if is_edit:
         blocks.append(
@@ -492,53 +508,59 @@ def _achievement_edit_modal(
                 },
             }
         )
-    blocks.extend(
-        [
-            {
-                "type": "input",
-                "block_id": "enabled",
-                "optional": True,
-                "label": {"type": "plain_text", "text": "Enabled"},
-                "element": {
-                    "type": "checkboxes",
-                    "action_id": "val",
-                    "options": [
-                        {
-                            "text": {"type": "plain_text", "text": "Award this achievement"},
-                            "value": "1",
-                        }
-                    ],
-                    **({"initial_options": [
-                        {
-                            "text": {"type": "plain_text", "text": "Award this achievement"},
-                            "value": "1",
-                        }
-                    ]} if enabled else {}),
-                },
+    blocks.append(
+        {
+            "type": "input",
+            "block_id": "metric",
+            "label": {"type": "plain_text", "text": "Metric"},
+            "element": {
+                "type": "static_select",
+                "action_id": "val",
+                "options": _select_options(METRICS),
+                **_with_initial(_select_options(METRICS), src.get("metric") or "posts"),
             },
-            {
-                "type": "input",
-                "block_id": "metric",
-                "label": {"type": "plain_text", "text": "Metric"},
-                "element": {
-                    "type": "static_select",
-                    "action_id": "val",
-                    "options": _select_options(METRICS),
-                    **_with_initial(_select_options(METRICS), src.get("metric") or "posts"),
-                },
-            },
+        }
+    )
+    if activity_opts:
+        blocks.append(
             {
                 "type": "input",
                 "block_id": "activity",
                 "optional": True,
-                "label": {"type": "plain_text", "text": "Activity types (empty = all)"},
+                "label": {
+                    "type": "plain_text",
+                    "text": "Event types (empty = any event)",
+                },
+                "hint": {
+                    "type": "plain_text",
+                    "text": "Slackblast Event Types. Empty matches unlabeled posts too.",
+                },
                 "element": {
                     "type": "multi_static_select",
                     "action_id": "val",
                     "options": activity_opts,
                     **({"initial_options": initial_activities} if initial_activities else {}),
                 },
-            },
+            }
+        )
+    else:
+        blocks.append(
+            {
+                "type": "context",
+                "block_id": "activity",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": (
+                            "_No Slackblast Event Types configured. "
+                            "This achievement matches every event, including unlabeled posts._"
+                        ),
+                    }
+                ],
+            }
+        )
+    blocks.extend(
+        [
             {
                 "type": "input",
                 "block_id": "period",
@@ -567,125 +589,43 @@ def _achievement_edit_modal(
                 "element": {
                     "type": "static_select",
                     "action_id": "val",
-                    "options": [
-                        {
-                            "text": {"type": "plain_text", "text": "Going forward only"},
-                            "value": "going_forward",
-                        },
-                        {
-                            "text": {"type": "plain_text", "text": "All previous attendance dates"},
-                            "value": "all_previous",
-                        },
-                        {
-                            "text": {"type": "plain_text", "text": "Custom range"},
-                            "value": "custom",
-                        },
-                    ],
-                    **_with_initial(
-                        [
-                            {"text": {"type": "plain_text", "text": "Going forward only"}, "value": "going_forward"},
-                            {"text": {"type": "plain_text", "text": "All previous attendance dates"}, "value": "all_previous"},
-                            {"text": {"type": "plain_text", "text": "Custom range"}, "value": "custom"},
-                        ],
-                        range_mode,
-                    ),
+                    "options": range_opts,
+                    **_with_initial(range_opts, range_mode),
                 },
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": range_hint,
+                    }
+                ],
             },
             {
                 "type": "input",
                 "block_id": "effective_from",
                 "optional": True,
-                "label": {"type": "plain_text", "text": "From (custom range)"},
+                "label": {"type": "plain_text", "text": "Start date"},
                 "element": {
                     "type": "datepicker",
                     "action_id": "val",
-                    **(
-                        {"initial_date": str(src["effective_from"])[:10]}
-                        if src.get("effective_from")
-                        else {"initial_date": _date.today().isoformat()}
-                    ),
+                    **({"initial_date": start_display} if start_display else {}),
                 },
             },
             {
                 "type": "input",
                 "block_id": "effective_to",
                 "optional": True,
-                "label": {"type": "plain_text", "text": "Through (optional)"},
-                "element": {"type": "datepicker", "action_id": "val"},
+                "label": {"type": "plain_text", "text": "End date"},
+                "element": {
+                    "type": "datepicker",
+                    "action_id": "val",
+                    **({"initial_date": end_display} if end_display else {}),
+                },
             },
         ]
     )
-    if is_edit:
-        blocks.append(
-            {
-                "type": "input",
-                "block_id": "apply_mode",
-                "label": {"type": "plain_text", "text": "If earning rules change"},
-                "element": {
-                    "type": "static_select",
-                    "action_id": "val",
-                    "options": [
-                        {
-                            "text": {"type": "plain_text", "text": "Going forward only"},
-                            "value": "going_forward",
-                        },
-                        {
-                            "text": {
-                                "type": "plain_text",
-                                "text": "Apply to previous (queue backfill)",
-                            },
-                            "value": "retroactive",
-                        },
-                    ],
-                    **_with_initial(
-                        [
-                            {"text": {"type": "plain_text", "text": "Going forward only"}, "value": "going_forward"},
-                            {
-                                "text": {
-                                    "type": "plain_text",
-                                    "text": "Apply to previous (queue backfill)",
-                                },
-                                "value": "retroactive",
-                            },
-                        ],
-                        "going_forward",
-                    ),
-                },
-            }
-        )
-    is_edit = bool(row and row.get("id"))
-    if is_edit:
-        aid = str(row["id"])
-        code = src.get("code") or aid
-        award_count = int(src.get("award_count") or 0)
-        blocks.append(
-            {
-                "type": "actions",
-                "block_id": "achievement_edit_extras",
-                "elements": [
-                    {
-                        "type": "button",
-                        "action_id": DUPLICATE_ACHIEVEMENT_ACTION_ID,
-                        "text": {"type": "plain_text", "text": "Duplicate"},
-                        "value": aid,
-                    },
-                    {
-                        "type": "button",
-                        "action_id": DELETE_ACHIEVEMENT_ACTION_ID,
-                        "text": {"type": "plain_text", "text": "Delete"},
-                        "style": "danger",
-                        "value": aid,
-                        "confirm": confirm_dialog(
-                            "Delete achievement?",
-                            (
-                                f"Deletes `{code}` and {award_count} award(s). "
-                                "This cannot be undone. Uncheck Enabled to keep history."
-                            ),
-                        ),
-                    },
-                ],
-            }
-        )
     return {
         "type": "modal",
         "callback_id": ACHIEVEMENT_EDIT_CALLBACK_ID,
@@ -722,6 +662,8 @@ def _parse_modal_values(payload: dict) -> dict:
 
 
 def _parse_achievement_form(payload: dict) -> dict:
+    from achievements.activity import canonicalize_activity_filter, unique_activity_labels
+
     state = payload.get("view", {}).get("state", {}).get("values", {})
 
     def _text(block_id: str) -> str:
@@ -734,26 +676,16 @@ def _parse_achievement_form(payload: dict) -> dict:
 
     def _multi(block_id: str) -> list[str]:
         opts = (state.get(block_id, {}).get("val", {}) or {}).get("selected_options") or []
-        return [str(o.get("value")).strip() for o in opts if o.get("value")]
+        return canonicalize_activity_filter(
+            unique_activity_labels(
+                [str(o.get("value")).strip() for o in opts if o.get("value")]
+            )
+        )
 
     def _date(block_id: str) -> str | None:
         return (state.get(block_id, {}).get("val", {}) or {}).get("selected_date")
 
-    def _checked(block_id: str) -> bool:
-        opts = (state.get(block_id, {}).get("val", {}) or {}).get("selected_options") or []
-        return any(o.get("value") == "1" for o in opts)
-
-    raw_threshold = _text("threshold").strip()
-    if not raw_threshold:
-        threshold = 1
-    else:
-        threshold = _to_int(raw_threshold, None)
-
-    enabled_state = state.get("enabled")
-    if enabled_state is None:
-        enabled = 1
-    else:
-        enabled = 1 if _checked("enabled") else 0
+    threshold = _to_int(_text("threshold").strip(), None)
 
     return {
         "name": _text("name").strip(),
@@ -764,15 +696,22 @@ def _parse_achievement_form(payload: dict) -> dict:
         "activity_list": _multi("activity"),
         "period": _select("period") or "year",
         "threshold": threshold,
-        "enabled": enabled,
-        "range_mode": _select("range_mode") or "going_forward",
+        "range_mode": _select("range_mode") or "from_created",
         "effective_from": _date("effective_from"),
         "effective_to": _date("effective_to"),
-        "apply_mode": _select("apply_mode") or "going_forward",
     }
 
 
-def _validate_achievement(values: dict, *, require_code: bool = True) -> dict[str, str]:
+def _validate_achievement(
+    values: dict,
+    *,
+    require_code: bool = True,
+    first_created=None,
+    version_created=None,
+    earliest_beatdown=None,
+) -> dict[str, str]:
+    from achievements.range import range_validation_errors
+
     errors: dict[str, str] = {}
     if not values["name"]:
         errors["name"] = "Name is required"
@@ -789,6 +728,14 @@ def _validate_achievement(values: dict, *, require_code: bool = True) -> dict[st
         errors["threshold"] = "Enter a whole number"
     elif values["threshold"] < 1:
         errors["threshold"] = "Threshold must be at least 1"
+    errors.update(
+        range_validation_errors(
+            values,
+            first_created=first_created,
+            version_created=version_created,
+            earliest_beatdown=earliest_beatdown,
+        )
+    )
     return errors
 
 
@@ -797,7 +744,8 @@ def _load_achievements(cur, schema: str) -> list[dict]:
         f"""
         SELECT a.*, v.version, v.version_key, v.metric AS version_metric,
                v.activity AS version_activity, v.period AS version_period,
-               v.threshold AS version_threshold, v.effective_from, v.effective_to
+               v.threshold AS version_threshold, v.effective_from, v.effective_to,
+               v.range_mode, v.created AS version_created
         FROM `{schema}`.`achievements_list` a
         LEFT JOIN `{schema}`.`achievement_versions` v
           ON v.achievement_id = a.id AND v.superseded_at IS NULL
@@ -824,10 +772,14 @@ def _load_achievement(cur, schema: str, achievement_id: int) -> dict | None:
         f"""
         SELECT a.*, v.version, v.version_key, v.metric AS version_metric,
                v.activity AS version_activity, v.period AS version_period,
-               v.threshold AS version_threshold, v.effective_from, v.effective_to
+               v.threshold AS version_threshold, v.effective_from, v.effective_to,
+               v.range_mode, v.created AS version_created,
+               v1.created AS first_created
         FROM `{schema}`.`achievements_list` a
         LEFT JOIN `{schema}`.`achievement_versions` v
           ON v.achievement_id = a.id AND v.superseded_at IS NULL
+        LEFT JOIN `{schema}`.`achievement_versions` v1
+          ON v1.achievement_id = a.id AND v1.version = 1
         WHERE a.id=%s
         """,
         (achievement_id,),
@@ -848,26 +800,26 @@ def _load_achievement(cur, schema: str, achievement_id: int) -> dict | None:
     return row
 
 
-def _load_activity_options(cur, schema: str) -> list[str]:
-    from achievements.activity import BUILTIN_ACTIVITY_TYPES
+def _load_activity_options(cur, schema: str, team_id: str | None = None) -> list[str]:
+    """Event Type options from slackblast.regions.custom_fields. No builtins, no beatdown."""
+    from achievements.activity import event_type_options_from_custom_fields
 
-    found: list[str] = []
+    sb_schema = os.environ.get("SLACKBLAST_SCHEMA") or f"slackblast_{os.environ.get('STAGE', 'test')}"
     try:
-        cur.execute(
-            f"""
-            SELECT DISTINCT activity_type FROM `{schema}`.`beatdowns`
-            WHERE activity_type IS NOT NULL AND activity_type != ''
-            ORDER BY activity_type
-            """
-        )
-        found = [str(r["activity_type"]) for r in (cur.fetchall() or []) if r.get("activity_type")]
+        if team_id:
+            cur.execute(
+                f"SELECT custom_fields FROM `{sb_schema}`.`regions` WHERE team_id=%s LIMIT 1",
+                (team_id,),
+            )
+        else:
+            cur.execute(
+                f"SELECT custom_fields FROM `{sb_schema}`.`regions` WHERE paxminer_schema=%s LIMIT 1",
+                (schema,),
+            )
+        row = cur.fetchone() or {}
     except Exception:
-        found = []
-    seen: list[str] = []
-    for item in [*found, *BUILTIN_ACTIVITY_TYPES]:
-        if item and item not in seen:
-            seen.append(item)
-    return seen[:100]
+        return []
+    return event_type_options_from_custom_fields(row.get("custom_fields"))
 
 
 def _selected_achievement_id(payload: dict) -> int | None:
@@ -875,10 +827,14 @@ def _selected_achievement_id(payload: dict) -> int | None:
     aid = action.get("action_id")
     if aid in {
         EDIT_ACHIEVEMENT_ACTION_ID,
+        MORE_ACHIEVEMENT_ACTION_ID,
         DELETE_ACHIEVEMENT_ACTION_ID,
         DUPLICATE_ACHIEVEMENT_ACTION_ID,
         BACKFILL_ACHIEVEMENT_ACTION_ID,
     }:
+        verb, oid = parse_overflow_action(action)
+        if oid is not None:
+            return oid
         raw = action.get("value")
         try:
             if raw not in (None, ""):
@@ -958,50 +914,31 @@ def load_achievement_defaults() -> list[dict]:
     return data
 
 
-def restore_achievement_defaults(cur, schema: str) -> int:
-    added = 0
-    for seed in load_achievement_defaults():
-        cur.execute(
-            f"SELECT id FROM `{schema}`.`achievements_list` WHERE code=%s",
-            (seed["code"],),
-        )
-        if cur.fetchone():
-            continue
-        cur.execute(
-            f"""
-            INSERT INTO `{schema}`.`achievements_list`
-            (name, description, verb, code, metric, activity, period, threshold)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                seed["name"],
-                seed["description"],
-                seed["verb"],
-                seed["code"],
-                seed["metric"],
-                seed["activity"],
-                seed["period"],
-                seed["threshold"],
-            ),
-        )
-        added += 1
-    return added
+def achievement_delete_confirm_text(code: str, award_count: int, pax_count: int) -> str:
+    """Native Slack confirm copy for deleting one achievement from the edit modal."""
+    awards = counted_noun(award_count, "award")
+    pax = counted_noun(pax_count, "PAX", "PAX")
+    return (
+        f"Are you sure you want to delete the `{code}` achievement? If you do, it will "
+        f"remove {awards} from {pax}. This cannot be undone! To keep the historical "
+        "awards and not award anything new, simply disable this achievement."
+    )
 
 
-def delete_all_achievements(cur, schema: str) -> dict[str, int]:
-    cur.execute(f"DELETE FROM `{schema}`.`achievements_awarded`")
-    awards = int(cur.rowcount or 0)
-    cur.execute(f"DELETE FROM `{schema}`.`achievement_versions`")
-    cur.execute(f"DELETE FROM `{schema}`.`achievements_list`")
-    return {"awards": awards, "achievements": int(cur.rowcount or 0)}
+def achievement_award_impact(cur, schema: str, achievement_id: int) -> tuple[int, int]:
+    """``(award_count, distinct_pax_count)`` for one achievement code."""
+    cur.execute(
+        f"SELECT COUNT(*) AS awards, COUNT(DISTINCT pax_id) AS pax "
+        f"FROM `{schema}`.`achievements_awarded` WHERE achievement_id=%s",
+        (achievement_id,),
+    )
+    row = cur.fetchone() or {}
+    return int(row.get("awards") or 0), int(row.get("pax") or 0)
 
 
 def count_achievement_awards(cur, schema: str, achievement_id: int) -> int:
-    cur.execute(
-        f"SELECT COUNT(*) AS c FROM `{schema}`.`achievements_awarded` WHERE achievement_id=%s",
-        (achievement_id,),
-    )
-    return int((cur.fetchone() or {}).get("c") or 0)
+    awards, _pax = achievement_award_impact(cur, schema, achievement_id)
+    return awards
 
 
 def earliest_beatdown_date(cur, schema: str) -> str | None:
@@ -1011,4 +948,48 @@ def earliest_beatdown_date(cur, schema: str) -> str | None:
         return str(d)[:10] if d else None
     except Exception:
         return None
+
+
+def _hydrate_range_row(cur, schema: str, row: dict | None) -> dict | None:
+    """Attach earliest beatdown so the edit modal can prefill All attendance dates."""
+    if row is None:
+        return None
+    row["earliest_beatdown"] = earliest_beatdown_date(cur, schema)
+    return row
+
+
+def _achievement_range_confirm_modal(
+    team_id: str,
+    regional_schema: str,
+    *,
+    achievement_id: int,
+    values: dict,
+    award_count: int,
+    pax_count: int,
+) -> dict:
+    from achievements.range import range_confirm_text
+
+    return {
+        "type": "modal",
+        "callback_id": ACHIEVEMENT_RANGE_CONFIRM_CALLBACK_ID,
+        "private_metadata": _metadata(
+            team_id,
+            regional_schema,
+            achievement_id,
+            pending_values=values,
+            range_confirmed=True,
+        ),
+        "title": {"type": "plain_text", "text": "Confirm range change"},
+        "submit": {"type": "plain_text", "text": "Revoke and save"},
+        "close": {"type": "plain_text", "text": "Back"},
+        "blocks": [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": range_confirm_text(award_count, pax_count),
+                },
+            }
+        ],
+    }
 

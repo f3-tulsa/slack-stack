@@ -243,7 +243,9 @@ def run_leaderboard_for_region(
     if window is not None:
         from scheduling import format_window_label
 
-        empty = f"No awards in {format_window_label(*window)}."
+        period = format_window_label(*window)
+        if not (title and period in title):
+            empty = f"No awards in {period}."
     text, blocks = build_leaderboard_message(
         loaded["awarded"],
         loaded["users"],

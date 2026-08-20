@@ -402,8 +402,8 @@ def test_format_schedule_summary_includes_last_run():
     assert "last run: success (2026-07-18)" in line
 
 
-def test_schedules_list_uses_pencil_rows_and_subline():
-    from config_schedule import EDIT_SCHEDULE_ACTION_ID, _schedules_list_modal
+def test_schedules_list_uses_overflow_rows_and_subline():
+    from config_schedule import MORE_SCHEDULE_ACTION_ID, _schedules_list_modal
 
     schedules = [
         {
@@ -418,13 +418,19 @@ def test_schedules_list_uses_pencil_rows_and_subline():
         }
     ]
     view = _schedules_list_modal("T1", "f3test", schedules, selected_schedule_id=9)
-    pencils = [
+    menus = [
         b["accessory"]
         for b in view["blocks"]
         if b.get("type") == "section" and b.get("accessory")
     ]
-    assert pencils[0]["action_id"] == EDIT_SCHEDULE_ACTION_ID
-    assert pencils[0]["value"] == "9"
+    assert menus[0]["type"] == "overflow"
+    assert menus[0]["action_id"] == MORE_SCHEDULE_ACTION_ID
+    assert [o["value"] for o in menus[0]["options"]] == [
+        "edit:9",
+        "duplicate:9",
+        "disable:9",
+        "delete:9",
+    ]
     sub = " ".join(
         el.get("text") or ""
         for b in view["blocks"]
@@ -1191,12 +1197,14 @@ def test_report_edit_modal_template_fields_and_almost_there():
     assert "report_type" not in almost_ids
 
 
-def test_reports_list_has_pencil_not_duplicate():
+def test_reports_list_uses_overflow_not_list_duplicate():
     from config_schedule import (
         DUPLICATE_REPORT_ACTION_ID,
-        EDIT_REPORT_ACTION_ID,
+        MORE_REPORT_ACTION_ID,
+        RUN_NOW_SCHEDULE_ACTION_ID,
         _report_edit_modal,
         _reports_list_modal,
+        _schedule_edit_modal,
     )
 
     row = {
@@ -1205,6 +1213,7 @@ def test_reports_list_has_pencil_not_duplicate():
         "code": "kotter",
         "report_type": "kotter",
         "is_builtin": 1,
+        "enabled": 0,
     }
     view = _reports_list_modal("T1", "f3test", [row])
     action_ids = []
@@ -1214,16 +1223,52 @@ def test_reports_list_has_pencil_not_duplicate():
             action_ids.append(acc["action_id"])
         for e in b.get("elements") or []:
             if e.get("action_id"):
-                action_ids.append(e["action_id"])
-    assert EDIT_REPORT_ACTION_ID in action_ids
+                action_ids.append(e.get("action_id"))
+    assert MORE_REPORT_ACTION_ID in action_ids
     assert DUPLICATE_REPORT_ACTION_ID not in action_ids
+    menus = [
+        b["accessory"]
+        for b in view["blocks"]
+        if b.get("type") == "section" and (b.get("accessory") or {}).get("type") == "overflow"
+    ]
+    assert menus[0]["options"][2]["text"]["text"] == "Enable"
+    sub = " ".join(
+        el.get("text") or ""
+        for b in view["blocks"]
+        if b.get("type") == "context"
+        for el in b.get("elements") or []
+    )
+    assert "Disabled" in sub
     edit = _report_edit_modal("T1", "f3test", row)
     edit_ids = [
         e.get("action_id")
         for b in edit["blocks"]
         for e in b.get("elements") or []
     ]
-    assert DUPLICATE_REPORT_ACTION_ID in edit_ids
+    assert DUPLICATE_REPORT_ACTION_ID not in edit_ids
+    sched = _schedule_edit_modal(
+        "T1",
+        "f3test",
+        [row],
+        schedule={
+            "id": 4,
+            "report_definition_id": 1,
+            "destination_type": "specific_channels",
+            "destination_channels": '["C1"]',
+            "frequency_type": "weekly",
+            "time_of_day": "07:00:00",
+            "enabled": 0,
+        },
+        timezone_name="America/Chicago",
+    )
+    extra_ids = [
+        e.get("action_id")
+        for b in sched["blocks"]
+        if b.get("block_id") == "schedule_edit_extras"
+        for e in b.get("elements") or []
+    ]
+    assert extra_ids == [RUN_NOW_SCHEDULE_ACTION_ID]
+    assert not any(b.get("block_id") == "enabled" for b in sched["blocks"])
 
 
 def test_uniquify_and_duplicate_definition():
@@ -1357,14 +1402,15 @@ def test_format_schedule_log_line_manual_vs_scheduled_and_dm_dest():
             "definition_name": "Achievement leaderboard",
             "ok": False,
             "error": "all channel uploads failed: not_in_channel",
-            "notify_user": "UADMIN",
+            "notify_user": "UADMIN1234",
             "specified_channels": ["C0APR1E1137"],
             "message_count": 0,
             "duration_s": 1.2,
         },
     )
-    assert "was run manually by `UADMIN`" in manual
-    assert "<@UADMIN>" not in manual
+    assert "was run manually by `admin`" in manual
+    assert "`UADMIN1234`" not in manual
+    assert "<@UADMIN1234>" not in manual
     assert "Status: failed (1.2s)" in manual
     assert "all channel uploads failed: not_in_channel" in manual
     assert "Number of Messages: 0" in manual
@@ -1478,6 +1524,26 @@ def test_queue_achievement_backfill_serializes_dates():
         "start": "2026-03-01",
         "end": "2026-08-18",
     }
+
+
+def test_queue_achievement_backfill_marks_automatic():
+    import json
+    from unittest.mock import MagicMock, patch
+
+    import slack_schedule
+
+    mock_client = MagicMock()
+    with patch.dict("os.environ", {"SCHEDULE_FUNCTION_NAME": "paxminer-test-schedule"}):
+        with patch("boto3.client", return_value=mock_client):
+            slack_schedule.queue_achievement_backfill(
+                schema="f3test",
+                achievement_id=4,
+                actor="U1",
+                automatic=True,
+            )
+    payload = json.loads(mock_client.invoke.call_args.kwargs["Payload"].decode("utf-8"))
+    assert payload["automatic"] is True
+    assert payload["source"] == "achievement_rule_backfill"
 
 class _CatchApp:
     def __init__(self):
@@ -1636,13 +1702,15 @@ def test_reports_and_achievements_lists_paginate():
     page0 = _reports_list_modal("T1", "f3test", defs, page=0)
     page1 = _reports_list_modal("T1", "f3test", defs, page=1)
     p0_ids = [
-        (b.get("accessory") or {}).get("value")
+        (o.get("value") or "").split(":")[-1]
         for b in page0["blocks"]
+        for o in ((b.get("accessory") or {}).get("options") or [])
         if (b.get("accessory") or {}).get("action_id")
     ]
     p1_ids = [
-        (b.get("accessory") or {}).get("value")
+        (o.get("value") or "").split(":")[-1]
         for b in page1["blocks"]
+        for o in ((b.get("accessory") or {}).get("options") or [])
         if (b.get("accessory") or {}).get("action_id")
     ]
     assert "1" in p0_ids
@@ -1715,6 +1783,30 @@ def test_this_month_and_report_title_contract():
     assert "YTD" not in format_report_title("Region leaderboard", (date(2026, 7, 1), date(2026, 7, 31)))
 
 
+def test_caption_with_window_does_not_repeat_period():
+    from scheduling import caption_with_window, format_report_title
+
+    titled = format_report_title("PAX Charts", (date(2026, 7, 1), date(2026, 7, 31)))
+    assert titled == "PAX Charts (July 2026)"
+    assert caption_with_window(titled, "July 2026", "your posting summary") == "PAX Charts (July 2026)"
+    assert (
+        caption_with_window(None, "July 2026", "your posting summary")
+        == "your posting summary for July 2026"
+    )
+    assert caption_with_window("PAX Charts", "July 2026", "x") == "PAX Charts for July 2026"
+
+
+def test_pax_and_q_captions_use_caption_with_window():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    pax = (root / "monthly_charts" / "PAXcharter.py").read_text()
+    q = (root / "monthly_charts" / "Qcharter.py").read_text()
+    assert "caption_with_window" in pax
+    assert "caption_with_window" in q
+    assert '+ " for "' not in pax.split("def pax_chart_dm_text", 1)[1].split("def run_pax_charter", 1)[0]
+
+
 def test_region_leaderboard_drops_bonus_ytd_and_honors_top_n():
     import inspect
 
@@ -1735,3 +1827,114 @@ def test_pax_chart_dm_text_mentions_slack_user():
     text = pax_chart_dm_text("U01ABCDEF12", "Nacho", None, "July 2026")
     assert text.startswith("Hey <@U01ABCDEF12>")
     assert "July 2026" in text
+
+
+def test_draft_from_report_state_clears_fields_and_keeps_typed_name():
+    import json
+
+    from config_schedule import REPORT_WINDOW_ACTION_ID, draft_from_report_state, parse_report_form
+
+    meta_draft = {
+        "name": "Old name",
+        "fields": ["Date", "AO"],
+        "time_window_type": "last_month",
+    }
+    after_window = {
+        "name": {"val": {"value": "Q Counts"}},
+        "fields": {"val": {"selected_options": [{"value": "Date"}, {"value": "AO"}]}},
+        "time_window_type": {
+            REPORT_WINDOW_ACTION_ID: {"selected_option": {"value": "this_month"}}
+        },
+    }
+    draft = draft_from_report_state(after_window, meta_draft)
+    assert draft["name"] == "Q Counts"
+    assert draft["fields"] == ["Date", "AO"]
+    assert draft["time_window_type"] == "this_month"
+
+    cleared = {
+        "name": {"val": {"value": "Q Counts"}},
+        "fields": {"val": {"selected_options": []}},
+        "time_window_type": {
+            REPORT_WINDOW_ACTION_ID: {"selected_option": {"value": "this_month"}}
+        },
+    }
+    draft = draft_from_report_state(cleared, draft)
+    assert draft["name"] == "Q Counts"
+    assert draft["fields"] == []
+
+    parsed = parse_report_form(
+        {
+            "view": {
+                "private_metadata": json.dumps(
+                    {"draft": draft, "report_type": "custom_report"}
+                ),
+                "state": {"values": cleared},
+            }
+        }
+    )
+    assert parsed["name"] == "Q Counts"
+    assert parsed["fields"] == []
+
+
+def test_kotter_empty_threshold_acks_errors_without_writing():
+    from unittest.mock import MagicMock, patch
+
+    from config_schedule import KOTTER_CONFIG_CALLBACK_ID
+
+    app = _schedule_handlers()
+    ack = MagicMock()
+    body = {
+        "user": {"id": "U1"},
+        "view": {
+            "private_metadata": '{"team_id":"T1","regional_schema":"f3test"}',
+            "state": {
+                "values": {
+                    "NO_POST_THRESHOLD": {"val": {"value": ""}},
+                    "REMINDER_WEEKS": {"val": {"value": "2"}},
+                    "HOME_AO_CAPTURE": {"val": {"value": "8"}},
+                    "NO_Q_THRESHOLD_WEEKS": {"val": {"value": "4"}},
+                    "NO_Q_THRESHOLD_POSTS": {"val": {"value": "4"}},
+                }
+            },
+        },
+    }
+    with patch("slack_schedule.is_slack_admin", return_value=True):
+        with patch(
+            "slack_app._region_context_from_body",
+            return_value=("T1", "f3test", {"region": "tulsa"}),
+        ):
+            with patch("slack_schedule.connect_from_env") as mock_conn:
+                app.views[KOTTER_CONFIG_CALLBACK_ID](ack, body, MagicMock(), MagicMock())
+    ack.assert_called_once()
+    kwargs = ack.call_args.kwargs
+    assert kwargs["response_action"] == "errors"
+    assert "NO_POST_THRESHOLD" in kwargs["errors"]
+    mock_conn.assert_not_called()
+
+
+def test_ensure_report_enabled_column_adds_when_missing():
+    from unittest.mock import MagicMock
+
+    from schedule_schema import ensure_report_enabled_column
+
+    cur = MagicMock()
+    cur.fetchone.side_effect = [{"c": 1}, {"c": 0}]
+    assert ensure_report_enabled_column(cur, "paxminer") is True
+    alter = cur.execute.call_args_list[-1].args[0]
+    assert "ADD COLUMN `enabled`" in alter
+
+
+def test_list_due_schedules_skips_disabled_definitions():
+    from unittest.mock import MagicMock, patch
+
+    from schedule_runner import list_due_schedules
+
+    conn = MagicMock()
+    cur = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cur
+    cur.fetchall.return_value = []
+    with patch("schedule_runner.ensure_report_enabled_column"):
+        list_due_schedules(conn, "paxminer")
+    sql = cur.execute.call_args.args[0]
+    assert "COALESCE(d.enabled, 1) = 1" in sql
+    assert "region_report_definitions" in sql

@@ -7,7 +7,7 @@ from datetime import date
 from achievements.period import backblast_archive_url, format_date_label, spoken_period
 from scheduling import format_iso_range
 from slack_blocks import chunk_messages, chunk_sections, fallback_text, section
-from slack_util import mention, ordinal_suffix, plain_name
+from slack_util import format_log_message, mention, ordinal_suffix, plain_name, ticked_display_name
 
 
 def _as_date(value) -> date | None:
@@ -297,6 +297,7 @@ def run_summary_line(
     duration_s: float | None,
     actor: str | None = None,
     achievement_name: str | None = None,
+    automatic: bool = False,
 ) -> str:
     held_bits = []
     if held_grandfathered:
@@ -306,32 +307,49 @@ def run_summary_line(
     if held_out_of_range:
         held_bits.append(f"{held_out_of_range} out of range")
     held_detail = f" ({', '.join(held_bits)})" if held_bits else ""
-    window = ""
     span = format_iso_range(start, end)
-    if span:
-        window = f" | {span}"
-    dest = ""
-    if channel:
-        dest = f" | posted {channel}"
-        if dms or dm_failed:
-            fail = f" ({dm_failed} failed)" if dm_failed else ""
-            dest += f", {dms} DMs{fail}"
-    dur = f" ({duration_s:.1f}s)" if duration_s is not None else ""
     if kind == "backfill":
-        who = f"`{actor}`" if actor else "admin"
+        who = ticked_display_name(actor, fallback="admin")
         name = achievement_name or "achievement"
         span = format_iso_range(start, end) or (
             f"{start.isoformat() if start else 'all-time'} to {end.isoformat() if end else 'present'}"
         )
         unchanged = held
-        return (
-            f"Achievements backfill triggered by {who} for *{name}* over "
-            f"{span} — {granted} granted, {revoked} revoked, "
-            f"{unchanged} unchanged"
+        header = (
+            "Achievement re-evaluate ran automatically after a rule change"
+            if automatic
+            else f"Achievement re-evaluate triggered by {who}"
         )
-    return (
-        f"Achievements {kind}: {granted} granted, {revoked} revoked, "
-        f"{held} held{held_detail} | {rules} rules{window}{dest}{dur}"
+        return format_log_message(
+            header,
+            status="success",
+            duration_s=duration_s,
+            fields=[
+                ("Achievement", name),
+                ("Results", f"{granted} granted, {revoked} revoked, {unchanged} unchanged"),
+                ("Period", span),
+            ],
+        )
+
+    results = (
+        f"{rules} rules, {granted} granted, {revoked} revoked, "
+        f"{held} held{held_detail}"
+    )
+    dest_parts = []
+    if channel:
+        dest_parts.append(channel)
+    if dms or dm_failed:
+        fail = f" ({dm_failed} failed)" if dm_failed else ""
+        dest_parts.append(f"{dms} DMs{fail}")
+    return format_log_message(
+        f"The *Achievements ({kind})* job was run as scheduled",
+        status="success",
+        duration_s=duration_s,
+        fields=[
+            ("Results", results),
+            ("Period", span or ""),
+        ],
+        destinations=", ".join(dest_parts) if dest_parts else None,
     )
 
 

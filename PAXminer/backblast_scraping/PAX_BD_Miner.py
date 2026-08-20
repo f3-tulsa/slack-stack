@@ -21,6 +21,7 @@ _PAX_ROOT = Path(__file__).resolve().parent.parent
 if str(_PAX_ROOT) not in sys.path:
     sys.path.insert(0, str(_PAX_ROOT))
 from paxminer_db import connect_from_credentials_ini
+from slack_util import format_log_message, strip_leading_log_dashes, ticked_display_name
 import logging
 import math
 from BD_Update_Utils import determine_db_action, find_match, retrievePreviousBackblasts, DbAction
@@ -156,7 +157,7 @@ for id in channels_df['channel_id']:
                 id,
                 db,
             )
-            pm_log_text += "Error: Unable to access Slack channel " + id + " in region " + db + "\n"
+            pm_log_text += "Error: Unable to access Slack channel <#" + id + "> in region " + db + "\n"
             next_cursor = None
         if next_cursor and next_cursor != "None":
             # Keep going from next offset.
@@ -524,7 +525,7 @@ try:
             if q_user_id == 'NA':
                 logging.warning("Q error for AO: %s, Date: %s, backblast from Q %s (ID %s) not imported", ao_id, msg_date, user_name, user_id)
                 print('Backblast error on Q at AO:', ao_id, 'Date:', msg_date, 'Posted By:', user_name, ". Slack message sent to Q. bd: ", bd_date, "cutoff:", cutoff_date)
-                pm_log_text +=  " - Backblast error on Q at AO: <#" + ao_id + "> Date: " + msg_date + " Posted By: " + user_name + ". Slack message sent to Q.\n"
+                pm_log_text += "Backblast error on Q at AO: <#" + ao_id + "> Date: " + msg_date + " Posted By: " + ticked_display_name(user_name, fallback="PAX") + ". Slack message sent to Q.\n"
                 if user_id != 'APP':
                     q_error_text += " - ERROR: The Q is not present or not tagged correctly. Please ensure the Q is tagged using @PAX_NAME \n"
                     send_q_msg = 2
@@ -534,7 +535,7 @@ try:
             if pax_count == -1:
                 logging.warning("Count error for AO: %s, Date: %s, backblast from Q %s (ID %s) not imported", ao_id, msg_date, user_name, user_id)
                 print('Backblast error on Count - AO:', ao_id, 'Date:', msg_date, 'Posted By:', user_name, ". Slack message sent to Q.")
-                pm_log_text += " - Backblast error on Count at AO: <#" + ao_id + "> Date: " + msg_date + " Posted By: " + user_name + ". Slack message sent to Q.\n"
+                pm_log_text += "Backblast error on Count at AO: <#" + ao_id + "> Date: " + msg_date + " Posted By: " + ticked_display_name(user_name, fallback="PAX") + ". Slack message sent to Q.\n"
                 if user_id != 'APP':
                     q_error_text += " - ERROR: The Count is not present or not entered correctly. The correct syntax is Count: XX - Use digits please. \n"
                     send_q_msg = 2
@@ -545,7 +546,7 @@ try:
             if not isValidDate(bd_date):
                 logging.warning("Date error for AO: %s, Date: %s, backblast from Q %s (ID %s) not imported", ao_id, msg_date, user_name, user_id)
                 print('Backblast error on Date - AO:', ao_id, 'Date:', msg_date, 'Posted By:', user_name,". Slack message sent to Q. bd: ", bd_date, "cutoff:", cutoff_date)
-                pm_log_text += " - Backblast error on Date - AO: <#" + ao_id + "> Date: " + msg_date + " Posted By: " + user_name + ". Slack message sent to Q.\n"
+                pm_log_text += "Backblast error on Date - AO: <#" + ao_id + "> Date: " + msg_date + " Posted By: " + ticked_display_name(user_name, fallback="PAX") + ". Slack message sent to Q.\n"
                 if user_id != 'APP':
                     q_error_text += " - ERROR: The Date is not entered correctly. I can understand most common date formats like Date: 12-25-2020, Date: 2021-12-25, Date: 12/25/21, or Date: December 25, 2021. Common mistakes include a date from the future, a date with the time appended, or a date more than one month on the past.\n"
                     send_q_msg = 2
@@ -573,12 +574,12 @@ try:
                     print('Pax Count:',pax_count)
                     print('fngs:', fngs)
                     if database_action == DbAction.UPDATE :
-                        pm_log_text += " - Backblast successfully updated for AO: <#" + ao_id + "> Date: " + msg_date + " Posted By: " + user_name + "\n"
+                        pm_log_text += "Backblast successfully updated for AO: <#" + ao_id + "> Date: " + msg_date + " Posted By: " + ticked_display_name(user_name, fallback="PAX") + "\n"
                         if user_id != 'APP':
                             q_success_text = "Successfully updated your backblast after it had been changed for " + bd_date + " at <#" + ao_id + ">. I see you had " + str(math.trunc(pax_count)) + " PAX in attendance and FNGs were: " + str(fngs) + ". Thanks for posting and updating your BB! \n"
                             send_q_msg = 1
                     else:
-                        pm_log_text += " - Backblast successfully imported for AO: <#" + ao_id + "> Date: " + msg_date + " Posted By: " + user_name + "\n"
+                        pm_log_text += "Backblast successfully imported for AO: <#" + ao_id + "> Date: " + msg_date + " Posted By: " + ticked_display_name(user_name, fallback="PAX") + "\n"
                         if user_id != 'APP':
                             q_success_text = "Successfully imported your backblast for " + bd_date + " at <#" + ao_id + ">. I see you had " + str(math.trunc(pax_count)) + " PAX in attendance and FNGs were: " + str(fngs) + ". Thanks for posting your BB! \n"
                             send_q_msg = 1
@@ -681,15 +682,21 @@ except Exception:
 
 mydb.close()
 
-
-pm_log_text += "End of PAXminer hourly run"
-
 logging.info("Beatdown execution complete for region " + db)
 logging.info(f"Time elapsed: {time.time() - current_ts}")
 
 try:
-    slack.chat_postMessage(channel=log_dest, text=pm_log_text)
-except:
+    body = strip_leading_log_dashes(pm_log_text).strip()
+    slack.chat_postMessage(
+        channel=log_dest,
+        text=format_log_message(
+            "The *PAXminer hourly* job was run as scheduled",
+            status="success",
+            duration_s=time.time() - current_ts,
+            body=body or None,
+        ),
+    )
+except Exception:
     print("Slack log message error - not posted")
     logging.error("Slack log message error - not posted")
     pass
