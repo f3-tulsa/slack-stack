@@ -253,7 +253,7 @@ def _achievements_list_modal(
         blocks.append(
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": "_No achievements defined yet._ Restore Defaults adds the builtin catalog."},
+                "text": {"type": "mrkdwn", "text": "_No achievements defined yet._ Add Missing Defaults adds the builtin catalog."},
             }
         )
     nav = page_nav_elements(
@@ -366,9 +366,14 @@ def _achievements_list_modal(
                 "Delete All",
             ),
             confirm_dialog(
-                "Restore defaults?",
-                "Adds any missing builtin achievement codes. Custom achievements are not removed or overwritten.",
-                "Restore",
+                "Add missing defaults?",
+                (
+                    "Adds only builtin codes that are not already present. "
+                    "Existing rows are left as-is, including builtins you have edited. "
+                    "For a true reset, Delete All first, then Add Missing Defaults. "
+                    "Each added achievement queues an automatic re-evaluate over all attendance."
+                ),
+                "Add Missing",
             ),
         )
     )
@@ -544,10 +549,10 @@ def _achievement_edit_modal(
             }
         )
     else:
+        # No block_id: view state must omit "activity" so save preserves the stored filter.
         blocks.append(
             {
                 "type": "context",
-                "block_id": "activity",
                 "elements": [
                     {
                         "type": "mrkdwn",
@@ -687,19 +692,24 @@ def _parse_achievement_form(payload: dict) -> dict:
 
     threshold = _to_int(_text("threshold").strip(), None)
 
-    return {
+    parsed = {
         "name": _text("name").strip(),
         "description": _text("description").strip(),
         "verb": _text("verb").strip(),
         "code": _text("code").strip(),
         "metric": _select("metric") or "posts",
-        "activity_list": _multi("activity"),
         "period": _select("period") or "year",
         "threshold": threshold,
         "range_mode": _select("range_mode") or "from_created",
         "effective_from": _date("effective_from"),
         "effective_to": _date("effective_to"),
     }
+    # Absent picker (context-only modal) vs present-and-empty (operator cleared chips).
+    if "activity" in state:
+        parsed["activity_list"] = _multi("activity")
+    else:
+        parsed["activity_list"] = None
+    return parsed
 
 
 def _validate_achievement(

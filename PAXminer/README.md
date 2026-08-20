@@ -24,13 +24,13 @@ Posting cadence and destinations come from PAXMiner-owned schedule tables (alway
 
 **Builtin reports** (from `report_defaults.json`) render from dedicated Python (charts, Kotter, award achievements, achievement leaderboard). You can **rename**, set a **time window** (honored by the SQL), **duplicate**, **delete**, and **schedule** them. Kotter and Award Achievements have no time window — they use their own engines. **Custom reports** use the full builder (source, fields, metric, chart vs table).
 
-**Defaults load on demand only** — migration creates tables/columns but does **not** seed `report_defaults.json`. Use **Load defaults** on an empty Reports/Schedule list, or **Restore Defaults** later. Restore merges missing builtins/schedules; rows with `is_customized=1` keep their edits. **Delete** removes the definition and any schedules that reference it (FK stays `RESTRICT` with app-level cascade). **Duplicate** copies a definition with a uniquified `*_copy` code and no schedules.
+**Defaults load on demand only** — migration creates tables/columns but does **not** seed `report_defaults.json`. Use **Add Missing Defaults** on an empty Reports/Schedule/Achievements list. That action merges missing builtins only; existing rows (including edited builtins with `is_customized=1`) stay as they are. A true reset is Delete All, then Add Missing Defaults. **Delete** removes the definition and any schedules that reference it (FK stays `RESTRICT` with app-level cascade). **Duplicate** copies a definition with a uniquified `*_copy` code and no schedules.
 
 Builtin defaults seed **`specific_channels`** destinations with an **empty** channel list — those items stay **skipped** until an admin picks a channel under Schedule. `dm_all_pax` and `all_ao_channels` destinations fan out immediately once due.
 
 Migration: `python migration/paxminer_migrate.py --env test|prod --all` (phases: weaselbot → scheduler DDL → drop-legacy-columns). Deploy updated Slackblast + PAXMiner code **before** `--all`. Legacy scripts `migrate_weaselbot_to_paxminer.py` and `add_report_scheduler.py` are deprecated wrappers.
 
-**Production cutover order:** (1) deploy updated Slackblast + PAXMiner code, (2) run `paxminer_migrate.py --all`, (3) **Load defaults** (or Restore Defaults) in Slack if the region has no reports yet, (4) set Schedule channels and disable any unwanted fan-out.
+**Production cutover order:** (1) deploy updated Slackblast + PAXMiner code, (2) run `paxminer_migrate.py --all`, (3) **Add Missing Defaults** in Slack if the region has no reports yet, (4) set Schedule channels and disable any unwanted fan-out.
 
 ## What PAXMiner posts
 
@@ -62,7 +62,7 @@ Award grant/revoke, leaderboards, Kotter, and charts are all schedule-driven. Aw
 | Surface | Trigger | Notes |
 |---------|---------|-------|
 | `/config-paxminer` hub | slash | admin-only; timezone on Save; hub buttons for Achievements rules / Reports / Kotter thresholds / Schedule |
-| Schedule / Reports modals | hub buttons | editable builtins + custom builder; Duplicate; Load/Restore defaults; Delete All; Run Now (logs outcome) |
+| Schedule / Reports modals | hub buttons | editable builtins + custom builder; Duplicate; Add Missing Defaults; Delete All; Run Now (logs outcome) |
 | App Home | `app_home_opened` | published for everyone; admin-only **PAXMiner Settings** opens the same hub as `/config-paxminer` |
 
 ## Lambdas (four functions)
@@ -133,7 +133,7 @@ Use **[manifest.json](manifest.json)**. After deploy, **`manifest-{test|prod}.js
 | `slack_app.py` / `slack_schedule.py` | Bolt listeners |
 | `config_paxminer.py` / `config_schedule.py` | Modal builders |
 | `scheduling.py` | Pure due-now / time-window helpers |
-| `schedule_schema.py` | DDL + seed / Restore Defaults |
+| `schedule_schema.py` | DDL + seed / Add Missing Defaults |
 | `schedule_runner.py` / `schedule_reports.py` | Dispatcher + custom report runner |
 | `handlers.py` | Lambda entrypoints (incl. `schedule_handler`) |
 | `Dockerfile` / `Dockerfile.slack` | Heavy vs light images |
