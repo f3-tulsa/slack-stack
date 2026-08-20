@@ -12,6 +12,7 @@ from typing import Any
 
 from common.encryption import decrypt_field
 from paxminer_db import connect_from_env
+from schedule_schema import ensure_report_enabled_column
 from scheduling import (
     destination_descriptor,
     format_iso_range,
@@ -607,6 +608,10 @@ def run_one_schedule_item(
     if not force and not is_due_now(schedule, timezone_name=tz_name):
         return {"schedule_id": schedule_id, "ok": True, "skipped": "not due"}
 
+    with registry_conn.cursor() as cur:
+        ensure_report_enabled_column(cur, pm_schema)
+        registry_conn.commit()
+
     definition = _load_definition(registry_conn, pm_schema, int(schedule["report_definition_id"]))
     if not definition:
         mark_schedule_status(
@@ -622,6 +627,14 @@ def run_one_schedule_item(
         if not dry_run:
             _post_schedule_outcome_log(region, out)
         return out
+    if not force and int(definition.get("enabled") if definition.get("enabled") is not None else 1) != 1:
+        return {
+            "schedule_id": schedule_id,
+            "ok": True,
+            "skipped": "definition disabled",
+            "manual": bool(manual or notify_user),
+            "notify_user": notify_user or "",
+        }
 
     report_type = definition.get("report_type") or ""
     LOG.info(
@@ -1032,14 +1045,18 @@ def _dispatch_report(
 
 
 def list_due_schedules(conn, pm_schema: str) -> list[dict]:
-    """Return enabled schedules that are due now (timezone-aware)."""
+    """Return enabled schedules whose report definition is also enabled."""
     with conn.cursor() as cur:
+        ensure_report_enabled_column(cur, pm_schema)
+        conn.commit()
         cur.execute(
             f"""
             SELECT s.*, r.timezone AS region_timezone
             FROM `{pm_schema}`.`region_schedules` s
             JOIN `{pm_schema}`.`regions` r ON r.schema_name = s.schema_name
-            WHERE s.enabled = 1 AND r.active = 1
+            JOIN `{pm_schema}`.`region_report_definitions` d
+              ON d.id = s.report_definition_id
+            WHERE s.enabled = 1 AND r.active = 1 AND COALESCE(d.enabled, 1) = 1
             """
         )
         rows = list(cur.fetchall() or [])

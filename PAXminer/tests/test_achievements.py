@@ -917,7 +917,7 @@ def test_parse_achievement_form_missing_enabled_block_is_disabled():
     payload = _achievement_form_state()
     del payload["view"]["state"]["values"]["enabled"]
     values = _parse_achievement_form(payload)
-    assert values["enabled"] == 0
+    assert "enabled" not in values
 
 
 def test_achievement_subline_shows_disabled_when_enabled_is_zero():
@@ -961,8 +961,7 @@ def test_achievement_edit_modal_disabled_row_is_unchecked():
     }
     assert "off" in _achievement_summary(row)
     modal = _achievement_edit_modal("T1", "f3test", row)
-    enabled = next(b for b in modal["blocks"] if b.get("block_id") == "enabled")
-    assert "initial_options" not in enabled["element"]
+    assert not any(b.get("block_id") == "enabled" for b in modal["blocks"])
 
 
 def test_load_achievement_keeps_version_activity_not_legacy_beatdown():
