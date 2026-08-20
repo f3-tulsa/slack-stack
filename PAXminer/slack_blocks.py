@@ -78,17 +78,76 @@ def counted_noun(n: int, singular: str, plural: str | None = None) -> str:
     return f"{int(n)} {word}"
 
 
-def pencil_row(title: str, action_id: str, value: str) -> dict:
-    """Name on the left, pencil + Edit accessory on the right (one accessory per section)."""
+OVERFLOW_EDIT = "edit"
+OVERFLOW_DUPLICATE = "duplicate"
+OVERFLOW_DISABLE = "disable"
+OVERFLOW_ENABLE = "enable"
+OVERFLOW_DELETE = "delete"
+
+
+def overflow_option(label: str, value: str) -> dict:
+    return {
+        "text": {"type": "plain_text", "text": label[:75], "emoji": True},
+        "value": str(value)[:75],
+    }
+
+
+def parse_overflow_action(action: dict | None) -> tuple[str | None, int | None]:
+    """Return ``(verb, row_id)`` from an overflow accessory payload."""
+    action = action or {}
+    opt = action.get("selected_option") or {}
+    raw = opt.get("value") or action.get("value") or ""
+    if ":" not in str(raw):
+        return None, None
+    verb, _, rest = str(raw).partition(":")
+    try:
+        return verb, int(rest)
+    except (TypeError, ValueError):
+        return None, None
+
+
+def overflow_row(title: str, action_id: str, row_id, *, enabled: bool = True) -> dict:
+    """Name on the left, Slack overflow (⋯ / More) on the right."""
+    rid = str(row_id)
+    toggle_label = "Disable" if enabled else "Enable"
+    toggle_verb = OVERFLOW_DISABLE if enabled else OVERFLOW_ENABLE
     return {
         "type": "section",
         "text": {"type": "mrkdwn", "text": f"*{title}*"[:MAX_SECTION_TEXT]},
         "accessory": {
-            "type": "button",
+            "type": "overflow",
             "action_id": action_id,
-            "text": {"type": "plain_text", "text": "✏️ Edit", "emoji": True},
-            "value": str(value),
+            "options": [
+                overflow_option("Edit", f"{OVERFLOW_EDIT}:{rid}"),
+                overflow_option("Duplicate", f"{OVERFLOW_DUPLICATE}:{rid}"),
+                overflow_option(toggle_label, f"{toggle_verb}:{rid}"),
+                overflow_option("Delete", f"{OVERFLOW_DELETE}:{rid}"),
+            ],
         },
+    }
+
+
+def delete_confirm_modal(
+    *,
+    callback_id: str,
+    title: str,
+    warning: str,
+    metadata: str,
+) -> dict:
+    """Pushed confirm view; same warning copy as the old button ``confirm`` dialog."""
+    return {
+        "type": "modal",
+        "callback_id": callback_id,
+        "private_metadata": metadata,
+        "title": {"type": "plain_text", "text": title[:24]},
+        "submit": {"type": "plain_text", "text": "Delete"},
+        "close": {"type": "plain_text", "text": "Cancel"},
+        "blocks": [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": warning[:3000]},
+            }
+        ],
     }
 
 

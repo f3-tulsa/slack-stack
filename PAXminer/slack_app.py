@@ -18,6 +18,7 @@ from slack_bolt.adapter.aws_lambda import SlackRequestHandler
 from slack_sdk.errors import SlackApiError
 
 from config_paxminer import (
+    ACHIEVEMENT_DELETE_CONFIRM_CALLBACK_ID,
     ACHIEVEMENT_EDIT_CALLBACK_ID,
     ACHIEVEMENT_RANGE_CONFIRM_CALLBACK_ID,
     ACHIEVEMENTS_LIST_CALLBACK_ID,
@@ -30,6 +31,7 @@ from config_paxminer import (
     DELETE_ALL_ACHIEVEMENTS_ACTION_ID,
     DUPLICATE_ACHIEVEMENT_ACTION_ID,
     EDIT_ACHIEVEMENT_ACTION_ID,
+    MORE_ACHIEVEMENT_ACTION_ID,
     REEVAL_FROM_ACTION_ID,
     REEVAL_TO_ACTION_ID,
     RESTORE_ACHIEVEMENTS_ACTION_ID,
@@ -51,13 +53,24 @@ from config_paxminer import (
     _validate_achievement,
     achievement_award_impact,
     _hydrate_range_row,
+    _metadata,
+    achievement_delete_confirm_text,
     delete_all_achievements,
     earliest_beatdown_date,
     restore_achievement_defaults,
     uniquify_achievement_code,
 )
 from paxminer_db import connect_from_env, paxminer_schema_from_env
-from slack_blocks import counted_noun
+from slack_blocks import (
+    OVERFLOW_DELETE,
+    OVERFLOW_DISABLE,
+    OVERFLOW_DUPLICATE,
+    OVERFLOW_EDIT,
+    OVERFLOW_ENABLE,
+    counted_noun,
+    delete_confirm_modal,
+    parse_overflow_action,
+)
 from slack_http import ADMIN_REQUIRED_TEXT, is_http_request, is_slack_admin, notify_admin_required
 
 LOCAL_DEVELOPMENT = not os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
@@ -266,6 +279,7 @@ def _refresh_achievements_list(
     selected_id=None,
     reeval_from=None,
     reeval_to=None,
+    view_id=None,
 ) -> None:
     """Re-render the list modal with an inline notice (modal actions have no response_url)."""
     meta = _parse_metadata((body.get("view") or {}).get("private_metadata"))
@@ -281,6 +295,7 @@ def _refresh_achievements_list(
             selected_id = None
     reeval_from = reeval_from or meta.get("reeval_from")
     reeval_to = reeval_to or meta.get("reeval_to")
+    view_id = view_id or meta.get("list_view_id") or (body.get("view") or {}).get("id")
     conn = connect_from_env(_registry_db())
     try:
         with conn.cursor() as cur:
@@ -291,7 +306,7 @@ def _refresh_achievements_list(
                     cur, regional_schema
                 )
         client.views_update(
-            view_id=body["view"]["id"],
+            view_id=view_id or body["view"]["id"],
             view=_achievements_list_modal(
                 team_id,
                 regional_schema,
@@ -359,6 +374,107 @@ def handle_edit_achievement(ack, body, client, logger):
 app.action(EDIT_ACHIEVEMENT_ACTION_ID)(handle_edit_achievement)
 
 
+def _noop_ack(*_a, **_k):
+    return None
+
+
+def _toggle_achievement_enabled(body, client, logger, achievement_id: int) -> None:
+    team_id, regional_schema, region = _region_context_from_body(body)
+    if not region or not regional_schema:
+        return
+    conn = connect_from_env(_registry_db())
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE `{regional_schema}`.`achievements_list` "
+                "SET enabled = 1 - COALESCE(enabled, 0) WHERE id=%s",
+                (achievement_id,),
+            )
+            row = _load_achievement(cur, regional_schema, achievement_id)
+            conn.commit()
+        enabled = int((row or {}).get("enabled") or 0) == 1
+        code = (row or {}).get("code") or achievement_id
+        notice = f"Enabled `{code}`." if enabled else f"Disabled `{code}`."
+        _refresh_achievements_list(client, body, team_id, regional_schema, notice)
+    except Exception:
+        logger.exception("achievement toggle failed id=%s", achievement_id)
+        _refresh_achievements_list(
+            client, body, team_id, regional_schema, "Could not update enabled flag — try again."
+        )
+    finally:
+        conn.close()
+
+
+def _push_achievement_delete_confirm(body, client, logger, achievement_id: int) -> None:
+    team_id, regional_schema, region = _region_context_from_body(body)
+    if not region or not regional_schema:
+        return
+    conn = connect_from_env(_registry_db())
+    try:
+        with conn.cursor() as cur:
+            row = _load_achievement(cur, regional_schema, achievement_id)
+            awards, pax = (
+                achievement_award_impact(cur, regional_schema, achievement_id) if row else (0, 0)
+            )
+        if not row:
+            _refresh_achievements_list(
+                client, body, team_id, regional_schema, "Achievement not found."
+            )
+            return
+        code = row.get("code") or str(achievement_id)
+        warning = achievement_delete_confirm_text(code, awards, pax)
+        client.views_push(
+            trigger_id=body["trigger_id"],
+            view=delete_confirm_modal(
+                callback_id=ACHIEVEMENT_DELETE_CONFIRM_CALLBACK_ID,
+                title="Delete achievement?",
+                warning=warning,
+                metadata=_metadata(
+                    team_id,
+                    regional_schema,
+                    achievement_id,
+                    list_view_id=body["view"]["id"],
+                ),
+            ),
+        )
+    except Exception:
+        logger.exception("achievement delete confirm failed id=%s", achievement_id)
+        _refresh_achievements_list(
+            client, body, team_id, regional_schema, "Could not open delete confirmation."
+        )
+    finally:
+        conn.close()
+
+
+def handle_achievement_more(ack, body, client, logger):
+    user_id = (body.get("user") or {}).get("id", "")
+    ack()
+    if not is_slack_admin(user_id, client=client):
+        notify_admin_required(client, body)
+        return
+    action = (body.get("actions") or [{}])[0]
+    verb, row_id = parse_overflow_action(action)
+    if not verb or not row_id:
+        team_id, regional_schema, _region = _region_context_from_body(body)
+        _refresh_achievements_list(
+            client, body, team_id, regional_schema, "Could not read that menu action."
+        )
+        return
+    inner = dict(body)
+    inner["actions"] = [{**action, "value": str(row_id), "action_id": action.get("action_id")}]
+    if verb == OVERFLOW_EDIT:
+        handle_edit_achievement(_noop_ack, inner, client, logger)
+    elif verb == OVERFLOW_DUPLICATE:
+        handle_duplicate_achievement(_noop_ack, inner, client, logger)
+    elif verb in (OVERFLOW_DISABLE, OVERFLOW_ENABLE):
+        _toggle_achievement_enabled(body, client, logger, row_id)
+    elif verb == OVERFLOW_DELETE:
+        _push_achievement_delete_confirm(body, client, logger, row_id)
+
+
+app.action(MORE_ACHIEVEMENT_ACTION_ID)(handle_achievement_more)
+
+
 def handle_delete_achievement(ack, body, client, logger):
     user_id = (body.get("user") or {}).get("id", "")
     ack()
@@ -422,6 +538,7 @@ def handle_delete_achievement(ack, body, client, logger):
 
 
 app.action(DELETE_ACHIEVEMENT_ACTION_ID)(handle_delete_achievement)
+app.view(ACHIEVEMENT_DELETE_CONFIRM_CALLBACK_ID)(handle_delete_achievement)
 
 
 def handle_backfill_achievement(ack, body, client, logger):
@@ -518,7 +635,7 @@ def handle_duplicate_achievement(ack, body, client, logger):
     selected_id = _selected_achievement_id(body)
     if not selected_id:
         _refresh_achievements_list(
-            client, body, team_id, regional_schema, "Open an achievement with the pencil first."
+            client, body, team_id, regional_schema, "Open an achievement from More first."
         )
         return
     from config_schedule import duplicate_name
@@ -925,14 +1042,13 @@ def handle_achievement_edit_submit(ack, body, client, logger):
                 cur.execute(
                     f"""
                     UPDATE `{regional_schema}`.`achievements_list`
-                    SET name=%s, description=%s, verb=%s, enabled=%s
+                    SET name=%s, description=%s, verb=%s
                     WHERE id=%s
                     """,
                     (
                         values["name"],
                         values["description"],
                         values["verb"],
-                        values["enabled"],
                         achievement_id,
                     ),
                 )
@@ -976,7 +1092,7 @@ def handle_achievement_edit_submit(ack, body, client, logger):
                         activity_legacy_mirror(values["activity_list"])[:32],
                         values["period"],
                         values["threshold"],
-                        values["enabled"],
+                        1,
                     ),
                 )
                 achievement_id = int(cur.lastrowid)

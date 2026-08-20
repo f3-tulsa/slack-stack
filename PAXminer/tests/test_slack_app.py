@@ -244,6 +244,7 @@ def test_modals_with_input_blocks_include_submit():
             "activity": "beatdown",
             "period": "week",
             "threshold": 6,
+            "enabled": 1,
         }
     ]
     views = [
@@ -261,7 +262,7 @@ def test_modals_with_input_blocks_include_submit():
         for b in list_with["blocks"]
         if b.get("type") == "section"
     ]
-    assert "paxminer_achievement_edit" in accessory_ids
+    assert "paxminer_achievement_more" in accessory_ids
     sublines = [
         el.get("text")
         for b in list_with["blocks"]
@@ -283,7 +284,7 @@ def test_modals_with_input_blocks_include_submit():
     )
     edit = _achievement_edit_modal("T1", "f3tulsa_test", achievements[0])
     edit_ids = [b.get("block_id") for b in edit["blocks"] if b.get("block_id")]
-    assert "enabled" in edit_ids
+    assert "enabled" not in edit_ids
     assert "apply_mode" not in edit_ids
     assert "no_end_date" not in edit_ids
     assert "range_mode" in edit_ids
@@ -314,17 +315,24 @@ def test_modals_with_input_blocks_include_submit():
     create_code = next(b for b in create["blocks"] if b.get("block_id") == "code")
     assert create_code["type"] == "input"
     assert not any(b.get("block_id") == "apply_mode" for b in create["blocks"])
-    pencils = [
-        (b.get("accessory") or {}).get("text", {}).get("text")
+    overflows = [
+        b.get("accessory") or {}
         for b in list_with["blocks"]
-        if b.get("type") == "section"
+        if b.get("type") == "section" and (b.get("accessory") or {}).get("type") == "overflow"
     ]
-    assert "✏️ Edit" in pencils
+    assert overflows
+    assert overflows[0]["action_id"] == "paxminer_achievement_more"
+    assert [o["text"]["text"] for o in overflows[0]["options"]] == [
+        "Edit",
+        "Duplicate",
+        "Disable",
+        "Delete",
+    ]
 
 
 def test_achievement_delete_confirm_names_pax_and_pluralizes():
     from config_paxminer import achievement_delete_confirm_text, _achievement_edit_modal
-    from slack_blocks import confirm_dialog, counted_noun
+    from slack_blocks import confirm_dialog, counted_noun, delete_confirm_modal
 
     assert counted_noun(1, "award") == "1 award"
     assert counted_noun(27, "award") == "27 awards"
@@ -359,15 +367,22 @@ def test_achievement_delete_confirm_names_pax_and_pluralizes():
         "pax_count": 12,
     }
     edit = _achievement_edit_modal("T1", "f3tulsa_test", row)
-    delete_btn = next(
-        el
+    extra_ids = [
+        el.get("action_id")
         for b in edit["blocks"]
         if b.get("type") == "actions"
         for el in b.get("elements") or []
-        if el.get("action_id") == "paxminer_achievement_delete"
+    ]
+    assert "paxminer_achievement_delete" not in extra_ids
+    assert "paxminer_achievement_duplicate" not in extra_ids
+    modal = delete_confirm_modal(
+        callback_id="paxminer-achievement-delete-confirm-id",
+        title="Delete achievement?",
+        warning=many,
+        metadata="{}",
     )
-    assert delete_btn["confirm"]["style"] == "danger"
-    assert "27 awards from 12 PAX" in delete_btn["confirm"]["text"]["text"]
+    assert modal["submit"]["text"] == "Delete"
+    assert "27 awards from 12 PAX" in modal["blocks"][0]["text"]["text"]
 
 
 def test_edit_achievement_no_selection_updates_view_with_notice():
@@ -523,70 +538,40 @@ def test_cosmetic_edit_does_not_mint_version():
                                                 handle_achievement_edit_submit(ack, body, MagicMock(), MagicMock())
     mint.assert_not_called()
     update_sql = " ".join(str(c) for c in mock_cur.execute.call_args_list)
-    assert "SET name=%s, description=%s, verb=%s, enabled=%s" in update_sql
+    assert "SET name=%s, description=%s, verb=%s" in update_sql
+    assert "enabled=%s" not in update_sql
 
 
 def test_reenable_does_not_mint_version_or_force_today():
-    from slack_app import handle_achievement_edit_submit
+    from slack_app import _toggle_achievement_enabled
 
-    ack = MagicMock()
     body = {
         "user": {"id": "U1"},
         "view": {
-            "private_metadata": '{"team_id":"T1","regional_schema":"f3test","achievement_id":3}',
-            "state": {"values": {}},
+            "id": "VLIST",
+            "private_metadata": '{"team_id":"T1","regional_schema":"f3test"}',
         },
     }
-    existing = {
+    row = {
         "id": 3,
         "code": "six_pack",
-        "name": "6 pack",
-        "description": "d",
-        "verb": "v",
-        "metric": "posts",
-        "activity": ["beatdown"],
-        "period": "week",
-        "threshold": 6,
-        "enabled": "0",
-        "range_mode": "from_created",
-        "effective_from": "2026-01-15",
-        "effective_to": None,
-        "first_created": "2026-01-15",
-        "version_created": "2026-01-15",
-    }
-    values = {
-        "name": "6 pack",
-        "description": "d",
-        "verb": "v",
-        "code": "six_pack",
-        "metric": "posts",
-        "activity_list": ["beatdown"],
-        "period": "week",
-        "threshold": 6,
         "enabled": 1,
-        "range_mode": "from_created",
-        "no_end_date": True,
-        "effective_from": "2026-01-15",
-        "effective_to": None,
+        "name": "6 pack",
     }
     with patch("slack_app.is_slack_admin", return_value=True):
         with patch("slack_app._region_context_from_body", return_value=("T1", "f3test", {"region": "t"})):
-            with patch("slack_app._parse_achievement_form", return_value=values):
-                with patch("slack_app._validate_achievement", return_value={}):
-                    with patch("slack_app.connect_from_env") as mock_conn:
-                        mock_cur = MagicMock()
-                        mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
-                        mock_conn.return_value.cursor.return_value.__exit__.return_value = False
-                        with patch("slack_app._load_achievement", return_value=existing):
-                            with patch("slack_app._load_achievements", return_value=[]):
-                                with patch("slack_app.earliest_beatdown_date", return_value="2025-01-01"):
-                                    with patch("achievements.range.ensure_achievement_range_columns"):
-                                        with patch("achievements.versions.update_current_range"):
-                                            with patch("achievements.versions.supersede_and_insert") as mint:
-                                                handle_achievement_edit_submit(ack, body, MagicMock(), MagicMock())
+            with patch("slack_app.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                with patch("slack_app._load_achievement", return_value=row):
+                    with patch("slack_app._refresh_achievements_list") as refresh:
+                        with patch("achievements.versions.supersede_and_insert") as mint:
+                            _toggle_achievement_enabled(body, MagicMock(), MagicMock(), 3)
     mint.assert_not_called()
-    update_sql = " ".join(str(c) for c in mock_cur.execute.call_args_list)
-    assert "SET name=%s, description=%s, verb=%s, enabled=%s" in update_sql
+    sql = mock_cur.execute.call_args.args[0]
+    assert "SET enabled = 1 - COALESCE(enabled, 0)" in sql
+    refresh.assert_called_once()
 
 
 def test_parameter_edit_mints_version_and_can_queue_backfill():
@@ -1345,4 +1330,18 @@ def test_add_and_edit_achievement_update_view_instead_of_push():
     client.views_push.assert_not_called()
     callbacks = [c.kwargs["view"]["callback_id"] for c in client.views_update.call_args_list]
     assert callbacks == ["paxminer-achievement-edit-id", "paxminer-achievement-edit-id"]
+
+
+def test_overflow_row_and_parse_action():
+    from slack_blocks import OVERFLOW_ENABLE, overflow_row, parse_overflow_action
+
+    row = overflow_row("Six Pack", "paxminer_achievement_more", 7, enabled=False)
+    assert row["accessory"]["type"] == "overflow"
+    labels = [o["text"]["text"] for o in row["accessory"]["options"]]
+    assert labels == ["Edit", "Duplicate", "Enable", "Delete"]
+    verb, oid = parse_overflow_action(
+        {"selected_option": {"value": f"{OVERFLOW_ENABLE}:7"}}
+    )
+    assert verb == OVERFLOW_ENABLE
+    assert oid == 7
 

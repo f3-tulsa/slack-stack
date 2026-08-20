@@ -12,6 +12,7 @@ sys.path.insert(0, str(_REPO / "PAXminer"))
 from schedule_schema import (  # noqa: E402
     backfill_award_achievements_schedules,
     ensure_is_customized_column,
+    ensure_report_enabled_column,
     ensure_last_run_at_column,
     ensure_log_channel_column,
     ensure_scheduler_tables,
@@ -56,6 +57,12 @@ def run_scheduler(cur, stage: str) -> dict:
         pm_schema,
         "added" if added_customized else "already present",
     )
+    added_enabled = ensure_report_enabled_column(cur, pm_schema)
+    LOG.info(
+        "%s.region_report_definitions.enabled: %s",
+        pm_schema,
+        "added" if added_enabled else "already present",
+    )
     added_last_run_at = ensure_last_run_at_column(cur, pm_schema)
     LOG.info(
         "%s.region_schedules.last_run_at: %s",
@@ -79,6 +86,7 @@ def run_scheduler(cur, stage: str) -> dict:
         "log_channel_added": added_log,
         "tables_created": tables_created,
         "is_customized_added": added_customized,
+        "report_enabled_added": added_enabled,
         "last_run_at_added": added_last_run_at,
         "award_achievements_backfill": backfill,
         "defaults_seeded": False,

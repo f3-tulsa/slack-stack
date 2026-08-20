@@ -402,8 +402,8 @@ def test_format_schedule_summary_includes_last_run():
     assert "last run: success (2026-07-18)" in line
 
 
-def test_schedules_list_uses_pencil_rows_and_subline():
-    from config_schedule import EDIT_SCHEDULE_ACTION_ID, _schedules_list_modal
+def test_schedules_list_uses_overflow_rows_and_subline():
+    from config_schedule import MORE_SCHEDULE_ACTION_ID, _schedules_list_modal
 
     schedules = [
         {
@@ -418,14 +418,19 @@ def test_schedules_list_uses_pencil_rows_and_subline():
         }
     ]
     view = _schedules_list_modal("T1", "f3test", schedules, selected_schedule_id=9)
-    pencils = [
+    menus = [
         b["accessory"]
         for b in view["blocks"]
         if b.get("type") == "section" and b.get("accessory")
     ]
-    assert pencils[0]["action_id"] == EDIT_SCHEDULE_ACTION_ID
-    assert pencils[0]["value"] == "9"
-    assert pencils[0]["text"]["text"] == "✏️ Edit"
+    assert menus[0]["type"] == "overflow"
+    assert menus[0]["action_id"] == MORE_SCHEDULE_ACTION_ID
+    assert [o["value"] for o in menus[0]["options"]] == [
+        "edit:9",
+        "duplicate:9",
+        "disable:9",
+        "delete:9",
+    ]
     sub = " ".join(
         el.get("text") or ""
         for b in view["blocks"]
@@ -1192,12 +1197,14 @@ def test_report_edit_modal_template_fields_and_almost_there():
     assert "report_type" not in almost_ids
 
 
-def test_reports_list_has_pencil_not_duplicate():
+def test_reports_list_uses_overflow_not_list_duplicate():
     from config_schedule import (
         DUPLICATE_REPORT_ACTION_ID,
-        EDIT_REPORT_ACTION_ID,
+        MORE_REPORT_ACTION_ID,
+        RUN_NOW_SCHEDULE_ACTION_ID,
         _report_edit_modal,
         _reports_list_modal,
+        _schedule_edit_modal,
     )
 
     row = {
@@ -1206,6 +1213,7 @@ def test_reports_list_has_pencil_not_duplicate():
         "code": "kotter",
         "report_type": "kotter",
         "is_builtin": 1,
+        "enabled": 0,
     }
     view = _reports_list_modal("T1", "f3test", [row])
     action_ids = []
@@ -1215,22 +1223,52 @@ def test_reports_list_has_pencil_not_duplicate():
             action_ids.append(acc["action_id"])
         for e in b.get("elements") or []:
             if e.get("action_id"):
-                action_ids.append(e["action_id"])
-    assert EDIT_REPORT_ACTION_ID in action_ids
+                action_ids.append(e.get("action_id"))
+    assert MORE_REPORT_ACTION_ID in action_ids
     assert DUPLICATE_REPORT_ACTION_ID not in action_ids
-    pencils = [
-        (b.get("accessory") or {}).get("text", {}).get("text")
+    menus = [
+        b["accessory"]
         for b in view["blocks"]
-        if b.get("type") == "section"
+        if b.get("type") == "section" and (b.get("accessory") or {}).get("type") == "overflow"
     ]
-    assert "✏️ Edit" in pencils
+    assert menus[0]["options"][2]["text"]["text"] == "Enable"
+    sub = " ".join(
+        el.get("text") or ""
+        for b in view["blocks"]
+        if b.get("type") == "context"
+        for el in b.get("elements") or []
+    )
+    assert "Disabled" in sub
     edit = _report_edit_modal("T1", "f3test", row)
     edit_ids = [
         e.get("action_id")
         for b in edit["blocks"]
         for e in b.get("elements") or []
     ]
-    assert DUPLICATE_REPORT_ACTION_ID in edit_ids
+    assert DUPLICATE_REPORT_ACTION_ID not in edit_ids
+    sched = _schedule_edit_modal(
+        "T1",
+        "f3test",
+        [row],
+        schedule={
+            "id": 4,
+            "report_definition_id": 1,
+            "destination_type": "specific_channels",
+            "destination_channels": '["C1"]',
+            "frequency_type": "weekly",
+            "time_of_day": "07:00:00",
+            "enabled": 0,
+        },
+        timezone_name="America/Chicago",
+    )
+    extra_ids = [
+        e.get("action_id")
+        for b in sched["blocks"]
+        if b.get("block_id") == "schedule_edit_extras"
+        for e in b.get("elements") or []
+    ]
+    assert extra_ids == [RUN_NOW_SCHEDULE_ACTION_ID]
+    assert not any(b.get("block_id") == "enabled" for b in sched["blocks"])
 
 
 def test_uniquify_and_duplicate_definition():
@@ -1664,13 +1702,15 @@ def test_reports_and_achievements_lists_paginate():
     page0 = _reports_list_modal("T1", "f3test", defs, page=0)
     page1 = _reports_list_modal("T1", "f3test", defs, page=1)
     p0_ids = [
-        (b.get("accessory") or {}).get("value")
+        (o.get("value") or "").split(":")[-1]
         for b in page0["blocks"]
+        for o in ((b.get("accessory") or {}).get("options") or [])
         if (b.get("accessory") or {}).get("action_id")
     ]
     p1_ids = [
-        (b.get("accessory") or {}).get("value")
+        (o.get("value") or "").split(":")[-1]
         for b in page1["blocks"]
+        for o in ((b.get("accessory") or {}).get("options") or [])
         if (b.get("accessory") or {}).get("action_id")
     ]
     assert "1" in p0_ids
@@ -1846,3 +1886,31 @@ def test_kotter_empty_threshold_acks_errors_without_writing():
     assert kwargs["response_action"] == "errors"
     assert "NO_POST_THRESHOLD" in kwargs["errors"]
     mock_conn.assert_not_called()
+
+
+def test_ensure_report_enabled_column_adds_when_missing():
+    from unittest.mock import MagicMock
+
+    from schedule_schema import ensure_report_enabled_column
+
+    cur = MagicMock()
+    cur.fetchone.side_effect = [{"c": 1}, {"c": 0}]
+    assert ensure_report_enabled_column(cur, "paxminer") is True
+    alter = cur.execute.call_args_list[-1].args[0]
+    assert "ADD COLUMN `enabled`" in alter
+
+
+def test_list_due_schedules_skips_disabled_definitions():
+    from unittest.mock import MagicMock, patch
+
+    from schedule_runner import list_due_schedules
+
+    conn = MagicMock()
+    cur = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cur
+    cur.fetchall.return_value = []
+    with patch("schedule_runner.ensure_report_enabled_column"):
+        list_due_schedules(conn, "paxminer")
+    sql = cur.execute.call_args.args[0]
+    assert "COALESCE(d.enabled, 1) = 1" in sql
+    assert "region_report_definitions" in sql

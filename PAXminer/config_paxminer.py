@@ -9,7 +9,7 @@ import re
 from datetime import date
 from pathlib import Path
 
-from slack_blocks import confirm_dialog, context, counted_noun, page_nav_elements, pencil_row
+from slack_blocks import confirm_dialog, context, counted_noun, overflow_row, page_nav_elements, parse_overflow_action
 from config_schedule import PAGE_SIZE, _bulk_delete_restore, achievement_subline
 
 LOG = logging.getLogger(__name__)
@@ -20,7 +20,9 @@ ACHIEVEMENT_EDIT_CALLBACK_ID = "paxminer-achievement-edit-id"
 ACHIEVEMENT_RANGE_CONFIRM_CALLBACK_ID = "paxminer-achievement-range-confirm-id"
 ADD_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_add"
 EDIT_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_edit"
+MORE_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_more"
 DELETE_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_delete"
+ACHIEVEMENT_DELETE_CONFIRM_CALLBACK_ID = "paxminer-achievement-delete-confirm-id"
 BACKFILL_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_backfill"
 SELECT_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_select"
 DUPLICATE_ACHIEVEMENT_ACTION_ID = "paxminer_achievement_duplicate"
@@ -239,7 +241,12 @@ def _achievements_list_modal(
     if page_rows:
         for row in page_rows:
             blocks.append(
-                pencil_row(row.get("name") or row.get("code") or f"#{row.get('id')}", EDIT_ACHIEVEMENT_ACTION_ID, str(row["id"]))
+                overflow_row(
+                    row.get("name") or row.get("code") or f"#{row.get('id')}",
+                    MORE_ACHIEVEMENT_ACTION_ID,
+                    row["id"],
+                    enabled=int(row.get("enabled") or 0) == 1,
+                )
             )
             blocks.append(context(achievement_subline(row)))
     else:
@@ -402,7 +409,6 @@ def _achievement_edit_modal(
     activity_opts = _select_options(tuple(options))
     selected_activities = map_activities_to_options(activity_list_from_rule(src), options)
     initial_activities = [o for o in activity_opts if o["value"] in selected_activities]
-    enabled = int(src.get("enabled") or 0) == 1 if is_edit else True
     from achievements.range import (
         RANGE_CUSTOM,
         RANGE_FROM_CREATED,
@@ -501,28 +507,6 @@ def _achievement_edit_modal(
         [
             {
                 "type": "input",
-                "block_id": "enabled",
-                "optional": True,
-                "label": {"type": "plain_text", "text": "Enabled"},
-                "element": {
-                    "type": "checkboxes",
-                    "action_id": "val",
-                    "options": [
-                        {
-                            "text": {"type": "plain_text", "text": "Award this achievement"},
-                            "value": "1",
-                        }
-                    ],
-                    **({"initial_options": [
-                        {
-                            "text": {"type": "plain_text", "text": "Award this achievement"},
-                            "value": "1",
-                        }
-                    ]} if enabled else {}),
-                },
-            },
-            {
-                "type": "input",
                 "block_id": "metric",
                 "label": {"type": "plain_text", "text": "Metric"},
                 "element": {
@@ -609,37 +593,6 @@ def _achievement_edit_modal(
             },
         ]
     )
-    is_edit = bool(row and row.get("id"))
-    if is_edit:
-        aid = str(row["id"])
-        code = src.get("code") or aid
-        award_count = int(src.get("award_count") or 0)
-        pax_count = int(src.get("pax_count") or 0)
-        blocks.append(
-            {
-                "type": "actions",
-                "block_id": "achievement_edit_extras",
-                "elements": [
-                    {
-                        "type": "button",
-                        "action_id": DUPLICATE_ACHIEVEMENT_ACTION_ID,
-                        "text": {"type": "plain_text", "text": "Duplicate"},
-                        "value": aid,
-                    },
-                    {
-                        "type": "button",
-                        "action_id": DELETE_ACHIEVEMENT_ACTION_ID,
-                        "text": {"type": "plain_text", "text": "Delete"},
-                        "style": "danger",
-                        "value": aid,
-                        "confirm": confirm_dialog(
-                            "Delete achievement?",
-                            achievement_delete_confirm_text(code, award_count, pax_count),
-                        ),
-                    },
-                ],
-            }
-        )
     return {
         "type": "modal",
         "callback_id": ACHIEVEMENT_EDIT_CALLBACK_ID,
@@ -697,12 +650,7 @@ def _parse_achievement_form(payload: dict) -> dict:
     def _date(block_id: str) -> str | None:
         return (state.get(block_id, {}).get("val", {}) or {}).get("selected_date")
 
-    def _checked(block_id: str) -> bool:
-        opts = (state.get(block_id, {}).get("val", {}) or {}).get("selected_options") or []
-        return any(o.get("value") == "1" for o in opts)
-
     threshold = _to_int(_text("threshold").strip(), None)
-    enabled = 1 if _checked("enabled") else 0
 
     return {
         "name": _text("name").strip(),
@@ -713,7 +661,6 @@ def _parse_achievement_form(payload: dict) -> dict:
         "activity_list": _multi("activity"),
         "period": _select("period") or "year",
         "threshold": threshold,
-        "enabled": enabled,
         "range_mode": _select("range_mode") or "from_created",
         "effective_from": _date("effective_from"),
         "effective_to": _date("effective_to"),
@@ -841,10 +788,14 @@ def _selected_achievement_id(payload: dict) -> int | None:
     aid = action.get("action_id")
     if aid in {
         EDIT_ACHIEVEMENT_ACTION_ID,
+        MORE_ACHIEVEMENT_ACTION_ID,
         DELETE_ACHIEVEMENT_ACTION_ID,
         DUPLICATE_ACHIEVEMENT_ACTION_ID,
         BACKFILL_ACHIEVEMENT_ACTION_ID,
     }:
+        verb, oid = parse_overflow_action(action)
+        if oid is not None:
+            return oid
         raw = action.get("value")
         try:
             if raw not in (None, ""):

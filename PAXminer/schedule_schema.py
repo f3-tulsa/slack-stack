@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS `{schema}`.`region_report_definitions` (
   `report_type` varchar(40) NOT NULL,
   `is_builtin` tinyint NOT NULL DEFAULT 0,
   `is_customized` tinyint NOT NULL DEFAULT 0,
+  `enabled` tinyint NOT NULL DEFAULT 1,
   `kind` varchar(20) DEFAULT NULL,
   `source` varchar(40) DEFAULT NULL,
   `fields` json DEFAULT NULL,
@@ -165,6 +166,31 @@ def ensure_is_customized_column(cur, pm_schema: str) -> bool:
         """
     )
     LOG.info("Added %s.region_report_definitions.is_customized", pm_schema)
+    return True
+
+
+def ensure_report_enabled_column(cur, pm_schema: str) -> bool:
+    """Add region_report_definitions.enabled if missing. Returns True when added."""
+    if not _table_exists(cur, pm_schema, "region_report_definitions"):
+        return False
+    cur.execute(
+        """
+        SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA=%s AND TABLE_NAME='region_report_definitions'
+          AND COLUMN_NAME='enabled'
+        """,
+        (pm_schema,),
+    )
+    if int(cur.fetchone()["c"]) > 0:
+        return False
+    cur.execute(
+        f"""
+        ALTER TABLE `{pm_schema}`.`region_report_definitions`
+        ADD COLUMN `enabled` tinyint NOT NULL DEFAULT 1
+          AFTER `is_customized`
+        """
+    )
+    LOG.info("Added %s.region_report_definitions.enabled", pm_schema)
     return True
 
 
