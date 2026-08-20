@@ -992,7 +992,12 @@ def test_load_achievement_keeps_version_activity_not_legacy_beatdown():
     }
     row = _load_achievement(cur, "f3test", 3)
     assert row["activity"] == ["2nd F"]
-    modal = _achievement_edit_modal("T1", "f3test", row)
+    modal = _achievement_edit_modal(
+        "T1",
+        "f3test",
+        row,
+        activity_options=["Bootcamp", "QSource", "Rucking", "2nd F"],
+    )
     activity = next(b for b in modal["blocks"] if b.get("block_id") == "activity")
     initial = [o["value"] for o in activity["element"].get("initial_options") or []]
     assert initial == ["2nd F"]
@@ -2279,10 +2284,8 @@ def test_legacy_activity_lists_and_classifier_text_formats():
     from achievements.activity import classify_activity_type, legacy_activity_to_list
 
     assert legacy_activity_to_list("any") == []
-    assert "beatdown" in legacy_activity_to_list("beatdown")
-    assert "Bootcamp" in legacy_activity_to_list("beatdown")
-    beatdown = legacy_activity_to_list("beatdown")
-    assert len(beatdown) == len({a.lower() for a in beatdown})
+    assert legacy_activity_to_list("beatdown") == []
+    assert legacy_activity_to_list(None) == []
     assert "qsource" in {a.lower() for a in legacy_activity_to_list("qsource")}
     assert (
         classify_activity_type(backblast="QSource with Klint at The Goose", ao_name="the-goose")
@@ -2305,37 +2308,52 @@ def test_activity_labels_dedupe_case_and_prefer_option_spelling():
         "Bootcamp",
         "beatdown",
     ]
-    assert activity_list_from_rule(
-        {"activity": ["beatdown", "Bootcamp", "bootcamp"]}
-    ) == ["beatdown", "Bootcamp"]
+    assert activity_list_from_rule({"activity": ["beatdown", "Bootcamp", "bootcamp"]}) == []
+    assert activity_list_from_rule({"activity": "beatdown"}) == []
+    assert activity_list_from_rule({"activity": None}) == []
+    assert activity_list_from_rule({"activity": ["Bootcamp"]}) == ["Bootcamp"]
     assert map_activities_to_options(
         ["bootcamp", "beatdown"],
         ["Bootcamp", "beatdown", "qsource"],
     ) == ["Bootcamp", "beatdown"]
 
 
-def test_load_activity_options_dedupes_slackblast_case_variants():
+def test_load_activity_options_uses_slackblast_event_types_in_order():
     from unittest.mock import MagicMock
 
     from config_paxminer import _load_activity_options
 
     cur = MagicMock()
-    cur.fetchall.return_value = [
-        {"activity_type": "Bootcamp"},
-        {"activity_type": "beatdown"},
-        {"activity_type": "bootcamp"},
-    ]
-    opts = _load_activity_options(cur, "f3test")
-    assert opts[0] == "Bootcamp"
-    assert "bootcamp" not in opts
-    assert len(opts) == len({o.lower() for o in opts})
-    assert "qsource" in opts
-    assert "2nd F" in opts
+    cur.fetchone.return_value = {
+        "custom_fields": {
+            "Event Type": {
+                "name": "Event Type",
+                "type": "Dropdown",
+                "options": [
+                    "Bootcamp",
+                    "QSource",
+                    "Rucking",
+                    "Running",
+                    "2nd F",
+                    "beatdown",
+                    "Bootcamp",
+                ],
+                "enabled": False,
+            }
+        }
+    }
+    opts = _load_activity_options(cur, "f3test", team_id="T1")
+    assert opts == ["Bootcamp", "QSource", "Rucking", "Running", "2nd F"]
+    assert "beatdown" not in {o.lower() for o in opts}
+    sql = str(cur.execute.call_args[0][0])
+    assert "custom_fields" in sql
+    assert "beatdowns" not in sql.lower()
 
 
 def test_achievement_edit_modal_activity_options_are_case_insensitive():
     from config_paxminer import _achievement_edit_modal, _parse_achievement_form
 
+    catalog = ["Bootcamp", "QSource", "Rucking", "Running", "2nd F"]
     modal = _achievement_edit_modal(
         "T1",
         "f3test",
@@ -2346,25 +2364,19 @@ def test_achievement_edit_modal_activity_options_are_case_insensitive():
             "description": "d",
             "verb": "posting",
             "metric": "posts",
-            "activity": ["beatdown", "Bootcamp", "bootcamp"],
+            "activity": ["Bootcamp", "bootcamp"],
             "period": "month",
             "threshold": 6,
             "enabled": 1,
         },
-        activity_options=[
-            "Bootcamp",
-            "beatdown",
-            "qsource",
-            "rucking",
-            "bootcamp",
-            "2nd F",
-        ],
+        activity_options=[*catalog, "beatdown", "bootcamp"],
     )
     activity = next(b for b in modal["blocks"] if b.get("block_id") == "activity")
     values = [o["value"] for o in activity["element"]["options"]]
-    assert values == ["Bootcamp", "beatdown", "qsource", "rucking", "2nd F"]
+    assert values == catalog
+    assert "beatdown" not in values
     initial = [o["value"] for o in activity["element"].get("initial_options") or []]
-    assert initial == ["Bootcamp", "beatdown"]
+    assert initial == ["Bootcamp"]
 
     parsed = _parse_achievement_form(
         {
@@ -2385,4 +2397,133 @@ def test_achievement_edit_modal_activity_options_are_case_insensitive():
             }
         }
     )
-    assert parsed["activity_list"] == ["Bootcamp", "beatdown"]
+    assert parsed["activity_list"] == []
+
+    cleared = _parse_achievement_form(
+        {
+            "view": {
+                "state": {
+                    "values": {
+                        "activity": {"val": {"selected_options": []}},
+                    }
+                }
+            }
+        }
+    )
+    assert cleared["activity_list"] == []
+
+    bootcamp_only = _parse_achievement_form(
+        {
+            "view": {
+                "state": {
+                    "values": {
+                        "activity": {
+                            "val": {"selected_options": [{"value": "Bootcamp"}]}
+                        }
+                    }
+                }
+            }
+        }
+    )
+    assert bootcamp_only["activity_list"] == ["Bootcamp"]
+
+
+def test_old_beatdown_sentinel_reopens_with_nothing_selected():
+    from config_paxminer import _achievement_edit_modal
+
+    modal = _achievement_edit_modal(
+        "T1",
+        "f3test",
+        {
+            "id": 3,
+            "name": "6 pack",
+            "code": "six_pack",
+            "description": "d",
+            "verb": "posting",
+            "metric": "posts",
+            "activity": ["beatdown", "Bootcamp", "bootcamp"],
+            "period": "month",
+            "threshold": 6,
+            "enabled": 1,
+        },
+        activity_options=["Bootcamp", "QSource", "Rucking", "2nd F"],
+    )
+    activity = next(b for b in modal["blocks"] if b.get("block_id") == "activity")
+    assert activity["type"] == "input"
+    assert not activity["element"].get("initial_options")
+
+
+def test_filter_bootcamp_skips_unlabeled_beatdown_posts():
+    import pandas as pd
+
+    from achievements.activity import (
+        activity_list_from_rule,
+        filter_by_activity_types,
+    )
+
+    df = pd.DataFrame(
+        {"activity_type": ["Bootcamp", "bootcamp", "beatdown", "QSource"]}
+    )
+    empty = filter_by_activity_types(df, activity_list_from_rule({"activity": None}))
+    assert len(empty) == 4
+    unlabeled = filter_by_activity_types(
+        df, activity_list_from_rule({"activity": "beatdown"})
+    )
+    assert len(unlabeled) == 4
+    bootcamp = filter_by_activity_types(df, ["Bootcamp"])
+    assert set(bootcamp["activity_type"]) == {"Bootcamp", "bootcamp"}
+    assert "beatdown" not in set(bootcamp["activity_type"])
+
+
+def test_insert_version_stores_sql_null_for_empty_activity():
+    from unittest.mock import MagicMock
+
+    from achievements.versions import insert_version
+
+    cur = MagicMock()
+    cur.lastrowid = 11
+    insert_version(
+        cur,
+        "f3test",
+        achievement_id=3,
+        code="six_pack",
+        metric="posts",
+        activity_list=[],
+        period="month",
+        threshold=6,
+        effective_from=None,
+        effective_to=None,
+        created_by="U1",
+    )
+    args = cur.execute.call_args[0][1]
+    assert args[4] is None
+
+    insert_version(
+        cur,
+        "f3test",
+        achievement_id=3,
+        code="six_pack",
+        metric="posts",
+        activity_list=["beatdown", "Bootcamp", "bootcamp"],
+        period="month",
+        threshold=6,
+        effective_from=None,
+        effective_to=None,
+        created_by="U1",
+    )
+    assert cur.execute.call_args[0][1][4] is None
+
+    insert_version(
+        cur,
+        "f3test",
+        achievement_id=3,
+        code="six_pack",
+        metric="posts",
+        activity_list=["Bootcamp"],
+        period="month",
+        threshold=6,
+        effective_from=None,
+        effective_to=None,
+        created_by="U1",
+    )
+    assert cur.execute.call_args[0][1][4] == '["Bootcamp"]'

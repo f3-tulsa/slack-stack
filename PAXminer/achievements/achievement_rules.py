@@ -7,7 +7,9 @@ from pathlib import Path
 
 # Rule columns: metric, activity, period, threshold
 # metric: posts | qs | distinct_aos | posts_at_single_ao
-# activity: beatdown | qsource | any
+# activity (list varchar): qsource | rucking | any | a Slackblast Event Type.
+# beatdown on the list row is a legacy any-event sentinel, not Bootcamp.
+# The version JSON column is the filter: NULL/empty = any event.
 # period: week | month | year
 
 _DEFAULTS_PATH = Path(__file__).resolve().parent.parent / "achievement_defaults.json"
