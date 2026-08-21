@@ -187,7 +187,7 @@ With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if nee
 
 1. Deploy **PAXMiner** then **slackblast** (CI waits for PAXMiner when both run so **`AchievementsFunctionUrl`** is available).
 2. Run **`python migration/paxminer_migrate.py --env <stage> --all`** (weaselbot fold-in, scheduler tables, **achievements versioning**, drop legacy `regions` columns). Deploy updated application code **before** the `drop-legacy-columns` phase. **Exception:** the `achievements` phase must run **before** shipping the PAXminer image that JOINs `achievement_versions` (`python migration/paxminer_migrate.py --env <stage> --phase achievements`). Slackblast and QSignups do not need a deploy for that phase.
-3. Update **PAXMiner** Slack app from **`PAXminer/manifest-<stage>.json`** (**`SlackFunctionUrl`**, `reactions:write`).
+3. Update **PAXMiner** Slack app from **`PAXminer/manifest-<stage>.json`** (**`SlackFunctionUrl`**, `reactions:write`, `emoji:read`). Reinstall so the new `emoji:read` scope is granted; until then the award-reaction picker falls back to the curated standard set.
 4. Re-install or verify **slackblast** OAuth if needed; confirm achievement webhook env on slackblast Lambda.
 5. Configure **`/config-paxminer`**: achievement channel/toggles, then **Schedule** destinations (set channels for `specific_channels` rows; disable any unwanted fan-out).
 6. Smoke-invoke the PAXMiner Lambdas (see above) and run the Slack Bolt manual smoke.

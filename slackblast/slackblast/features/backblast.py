@@ -28,6 +28,9 @@ from utilities.helper_functions import (
     remove_keys_from_dict,
     replace_user_channel_ids,
     safe_get,
+    short_backblast_date,
+    build_backblast_edit_summary,
+    format_backblast_paxminer_log,
 )
 from utilities.slack import actions, forms
 from utilities.slack import orm as slack_orm
@@ -416,6 +419,7 @@ def handle_backblast_post(body: dict, client: WebClient, logger: Logger, context
         chan = the_ao
 
     prior_pax_ids = set()
+    prior_backblast = None
     if create_or_edit == "edit":
         message_metadata = json.loads(body["view"]["private_metadata"])
         message_channel = safe_get(message_metadata, "channel_id")
@@ -673,6 +677,12 @@ COUNT: {count}
                 filters=[Attendance.timestamp == message_ts],
             )
             prior_pax_ids = {a.user_id for a in prior_attendance}
+            prior_rows = DbManager.find_records(
+                cls=Backblast,
+                schema=region_record.paxminer_schema,
+                filters=[Backblast.timestamp == message_ts],
+            )
+            prior_backblast = prior_rows[0] if prior_rows else None
 
     res_link = client.chat_getPermalink(channel=chan or message_channel, message_ts=res["ts"])
 
@@ -777,11 +787,52 @@ COUNT: {count}
             try:
                 paxminer_log_channel = resolve_paxminer_log_channel(region_record, logger, client)
                 if paxminer_log_channel:
-                    import_or_edit = "imported" if create_or_edit == "create" else "edited"
+                    summary_lines = None
+                    if create_or_edit == "edit" and prior_backblast is not None:
+                        name_ids = {
+                            u
+                            for u in [
+                                the_q,
+                                *(the_coq or []),
+                                *pax,
+                                getattr(prior_backblast, "q_user_id", None),
+                                getattr(prior_backblast, "coq_user_id", None),
+                                *prior_pax_ids,
+                            ]
+                            if u
+                        }
+                        id_list = list(name_ids)
+                        name_list = get_user_names(
+                            id_list, logger, client, return_urls=False, user_records=user_records
+                        ) or []
+                        names = {uid: name for uid, name in zip(id_list, name_list) if uid}
+                        stored_body = f"{post_msg}\n{moleskin_text}".replace("*", "")
+                        prior_body = getattr(prior_backblast, "backblast", None) or ""
+                        summary_lines = build_backblast_edit_summary(
+                            prior=prior_backblast,
+                            q_user_id=db_q_user_id,
+                            coq_user_id=the_coq[0] if the_coq else None,
+                            current_pax_ids=current_pax_ids,
+                            prior_pax_ids=prior_pax_ids,
+                            pax_count=count,
+                            fng_count=fng_count,
+                            bd_date=the_date,
+                            ao_id=ao or chan,
+                            body_changed=(prior_body or "").replace("*", "").strip()
+                            != (stored_body or "").strip(),
+                            names=names,
+                        )
                     client.chat_postMessage(
                         channel=paxminer_log_channel,
-                        text=f"Backblast successfully {import_or_edit} for AO: <#{ao or chan}> Date: {the_date} Q: {q_name}"
-                        f"\nLink: {res_link['permalink']}",
+                        text=format_backblast_paxminer_log(
+                            edited=create_or_edit == "edit",
+                            ao_id=ao or chan,
+                            date_label=short_backblast_date(the_date),
+                            permalink=(res_link or {}).get("permalink"),
+                            summary_lines=summary_lines,
+                        ),
+                        unfurl_links=False,
+                        unfurl_media=False,
                     )
             except Exception as e:
                 logger.error("Error posting to paxminer_logs channel: %s", e, exc_info=True)

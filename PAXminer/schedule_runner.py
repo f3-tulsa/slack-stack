@@ -295,11 +295,6 @@ def _apply_delivery_result(
     return out
 
 
-def format_run_result(result: dict) -> tuple[str, list[dict] | None]:
-    """Alias of the paxminer_logs formatter (Run Now no longer DMs the admin)."""
-    return format_schedule_log_line("", result), None
-
-
 def _report_title(name: str) -> str:
     """Strip a trailing ' report' so builtin names don't read 'The *Kotter report* report'."""
     title = (name or "report").strip() or "report"
@@ -310,40 +305,42 @@ def _report_title(name: str) -> str:
     return title
 
 
-def _channel_link(channel_id: Any) -> str | None:
-    cid = str(channel_id or "").strip()
-    if not cid:
+def _channel_plain_name(item: Any) -> str | None:
+    if isinstance(item, dict):
+        ao = str(item.get("ao") or "").strip()
+        cid = str(item.get("channel_id") or "").strip()
+        if ao:
+            return ao if ao.startswith("#") else f"#{ao}"
+        if cid:
+            return cid
         return None
-    return f"<#{cid}>" if cid.startswith("C") else cid
+    text = str(item or "").strip()
+    if not text:
+        return None
+    if text.startswith("<#") and text.endswith(">"):
+        text = text[2:-1]
+    if text.startswith("#"):
+        return text
+    return text
 
 
-def _posted_channel_links(result: dict, nested: dict) -> list[str]:
+def _posted_channel_names(result: dict, nested: dict) -> list[str]:
     posted = result.get("posted_channels") or nested.get("posted_channels") or []
-    links: list[str] = []
+    names: list[str] = []
     extra = 0
-    for item in posted:
-        cid = item.get("channel_id") if isinstance(item, dict) else item
-        tag = _channel_link(cid)
+    sources = list(posted) if posted else list(result.get("specified_channels") or [])
+    for item in sources:
+        tag = _channel_plain_name(item)
         if not tag:
             continue
-        candidate = " ".join(links + [tag])
+        candidate = ", ".join(names + [tag])
         if len(candidate) > 2800:
             extra += 1
         else:
-            links.append(tag)
-    if not links:
-        for cid in result.get("specified_channels") or []:
-            tag = _channel_link(cid)
-            if not tag:
-                continue
-            candidate = " ".join(links + [tag])
-            if len(candidate) > 2800:
-                extra += 1
-            else:
-                links.append(tag)
+            names.append(tag)
     if extra:
-        links.append(f"+{extra} more")
-    return links
+        names.append(f"+{extra} more")
+    return names
 
 
 def _posted_user_ticks(result: dict, nested: dict) -> list[str]:
@@ -408,27 +405,35 @@ def _ensure_outcome_fields(result: dict, report_type: str) -> dict:
     return out
 
 
-def format_schedule_log_line(region_name: str, result: dict) -> str:
-    """Reusable schedule-run outcome for paxminer_logs. Independent of report_type."""
+def format_schedule_log_line(
+    region_name: str,
+    result: dict,
+    *,
+    include_skipped: bool = False,
+) -> str | None:
+    """Reusable schedule-run outcome for paxminer_logs. Independent of report_type.
+
+    Skipped runs return None unless ``include_skipped`` (Run Now admin DM).
+    """
+    del region_name
     nested = result.get("result") if isinstance(result.get("result"), dict) else {}
     name = result.get("definition_name") or nested.get("definition_name") or result.get("report_type") or "report"
     notify_user = (result.get("notify_user") or nested.get("notify_user") or "").strip()
     operator = (result.get("operator_name") or "").strip() or notify_user
     if result.get("manual") or notify_user:
-        trigger = (
-            f"was run manually by {ticked_display_name(operator)}"
-            if operator
-            else "was run manually"
-        )
+        who = operator if operator and not is_slack_user_id(operator) else "admin"
+        mode = f"manually by {who}"
     else:
-        trigger = "was run as scheduled"
-    header = f"The *{_report_title(str(name))}* report {trigger}"
+        mode = "scheduled"
+    header = f"The *{_report_title(str(name))}* report was run."
 
     skipped = result.get("skipped") or nested.get("skipped")
     error = result.get("error") or nested.get("error")
     ok = result.get("ok", True)
     status_name = result.get("status")
     if skipped and ok:
+        if not include_skipped:
+            return None
         status = "skipped"
         detail = str(skipped)
     elif error or not ok or status_name in ("error", "failed"):
@@ -477,8 +482,8 @@ def format_schedule_log_line(region_name: str, result: dict) -> str:
         ticks = _posted_user_ticks(result, nested)
         dest = f"{label} ({' '.join(ticks)})" if ticks else label
     else:
-        links = _posted_channel_links(result, nested)
-        dest = " ".join(links) if links else label
+        names = _posted_channel_names(result, nested)
+        dest = ", ".join(names) if names else label
 
     results_line = (result.get("results_line") or nested.get("results_line") or "").strip()
     period = format_iso_range(
@@ -486,7 +491,7 @@ def format_schedule_log_line(region_name: str, result: dict) -> str:
         result.get("period_end") or nested.get("period_end") or result.get("window_end") or nested.get("window_end"),
     )
 
-    fields: list[tuple[str, str]] = []
+    fields: list[tuple[str, str]] = [("Mode", mode)]
     if results_line:
         fields.append(("Results", results_line))
     if period:
@@ -499,7 +504,13 @@ def format_schedule_log_line(region_name: str, result: dict) -> str:
         fields=fields,
         message_count=messages,
         destinations=dest,
+        code_block=True,
     )
+
+
+def format_run_result(result: dict) -> tuple[str | None, list[dict] | None]:
+    """Alias of the paxminer_logs formatter (Run Now no longer DMs the admin)."""
+    return format_schedule_log_line("", result, include_skipped=True), None
 
 
 def _post_schedule_outcome_log(region: dict | None, result: dict) -> None:
@@ -525,7 +536,10 @@ def _post_schedule_outcome_log(region: dict | None, result: dict) -> None:
         notify = (payload.get("notify_user") or "").strip()
         if notify and not payload.get("operator_name"):
             payload["operator_name"] = slack_display_name(client, notify)
-        post_log(client, format_schedule_log_line(region_name, payload), region=region)
+        line = format_schedule_log_line(region_name, payload)
+        if not line:
+            return
+        post_log(client, line, region=region)
     except Exception:
         LOG.debug("schedule outcome log failed region=%s", region_name, exc_info=True)
 
@@ -550,6 +564,8 @@ def notify_run_result(
             LOG.warning("notify_run_result: no Slack token available")
             return
         text, blocks = format_run_result(result)
+        if not text:
+            return
         client = slack_client(tok)
         dm = open_dm_channel(client, user_id)
         post_message(client, dm, text, blocks=blocks)

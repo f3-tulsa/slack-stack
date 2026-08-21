@@ -337,6 +337,114 @@ def resolve_paxminer_log_channel(region_record, logger, client):
     return get_channel_id("paxminer_logs", logger, client)
 
 
+def short_backblast_date(value) -> str:
+    """Slack mrkdwn date label like Aug 21."""
+    raw = value
+    if hasattr(value, "strftime"):
+        return f"{value.strftime('%b')} {int(value.strftime('%d'))}"
+    text = str(value or "").strip()
+    try:
+        parsed = datetime.strptime(text[:10], "%Y-%m-%d")
+        return f"{parsed.strftime('%b')} {parsed.day}"
+    except ValueError:
+        return text or "this event"
+
+
+def _log_person_name(user_id, names: dict) -> str:
+    uid = str(user_id or "").strip()
+    if not uid:
+        return "none"
+    return names.get(uid) or uid
+
+
+def _norm_log_value(value) -> str:
+    if value is None:
+        return ""
+    if hasattr(value, "isoformat"):
+        return str(value.isoformat())[:10]
+    return str(value).strip()
+
+
+BACKBLAST_EDIT_SUMMARY_CAP = 10
+
+
+def build_backblast_edit_summary(
+    *,
+    prior,
+    q_user_id,
+    coq_user_id,
+    current_pax_ids: set,
+    prior_pax_ids: set,
+    pax_count,
+    fng_count,
+    bd_date,
+    ao_id,
+    body_changed: bool,
+    names: dict | None = None,
+) -> list[str]:
+    """Scalar edit lines for paxminer_logs. Never diffs the moleskin body."""
+    names = names or {}
+    lines: list[str] = []
+    old_q = getattr(prior, "q_user_id", None)
+    if _norm_log_value(old_q) != _norm_log_value(q_user_id):
+        lines.append(
+            f"Q: {_log_person_name(old_q, names)} → {_log_person_name(q_user_id, names)}"
+        )
+    old_coq = getattr(prior, "coq_user_id", None)
+    if _norm_log_value(old_coq) != _norm_log_value(coq_user_id):
+        lines.append(
+            f"CoQ: {_log_person_name(old_coq, names)} → {_log_person_name(coq_user_id, names)}"
+        )
+    added = sorted(current_pax_ids - prior_pax_ids)
+    removed = sorted(prior_pax_ids - current_pax_ids)
+    if added:
+        shown, extra = added[:8], len(added) - 8
+        label = ", ".join(_log_person_name(u, names) for u in shown)
+        if extra > 0:
+            label = f"{label} +{extra} more"
+        lines.append("PAX added: " + label)
+    if removed:
+        shown, extra = removed[:8], len(removed) - 8
+        label = ", ".join(_log_person_name(u, names) for u in shown)
+        if extra > 0:
+            label = f"{label} +{extra} more"
+        lines.append("PAX removed: " + label)
+    old_count = getattr(prior, "pax_count", None)
+    if _norm_log_value(old_count) != _norm_log_value(pax_count):
+        lines.append(f"Count: {old_count} → {pax_count}")
+    old_fng = getattr(prior, "fng_count", None)
+    if _norm_log_value(old_fng) != _norm_log_value(fng_count):
+        lines.append(f"FNGs: {old_fng} → {fng_count}")
+    old_date = getattr(prior, "bd_date", None)
+    if _norm_log_value(old_date) != _norm_log_value(bd_date):
+        lines.append(f"Date: {old_date} → {bd_date}")
+    old_ao = getattr(prior, "ao_id", None)
+    if _norm_log_value(old_ao) != _norm_log_value(ao_id):
+        lines.append(f"AO: {old_ao} → {ao_id}")
+    if body_changed:
+        lines.append("Backblast body was edited")
+    extra = len(lines) - BACKBLAST_EDIT_SUMMARY_CAP
+    if extra > 0:
+        lines = lines[:BACKBLAST_EDIT_SUMMARY_CAP] + [f"+{extra} more changes"]
+    return lines
+
+
+def format_backblast_paxminer_log(
+    *,
+    edited: bool,
+    ao_id: str,
+    date_label: str,
+    permalink: str | None,
+    summary_lines: list[str] | None = None,
+) -> str:
+    verb = "edited" if edited else "imported"
+    date_part = f"<{permalink}|{date_label}>" if permalink else date_label
+    header = f"Backblast successfully {verb} for <#{ao_id}> on {date_part}."
+    if not edited or not summary_lines:
+        return header
+    return header + "\n```\n" + "\n".join(summary_lines) + "\n```"
+
+
 def get_user_names(
     array_of_user_ids,
     logger,
