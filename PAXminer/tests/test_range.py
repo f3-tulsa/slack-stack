@@ -13,6 +13,7 @@ from achievements.range import (
     REEVAL_STALE_AFTER,
     backfill_range_mode,
     ensure_achievement_range_columns,
+    hold_prior_version_awards,
     normalize_range_mode,
     range_validation_errors,
     resolve_stored_range,
@@ -27,6 +28,14 @@ def test_normalize_legacy_and_null_modes():
     assert normalize_range_mode("all_previous") == RANGE_ALL_ATTENDANCE
     assert normalize_range_mode(None, effective_from=None) == RANGE_ALL_ATTENDANCE
     assert normalize_range_mode(None, effective_from="2026-03-01") == RANGE_CUSTOM
+
+
+def test_hold_prior_version_awards_only_for_since_rules_changed():
+    assert hold_prior_version_awards(RANGE_SINCE_RULES_CHANGED) is True
+    assert hold_prior_version_awards(RANGE_ALL_ATTENDANCE) is False
+    assert hold_prior_version_awards(RANGE_FROM_CREATED) is False
+    assert hold_prior_version_awards(RANGE_CUSTOM) is False
+    assert hold_prior_version_awards(None, effective_from=None) is False
 
 
 def test_resolve_four_modes():
