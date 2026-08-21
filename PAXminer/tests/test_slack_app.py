@@ -314,6 +314,51 @@ def test_modals_with_input_blocks_include_submit():
     create = _achievement_edit_modal("T1", "f3tulsa_test", None)
     create_code = next(b for b in create["blocks"] if b.get("block_id") == "code")
     assert create_code["type"] == "input"
+    create_range = next(b for b in create["blocks"] if b.get("block_id") == "range_mode")
+    assert create_range["element"]["initial_option"]["value"] == "from_created"
+    dup = _achievement_edit_modal(
+        "T1",
+        "f3tulsa_test",
+        {
+            "name": "The Priest",
+            "code": "the_priest_copy",
+            "metric": "posts",
+            "activity": ["QSource"],
+            "period": "year",
+            "threshold": 25,
+            "range_mode": "all_attendance",
+            "effective_from": None,
+            "effective_to": None,
+        },
+    )
+    dup_code = next(b for b in dup["blocks"] if b.get("block_id") == "code")
+    assert dup_code["type"] == "input"
+    dup_range = next(b for b in dup["blocks"] if b.get("block_id") == "range_mode")
+    assert dup_range["element"]["initial_option"]["value"] == "all_attendance"
+    dup_custom = _achievement_edit_modal(
+        "T1",
+        "f3tulsa_test",
+        {
+            "name": "Custom Copy",
+            "code": "custom_copy",
+            "metric": "posts",
+            "activity": "any",
+            "period": "year",
+            "threshold": 10,
+            "range_mode": "custom",
+            "effective_from": "2026-02-01",
+            "effective_to": "2026-12-31",
+        },
+    )
+    dup_start = next(b for b in dup_custom["blocks"] if b.get("block_id") == "effective_from")[
+        "element"
+    ]
+    dup_end = next(b for b in dup_custom["blocks"] if b.get("block_id") == "effective_to")["element"]
+    assert next(b for b in dup_custom["blocks"] if b.get("block_id") == "range_mode")["element"][
+        "initial_option"
+    ]["value"] == "custom"
+    assert dup_start.get("initial_date") == "2026-02-01"
+    assert dup_end.get("initial_date") == "2026-12-31"
     assert not any(b.get("block_id") == "apply_mode" for b in create["blocks"])
     overflows = [
         b.get("accessory") or {}
@@ -1196,6 +1241,47 @@ def test_backfill_button_rejects_in_flight_lock():
                                 handle_backfill_achievement(ack, body, MagicMock(), MagicMock())
     queue.assert_not_called()
     assert "already running" in refresh.call_args.args[4]
+
+
+def test_backfill_button_clears_lock_when_queue_fails():
+    from slack_app import handle_backfill_achievement
+
+    ack = MagicMock()
+    body = {
+        "user": {"id": "U1"},
+        "view": {
+            "id": "V1",
+            "private_metadata": '{"team_id":"T1","regional_schema":"f3test"}',
+            "state": {"values": {}},
+        },
+        "actions": [{"action_id": "paxminer_achievement_backfill", "value": "4"}],
+    }
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch(
+            "slack_app._region_context_from_body",
+            return_value=("T1", "f3test", {"region": "t"}),
+        ):
+            with patch("slack_app.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                with patch("achievements.range.ensure_achievement_range_columns"):
+                    with patch(
+                        "achievements.range.try_acquire_reeval_lock",
+                        return_value=(True, None),
+                    ):
+                        with patch(
+                            "slack_schedule.queue_achievement_backfill",
+                            side_effect=RuntimeError("invoke failed"),
+                        ):
+                            with patch("achievements.range.clear_reeval_lock") as unlock:
+                                with patch("slack_app._refresh_achievements_list") as refresh:
+                                    handle_backfill_achievement(
+                                        ack, body, MagicMock(), MagicMock()
+                                    )
+    unlock.assert_called_once()
+    assert unlock.call_args.args[2] == 4
+    assert "Could not queue" in refresh.call_args.args[4]
 
 def test_delete_achievement_posts_admin_notice():
     from slack_app import handle_delete_achievement
