@@ -428,11 +428,14 @@ def _achievement_edit_modal(
         range_mode_options,
     )
 
-    range_mode = (
-        RANGE_FROM_CREATED
-        if not is_edit
-        else normalize_range_mode(src.get("range_mode"), effective_from=src.get("effective_from"))
-    )
+    # Add (empty src) defaults to from-created. Duplicate copies the source
+    # range even though it has no id, so it must not take that Add default.
+    if is_edit or src.get("range_mode") is not None:
+        range_mode = normalize_range_mode(
+            src.get("range_mode"), effective_from=src.get("effective_from")
+        )
+    else:
+        range_mode = RANGE_FROM_CREATED
     is_custom = range_mode == RANGE_CUSTOM
     start_display = iso_date(src.get("effective_from")) if is_custom else None
     end_display = iso_date(src.get("effective_to")) if is_custom else None

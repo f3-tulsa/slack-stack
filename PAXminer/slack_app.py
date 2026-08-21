@@ -588,6 +588,7 @@ def handle_backfill_achievement(ack, body, client, logger):
     from slack_schedule import queue_achievement_backfill
 
     conn = connect_from_env(_registry_db())
+    handed_off = False
     try:
         with conn.cursor() as cur:
             ensure_achievement_range_columns(cur, regional_schema)
@@ -614,6 +615,7 @@ def handle_backfill_achievement(ack, body, client, logger):
                 end=end,
                 automatic=False,
             )
+            handed_off = True
         except Exception:
             logger.exception("queue achievement backfill failed")
             with conn.cursor() as cur:
@@ -636,6 +638,13 @@ def handle_backfill_achievement(ack, body, client, logger):
         )
     except Exception:
         logger.exception("queue achievement backfill failed")
+        if not handed_off:
+            try:
+                with conn.cursor() as cur:
+                    clear_reeval_lock(cur, regional_schema, int(selected_id))
+                conn.commit()
+            except Exception:
+                logger.warning("failed to clear reeval lock after backfill error")
         _refresh_achievements_list(
             client, body, team_id, regional_schema, "Could not queue re-evaluate."
         )

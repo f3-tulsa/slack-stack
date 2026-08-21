@@ -1727,7 +1727,9 @@ def test_populated_activity_list_filters():
     assert out.iloc[0]["date_awarded"] == date(2026, 8, 1)
 
 
-def _older_version_reeval(range_mode, *, qualify=False, effective_from=None):
+def _older_version_reeval(
+    range_mode, *, qualify=False, effective_from=None, rejudge_prior_versions=True
+):
     from achievements.runner import run_achievements_for_region
 
     rule = {
@@ -1794,6 +1796,7 @@ def _older_version_reeval(range_mode, *, qualify=False, effective_from=None):
                             },
                             pax_user_ids={"U1"},
                             dry_run=True,
+                            rejudge_prior_versions=rejudge_prior_versions,
                         )
 
 
@@ -1815,6 +1818,12 @@ def test_backdate_keeps_older_version_award_if_still_qualifies():
     assert result["revokes"] == 0
     assert result["grants"] == 0
     assert result["held"] == 1
+
+
+def test_webhook_does_not_revoke_older_version_even_when_backdating():
+    result = _older_version_reeval("all_attendance", rejudge_prior_versions=False)
+    assert result["revokes"] == 0
+    assert result["held_older_version"] == 1
 
 
 def test_null_version_is_grandfathered():
@@ -2165,6 +2174,7 @@ def test_reconcile_rule_awards_silent_channel_summary():
     assert result["revokes"] == 141
     assert mock_run.call_args.kwargs["announce"] is False
     assert mock_run.call_args.kwargs["allow_revoke"] is True
+    assert mock_run.call_args.kwargs["rejudge_prior_versions"] is True
     assert mock_run.call_args.kwargs["emit_logs"] is False
     assert len(posts) == 1
     assert "Achievement *Centurion* was corrected" in posts[0][1]
