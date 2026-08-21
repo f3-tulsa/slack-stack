@@ -106,14 +106,24 @@ def parse_overflow_action(action: dict | None) -> tuple[str | None, int | None]:
         return None, None
 
 
-def overflow_row(title: str, action_id: str, row_id, *, enabled: bool = True) -> dict:
-    """Name on the left, Slack overflow (⋯ / More) on the right."""
+def overflow_row(
+    title: str,
+    action_id: str,
+    row_id,
+    *,
+    enabled: bool = True,
+    subline: str | None = None,
+) -> dict:
+    """Name (and optional italic subline) on the left, Slack overflow (⋯ / More) on the right."""
     rid = str(row_id)
     toggle_label = "Disable" if enabled else "Enable"
     toggle_verb = OVERFLOW_DISABLE if enabled else OVERFLOW_ENABLE
+    text = f"*{title}*"
+    if subline:
+        text = f"{text}\n_{subline}_"
     return {
         "type": "section",
-        "text": {"type": "mrkdwn", "text": f"*{title}*"[:MAX_SECTION_TEXT]},
+        "text": {"type": "mrkdwn", "text": text[:MAX_SECTION_TEXT]},
         "accessory": {
             "type": "overflow",
             "action_id": action_id,

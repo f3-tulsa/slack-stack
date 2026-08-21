@@ -91,24 +91,15 @@ def _with_initial(options: list[dict], value: str | None) -> dict:
 
 
 def _achievement_summary(row: dict) -> str:
-    from achievements.activity import activity_filter_from_rule
+    from achievements.copy import achievement_rule_phrase
 
-    spec = activity_filter_from_rule(row)
-    include = spec["include"]
-    exclude = spec["exclude"]
-    if not include and not exclude:
-        activity_label = "all activities"
-    elif include and not exclude:
-        activity_label = ", ".join(include)
-    elif not include and exclude:
-        activity_label = f"all except {', '.join(exclude)}"
-    else:
-        activity_label = f"{', '.join(include)} (excluding {', '.join(exclude)})"
     version = row.get("version") or row.get("version_key") or "v?"
     enabled = "on" if int(row.get("enabled") or 0) else "off"
+    emoji = str(row.get("emoji") or "").strip().strip(":")
+    emoji_bit = f" :{emoji}:" if emoji else ""
     return (
         f"*{row['name']}* (`{row['code']}` {version}) — "
-        f"{row.get('metric')}/{row.get('period')} ≥ {row.get('threshold')} · {activity_label} · {enabled}"
+        f"{achievement_rule_phrase(row)} · {enabled}{emoji_bit}"
     )
 
 
@@ -255,9 +246,9 @@ def _achievements_list_modal(
                     MORE_ACHIEVEMENT_ACTION_ID,
                     row["id"],
                     enabled=int(row.get("enabled") or 0) == 1,
+                    subline=achievement_subline(row),
                 )
             )
-            blocks.append(context(achievement_subline(row)))
     else:
         blocks.append(
             {
@@ -410,6 +401,7 @@ def _achievement_edit_modal(
     *,
     activity_options: list[str] | None = None,
     prefill_from_source: bool = False,
+    client=None,
 ) -> dict:
     from achievements.activity import (
         activity_filter_from_rule,
@@ -464,6 +456,11 @@ def _achievement_edit_modal(
         version_created=src.get("version_created"),
         earliest_beatdown=src.get("earliest_beatdown"),
     )
+    from achievements.emoji import emoji_select_options, list_custom_emoji, normalize_emoji_name
+
+    stored_emoji = normalize_emoji_name(src.get("emoji"))
+    custom_emoji = list_custom_emoji(client, team_id=team_id) if client is not None else []
+    emoji_opts = emoji_select_options(custom_emoji, stored=stored_emoji)
     blocks: list[dict] = []
     if is_edit:
         blocks.append(
@@ -509,6 +506,22 @@ def _achievement_edit_modal(
                     "type": "plain_text_input",
                     "action_id": "val",
                     "initial_value": src.get("verb") or "",
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "emoji",
+                "optional": True,
+                "label": {"type": "plain_text", "text": "Award reaction (optional)"},
+                "hint": {
+                    "type": "plain_text",
+                    "text": "Added next to :fire: on the public award message.",
+                },
+                "element": {
+                    "type": "static_select",
+                    "action_id": "val",
+                    "options": emoji_opts,
+                    **_with_initial(emoji_opts, stored_emoji),
                 },
             },
         ]
@@ -761,7 +774,11 @@ def _parse_achievement_form(payload: dict) -> dict:
         "effective_to": _date("effective_to"),
         "activity_list": include,
         "activity_filter": {"include": include, "exclude": exclude},
+        "emoji": _select("emoji"),
     }
+    from achievements.emoji import normalize_emoji_name
+
+    parsed["emoji"] = normalize_emoji_name(parsed["emoji"])
     return parsed
 
 

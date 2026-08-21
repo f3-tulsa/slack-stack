@@ -254,6 +254,9 @@ def schedule_handler(event, context):
                 end = date.fromisoformat(str(event["end"])[:10])
             achievement_id = int(event["achievement_id"])
             reached_reconcile = True
+            action = (event.get("action") or "").strip()
+            if not action:
+                action = "changed" if event.get("automatic") else "re-evaluated"
             result = reconcile_rule_awards(
                 conn,
                 pm_schema=pm,
@@ -264,6 +267,7 @@ def schedule_handler(event, context):
                 start=start,
                 end=end,
                 automatic=bool(event.get("automatic")),
+                action=action,
             )
             return {"statusCode": 200, "body": json.dumps({"ok": True, "result": result})}
         except Exception:

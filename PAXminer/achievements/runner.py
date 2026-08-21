@@ -29,9 +29,11 @@ from common.encryption import decrypt_field
 from slack_util import (
     format_log_message,
     is_slack_user_id,
+    mention,
     open_dm_channel,
     post_log,
     post_message,
+    post_messages,
     resolve_display_name,
     slack_client,
     workspace_user_ids,
@@ -41,7 +43,7 @@ LOG = logging.getLogger(__name__)
 
 RULES_SQL = """
 SELECT a.id AS id, a.id AS achievement_id, a.code, a.name, a.description, a.verb,
-       a.enabled, v.id AS version_id, v.version_key, v.metric, v.activity,
+       a.enabled, a.emoji, v.id AS version_id, v.version_key, v.metric, v.activity,
        v.period, v.threshold, v.effective_from, v.effective_to, v.range_mode
 FROM `{schema}`.`achievements_list` a
 JOIN `{schema}`.`achievement_versions` v
@@ -52,7 +54,7 @@ ORDER BY a.id
 
 RULES_ONE_SQL = """
 SELECT a.id AS id, a.id AS achievement_id, a.code, a.name, a.description, a.verb,
-       a.enabled, v.id AS version_id, v.version_key, v.metric, v.activity,
+       a.enabled, a.emoji, v.id AS version_id, v.version_key, v.metric, v.activity,
        v.period, v.threshold, v.effective_from, v.effective_to, v.range_mode
 FROM `{schema}`.`achievements_list` a
 JOIN `{schema}`.`achievement_versions` v
@@ -495,11 +497,11 @@ def run_achievements_for_region(
             ytd_totals=ytd_totals,
             ytd_family=ytd_family,
         )
-        for text, blocks, react in grant_msgs:
-            for cid in channels:
-                post_message(client, cid, text, blocks=blocks, add_reaction=react)
-            if post_to_ao and ao_channel_id:
-                post_message(client, ao_channel_id, text, blocks=blocks, add_reaction=react)
+        packed = [(text, blocks, react) for text, blocks, react in grant_msgs]
+        for cid in channels:
+            post_messages(client, cid, packed)
+        if post_to_ao and ao_channel_id:
+            post_messages(client, ao_channel_id, packed)
         for g in revokes:
             text, blocks = channel_revoke_message(
                 g, names=names, known_ids=known_ids, webhook=webhook
@@ -594,11 +596,51 @@ def run_achievements_for_region(
         "dm_failed": dm_failed,
         "duration_s": duration_s,
         "rules": len(rules),
+        "grant_pax_ids": [g["pax_id"] for g in grants],
+        "revoke_pax_ids": [g["pax_id"] for g in revokes],
         "results_line": (
             f"{len(rules)} rules, {len(grants)} granted, {len(revokes)} revoked, {held} held"
         ),
         "period_start": start.isoformat() if start else None,
         "period_end": end.isoformat() if end else None,
+    }
+
+
+def _version_log_fields(cur, schema: str, achievement_id: int, *, action: str) -> dict:
+    """Current (and superseded) version rows for the admin log Rules/Version/Code fields."""
+    from achievements.copy import achievement_rule_phrase
+
+    cur.execute(
+        f"""
+        SELECT a.code, a.name, v.version, v.version_key, v.metric, v.activity,
+               v.period, v.threshold, v.superseded_at
+        FROM `{schema}`.`achievements_list` a
+        JOIN `{schema}`.`achievement_versions` v ON v.achievement_id = a.id
+        WHERE a.id=%s
+        ORDER BY v.version DESC
+        LIMIT 2
+        """,
+        (achievement_id,),
+    )
+    raw = cur.fetchall()
+    rows = raw if isinstance(raw, list) else []
+    if not rows:
+        return {"code": None, "version": None, "rules": None}
+    current = next((r for r in rows if not r.get("superseded_at")), rows[0] if rows else {})
+    previous = next((r for r in rows if r.get("superseded_at")), None)
+    after = achievement_rule_phrase(current) if current else None
+    before = achievement_rule_phrase(previous) if previous else None
+    if action == "changed" and after:
+        rules = f"before: {before} · after: {after}" if before else f"after: {after}"
+    else:
+        rules = after
+    version = current.get("version_key") or (
+        f"v{current.get('version')}" if current.get("version") is not None else None
+    )
+    return {
+        "code": (current or {}).get("code"),
+        "version": version,
+        "rules": rules,
     }
 
 
@@ -613,15 +655,17 @@ def reconcile_rule_awards(
     start: date | None = None,
     end: date | None = None,
     automatic: bool = False,
+    action: str = "re-evaluated",
 ) -> dict:
     """Re-evaluate one family across its range; silent on T-claps/DMs, one channel summary."""
     from achievements.range import clear_reeval_lock
 
+    started = time.monotonic()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 f"""
-                SELECT a.name, v.effective_from, v.effective_to
+                SELECT a.name, a.code, v.effective_from, v.effective_to, v.version_key, v.version
                 FROM `{regional_schema}`.`achievements_list` a
                 JOIN `{regional_schema}`.`achievement_versions` v
                   ON v.achievement_id = a.id AND v.superseded_at IS NULL
@@ -652,6 +696,7 @@ def reconcile_rule_awards(
             "held_older_version": 0,
             "held_grandfathered": 0,
         }
+        affected: set[str] = set()
         last_result: dict = {}
         for year, chunk_start, chunk_end in iter_year_windows(start, end):
             result = run_achievements_for_region(
@@ -680,22 +725,38 @@ def reconcile_rule_awards(
             totals["held"] += int(result.get("held") or 0)
             totals["held_older_version"] += int(result.get("held_older_version") or 0)
             totals["held_grandfathered"] += int(result.get("held_grandfathered") or 0)
+            for pid in result.get("grant_pax_ids") or []:
+                affected.add(str(pid))
+            for pid in result.get("revoke_pax_ids") or []:
+                affected.add(str(pid))
+
+        log_fields = {}
+        try:
+            with conn.cursor() as cur:
+                log_fields = _version_log_fields(
+                    cur, regional_schema, achievement_id, action=action
+                )
+        except Exception:
+            LOG.debug("version log fields skipped schema=%s", regional_schema, exc_info=True)
 
         token_enc = region_row.get("slack_token")
         channel = resolve_achievement_channel(conn, pm_schema, regional_schema, region_row)
         name = meta.get("name") or "achievement"
+        duration_s = time.monotonic() - started
         if token_enc and channel:
             try:
                 client = slack_client(decrypt_field(token_enc))
-                # Public "was corrected" is false when nothing was granted or revoked.
-                if totals["grants"] or totals["revokes"]:
-                    post_message(
-                        client,
-                        channel,
-                        reconcile_channel_line(
-                            name, totals["grants"], totals["revokes"], totals["held"]
-                        ),
-                    )
+                admin_tag = mention(actor, resolve_display_name(client, actor))
+                line = reconcile_channel_line(
+                    name,
+                    totals["grants"],
+                    totals["revokes"],
+                    totals["held"],
+                    action=action,
+                    admin_mention=admin_tag,
+                )
+                if line:
+                    post_message(client, channel, line)
                 post_log(
                     client,
                     run_summary_line(
@@ -712,10 +773,17 @@ def reconcile_rule_awards(
                         channel=None,
                         dms=0,
                         dm_failed=0,
-                        duration_s=None,
+                        duration_s=duration_s,
                         actor=resolve_display_name(client, actor),
                         achievement_name=name,
                         automatic=automatic,
+                        action=action,
+                        code=log_fields.get("code") or meta.get("code"),
+                        version=log_fields.get("version")
+                        or meta.get("version_key")
+                        or (f"v{meta.get('version')}" if meta.get("version") is not None else None),
+                        rules_text=log_fields.get("rules"),
+                        affected_pax=len(affected),
                     ),
                     region=region_row,
                 )
@@ -728,6 +796,8 @@ def reconcile_rule_awards(
             "reconcile": True,
             "achievement_id": achievement_id,
             "skipped": last_result.get("skipped"),
+            "action": action,
+            "affected_pax": len(affected),
         }
 
     finally:

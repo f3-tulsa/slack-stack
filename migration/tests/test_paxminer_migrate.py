@@ -482,5 +482,6 @@ def test_achievements_phase_adds_range_mode_and_backfills():
     sql = " ".join(str(c) for c in cur.execute.call_args_list)
     assert "range_mode" in sql
     assert "reeval_queued_at" in sql
+    assert "emoji" in sql
     bf.assert_called_once()
     assert result["range_modes_backfilled"] == 7

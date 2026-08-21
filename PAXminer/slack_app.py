@@ -258,7 +258,9 @@ def handle_add_achievement(ack, body, client, logger):
         with conn.cursor() as cur:
             options = _load_activity_options(cur, regional_schema, team_id)
             draft = _hydrate_range_row(cur, regional_schema, {})
-        view = _achievement_edit_modal(team_id, regional_schema, draft, activity_options=options)
+        view = _achievement_edit_modal(
+            team_id, regional_schema, draft, activity_options=options, client=client
+        )
         client.views_update(view_id=body["view"]["id"], view=view)
     finally:
         conn.close()
@@ -366,7 +368,7 @@ def handle_edit_achievement(ack, body, client, logger):
             )
             return
         view = _achievement_edit_modal(
-            team_id, regional_schema, row, activity_options=options
+            team_id, regional_schema, row, activity_options=options, client=client
         )
         client.views_update(view_id=body["view"]["id"], view=view)
     finally:
@@ -506,17 +508,28 @@ def _delete_one_achievement(cur, schema: str, achievement_id: int) -> dict | Non
 
 def _announce_achievement_deleted(region: dict, client, user_id: str, deleted: dict) -> None:
     """Same paxminer_logs / channel line as a manual single delete."""
-    awards = counted_noun(deleted["awards"], "award")
-    pax = counted_noun(deleted["pax"], "PAX", "PAX")
+    from achievements.copy import achievement_admin_log_line, admin_channel_line
+    from slack_util import mention
+
     name = deleted["name"]
-    _post_achievement_admin_notice(
-        region,
-        f"Achievement *{name}* was deleted along with {awards} from {pax}.",
-        (
-            f"Achievement *{name}* was deleted by `{_log_actor_name(client, user_id)}` "
-            f"({awards} from {pax} removed)"
-        ),
+    admin_tag = mention(user_id, _log_actor_name(client, user_id))
+    channel_text = admin_channel_line(
+        "deleted",
+        name,
+        admin_tag,
+        revoked=int(deleted.get("awards") or 0),
     )
+    log_text = achievement_admin_log_line(
+        name=name,
+        action="deleted",
+        author=_log_actor_name(client, user_id),
+        code=deleted.get("code"),
+        granted=0,
+        revoked=int(deleted.get("awards") or 0),
+        unchanged=0,
+        affected_pax=int(deleted.get("pax") or 0),
+    )
+    _post_achievement_admin_notice(region, channel_text, log_text)
 
 
 def handle_delete_achievement(ack, body, client, logger):
@@ -616,6 +629,7 @@ def handle_backfill_achievement(ack, body, client, logger):
                 start=start,
                 end=end,
                 automatic=False,
+                action="re-evaluated",
             )
             handed_off = True
         except Exception:
@@ -699,6 +713,7 @@ def handle_duplicate_achievement(ack, body, client, logger):
                 draft,
                 activity_options=options,
                 prefill_from_source=True,
+                client=client,
             ),
         )
     finally:
@@ -778,6 +793,7 @@ def _values_from_builtin_seed(seed: dict) -> dict:
         "range_mode": RANGE_ALL_ATTENDANCE,
         "effective_from": None,
         "effective_to": None,
+        "emoji": seed.get("emoji"),
     }
 
 
@@ -790,8 +806,8 @@ def _add_one_achievement(cur, schema: str, values: dict, user_id: str, *, mode, 
     cur.execute(
         f"""
         INSERT INTO `{schema}`.`achievements_list`
-        (name, description, verb, code, metric, activity, period, threshold, enabled)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        (name, description, verb, code, metric, activity, period, threshold, enabled, emoji)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             values["name"],
@@ -803,6 +819,7 @@ def _add_one_achievement(cur, schema: str, values: dict, user_id: str, *, mode, 
             values["period"],
             values["threshold"],
             values.get("enabled", 1),
+            values.get("emoji"),
         ),
     )
     achievement_id = int(cur.lastrowid)
@@ -896,6 +913,7 @@ def handle_restore_achievements(ack, body, client, logger):
                         start=queue_start,
                         end=queue_end,
                         automatic=True,
+                        action="created",
                     )
                 except Exception:
                     logger.exception(
@@ -1081,7 +1099,7 @@ def _log_actor_name(client, user_id: str) -> str:
     return resolve_display_name(client, user_id)
 
 
-def _post_achievement_admin_notice(region: dict, channel_text: str, log_text: str) -> None:
+def _post_achievement_admin_notice(region: dict, channel_text: str | None, log_text: str) -> None:
     from common.encryption import decrypt_field
     from slack_util import post_log, post_message, slack_client
 
@@ -1091,7 +1109,7 @@ def _post_achievement_admin_notice(region: dict, channel_text: str, log_text: st
     try:
         client = slack_client(decrypt_field(token_enc))
         channel = (region.get("achievement_channel") or "").strip() or None
-        if channel:
+        if channel and channel_text:
             post_message(client, channel, channel_text)
         post_log(client, log_text, region=region)
     except Exception:
@@ -1226,13 +1244,14 @@ def handle_achievement_edit_submit(ack, body, client, logger):
                 cur.execute(
                     f"""
                     UPDATE `{regional_schema}`.`achievements_list`
-                    SET name=%s, description=%s, verb=%s
+                    SET name=%s, description=%s, verb=%s, emoji=%s
                     WHERE id=%s
                     """,
                     (
                         values["name"],
                         values["description"],
                         values["verb"],
+                        values.get("emoji"),
                         achievement_id,
                     ),
                 )
@@ -1295,6 +1314,7 @@ def handle_achievement_edit_submit(ack, body, client, logger):
                         start=queue_start,
                         end=queue_end,
                         automatic=True,
+                        action="created" if not existing else "changed",
                     )
                     notice = (
                         f"Re-evaluate queued for {queue_start or '…'} to {queue_end or '…'}."

@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "slackblast"))
 
 from features import backblast
-from utilities.database.orm import Attendance, PaxminerUser
+from utilities.database.orm import Attendance, Backblast, PaxminerUser
 from utilities.slack import actions
 
 
@@ -134,10 +134,12 @@ def _user_dms(client):
     return [c for c in client.chat_postMessage.call_args_list if c.kwargs.get("channel") == "U_SUBMITTER"]
 
 
-def _find_records(user_records=None, prior_attendance=None):
+def _find_records(user_records=None, prior_attendance=None, prior_backblast=None):
     def _inner(cls, filters=None, schema=None):
         if cls is Attendance:
             return prior_attendance or []
+        if cls is Backblast:
+            return prior_backblast or []
         return user_records or []
 
     return _inner
@@ -429,4 +431,60 @@ def test_persist_backblast_replace_then_insert_order():
     assert [op[0] for op in session.ops] == ["delete", "delete", "add", "add_all"]
     assert session.ops[0][1] == "beatdowns"
     assert session.ops[1][1] == "bd_attendance"
+
+
+def test_backblast_create_logs_import_without_unfurl():
+    session = RecordingSession()
+    client, _ = _run_handle(
+        body=_create_body(),
+        session=session,
+        extra_patches=[
+            patch("features.backblast.resolve_paxminer_log_channel", return_value="CLOG"),
+        ],
+    )
+    log_calls = [c for c in client.chat_postMessage.call_args_list if c.kwargs.get("channel") == "CLOG"]
+    assert len(log_calls) == 1
+    kwargs = log_calls[0].kwargs
+    assert kwargs["unfurl_links"] is False
+    assert kwargs["unfurl_media"] is False
+    assert "Backblast successfully imported for <#C_DOWNRANGE> on" in kwargs["text"]
+    assert "```" not in kwargs["text"]
+
+
+def test_backblast_edit_logs_summary_and_skips_unchanged_block():
+    prior = MagicMock()
+    prior.q_user_id = "U_OLDQ"
+    prior.coq_user_id = None
+    prior.pax_count = 2
+    prior.fng_count = 0
+    prior.bd_date = "2026-05-18"
+    prior.ao_id = "C_DOWNRANGE"
+    prior.backblast = "old body"
+    prior_att = [MagicMock(user_id="U_OLDQ"), MagicMock(user_id="U_PAX1")]
+
+    def _names(users, *_a, return_urls=False, **_k):
+        if return_urls:
+            return ["DRQ"], [""]
+        mapping = {"U_OLDQ": "Old Q", "U_DRQ": "DRQ", "U_PAX1": "PAX One"}
+        return [mapping.get(u, u) for u in users]
+
+    session = RecordingSession()
+    client, _ = _run_handle(
+        body=_edit_body(),
+        session=session,
+        find_records=_find_records(prior_attendance=prior_att, prior_backblast=[prior]),
+        extra_patches=[
+            patch("features.backblast.resolve_paxminer_log_channel", return_value="CLOG"),
+            patch("features.backblast.get_user_names", side_effect=_names),
+        ],
+    )
+    log_calls = [c for c in client.chat_postMessage.call_args_list if c.kwargs.get("channel") == "CLOG"]
+    assert log_calls
+    text = log_calls[0].kwargs["text"]
+    assert "Backblast successfully edited for <#C_DOWNRANGE> on" in text
+    assert log_calls[0].kwargs["unfurl_links"] is False
+    assert "```" in text
+    assert "Q: Old Q → DRQ" in text
+    assert "PAX added:" in text or "PAX removed:" in text
+    assert "Backblast body was edited" in text
 

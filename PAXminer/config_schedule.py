@@ -387,7 +387,9 @@ def achievement_rule_hint(row: dict) -> str:
 
 def achievement_subline(row: dict) -> str:
     enabled = "Enabled" if int(row.get("enabled") or 0) else "Disabled"
-    return f"{enabled} | {achievement_rule_hint(row)}"
+    emoji = str(row.get("emoji") or "").strip().strip(":")
+    base = f"{enabled} | {achievement_rule_hint(row)}"
+    return f"{base} | :{emoji}:" if emoji else base
 
 
 def duplicate_name(name: str | None, code: str | None) -> str:
@@ -464,9 +466,9 @@ def _schedules_list_modal(
                     MORE_SCHEDULE_ACTION_ID,
                     row["id"],
                     enabled=int(row.get("enabled") or 0) == 1,
+                    subline=schedule_subline(row),
                 )
             )
-            blocks.append(context(schedule_subline(row)))
     else:
         blocks.append(
             {
@@ -968,9 +970,9 @@ def _reports_list_modal(
                     MORE_REPORT_ACTION_ID,
                     row["id"],
                     enabled=int(row.get("enabled") if row.get("enabled") is not None else 1) == 1,
+                    subline=report_subline(row),
                 )
             )
-            blocks.append(context(report_subline(row)))
     else:
         blocks.append(
             {
