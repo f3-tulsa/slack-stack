@@ -20,6 +20,7 @@ from pathlib import Path
 _PAX_ROOT = Path(__file__).resolve().parent.parent
 if str(_PAX_ROOT) not in sys.path:
     sys.path.insert(0, str(_PAX_ROOT))
+from achievements.period import format_date_label
 from paxminer_db import connect_from_credentials_ini
 from slack_util import (
     format_log_message,
@@ -79,7 +80,27 @@ logging.basicConfig(filename='../logs/BD_PAX_miner.log',
                             level = logging.INFO)
 logging.info(f"Beginning BD+Paxminer {current_ts}")
 logging.info("Running combined BD+PAXminer for " + db)
-pm_log_text = date_time + " CDT: Executing hourly PAXminer run for " + db + "\n"
+# Per-event detail lines for paxminer_logs. The run header, timing, and counts
+# come from the shared envelope, so this holds only what happened per backblast.
+pm_log_text = ""
+bb_imported = 0
+bb_updated = 0
+bb_errors = 0
+
+
+def _log_date_label(value) -> str:
+    """Same wording Slackblast uses in its import log: August 21, 2026."""
+    try:
+        return format_date_label(datetime.strptime(str(value)[:10], "%Y-%m-%d").date())
+    except (TypeError, ValueError):
+        return str(value or "this event")
+
+
+def _bb_log_line(verb: str, ao_id: str, when, link: str | None) -> str:
+    """Mirror of slackblast's format_backblast_paxminer_log so both apps read alike."""
+    label = _log_date_label(when)
+    dated = f"<{link}|{label}>" if link else label
+    return f"Backblast successfully {verb} for <#{ao_id}> on {dated}.\n"
 
 # Make users Data Frame
 column_names = ['user_id', 'user_name', 'real_name']
@@ -162,7 +183,8 @@ for id in channels_df['channel_id']:
                 id,
                 db,
             )
-            pm_log_text += "Error: Unable to access Slack channel <#" + id + "> in region " + db + "\n"
+            bb_errors += 1
+            pm_log_text += "Unable to read Slack channel <#" + id + ">.\n"
             next_cursor = None
         if next_cursor and next_cursor != "None":
             # Keep going from next offset.
@@ -530,7 +552,12 @@ try:
             if q_user_id == 'NA':
                 logging.warning("Q error for AO: %s, Date: %s, backblast from Q %s (ID %s) not imported", ao_id, msg_date, user_name, user_id)
                 print('Backblast error on Q at AO:', ao_id, 'Date:', msg_date, 'Posted By:', user_name, ". Slack message sent to Q. bd: ", bd_date, "cutoff:", cutoff_date)
-                pm_log_text += "Backblast error on Q at AO: <#" + ao_id + "> Date: " + msg_date + " Posted By: " + ticked_display_name(user_name, fallback="PAX") + ". Slack message sent to Q.\n"
+                bb_errors += 1
+                pm_log_text += (
+                    f"Backblast from {ticked_display_name(user_name, fallback='PAX')} for "
+                    f"<#{ao_id}> on <{msg_link}|{_log_date_label(msg_date)}> was not imported: "
+                    "the Q is missing or not tagged. Slack message sent to the Q.\n"
+                )
                 if user_id != 'APP':
                     q_error_text += " - ERROR: The Q is not present or not tagged correctly. Please ensure the Q is tagged using @PAX_NAME \n"
                     send_q_msg = 2
@@ -540,7 +567,12 @@ try:
             if pax_count == -1:
                 logging.warning("Count error for AO: %s, Date: %s, backblast from Q %s (ID %s) not imported", ao_id, msg_date, user_name, user_id)
                 print('Backblast error on Count - AO:', ao_id, 'Date:', msg_date, 'Posted By:', user_name, ". Slack message sent to Q.")
-                pm_log_text += "Backblast error on Count at AO: <#" + ao_id + "> Date: " + msg_date + " Posted By: " + ticked_display_name(user_name, fallback="PAX") + ". Slack message sent to Q.\n"
+                bb_errors += 1
+                pm_log_text += (
+                    f"Backblast from {ticked_display_name(user_name, fallback='PAX')} for "
+                    f"<#{ao_id}> on <{msg_link}|{_log_date_label(msg_date)}> was not imported: "
+                    "the Count is missing or not a number. Slack message sent to the Q.\n"
+                )
                 if user_id != 'APP':
                     q_error_text += " - ERROR: The Count is not present or not entered correctly. The correct syntax is Count: XX - Use digits please. \n"
                     send_q_msg = 2
@@ -551,7 +583,12 @@ try:
             if not isValidDate(bd_date):
                 logging.warning("Date error for AO: %s, Date: %s, backblast from Q %s (ID %s) not imported", ao_id, msg_date, user_name, user_id)
                 print('Backblast error on Date - AO:', ao_id, 'Date:', msg_date, 'Posted By:', user_name,". Slack message sent to Q. bd: ", bd_date, "cutoff:", cutoff_date)
-                pm_log_text += "Backblast error on Date - AO: <#" + ao_id + "> Date: " + msg_date + " Posted By: " + ticked_display_name(user_name, fallback="PAX") + ". Slack message sent to Q.\n"
+                bb_errors += 1
+                pm_log_text += (
+                    f"Backblast from {ticked_display_name(user_name, fallback='PAX')} for "
+                    f"<#{ao_id}> on <{msg_link}|{_log_date_label(msg_date)}> was not imported: "
+                    "the Date could not be read. Slack message sent to the Q.\n"
+                )
                 if user_id != 'APP':
                     q_error_text += " - ERROR: The Date is not entered correctly. I can understand most common date formats like Date: 12-25-2020, Date: 2021-12-25, Date: 12/25/21, or Date: December 25, 2021. Common mistakes include a date from the future, a date with the time appended, or a date more than one month on the past.\n"
                     send_q_msg = 2
@@ -579,12 +616,14 @@ try:
                     print('Pax Count:',pax_count)
                     print('fngs:', fngs)
                     if database_action == DbAction.UPDATE :
-                        pm_log_text += "Backblast successfully updated for AO: <#" + ao_id + "> Date: " + msg_date + " Posted By: " + ticked_display_name(user_name, fallback="PAX") + "\n"
+                        bb_updated += 1
+                        pm_log_text += _bb_log_line("updated", ao_id, bd_date, msg_link)
                         if user_id != 'APP':
                             q_success_text = "Successfully updated your backblast after it had been changed for " + bd_date + " at <#" + ao_id + ">. I see you had " + str(math.trunc(pax_count)) + " PAX in attendance and FNGs were: " + str(fngs) + ". Thanks for posting and updating your BB! \n"
                             send_q_msg = 1
                     else:
-                        pm_log_text += "Backblast successfully imported for AO: <#" + ao_id + "> Date: " + msg_date + " Posted By: " + ticked_display_name(user_name, fallback="PAX") + "\n"
+                        bb_imported += 1
+                        pm_log_text += _bb_log_line("imported", ao_id, bd_date, msg_link)
                         if user_id != 'APP':
                             q_success_text = "Successfully imported your backblast for " + bd_date + " at <#" + ao_id + ">. I see you had " + str(math.trunc(pax_count)) + " PAX in attendance and FNGs were: " + str(fngs) + ". Thanks for posting your BB! \n"
                             send_q_msg = 1
@@ -696,13 +735,16 @@ try:
         channel=log_dest,
         text=format_log_message(
             log_header("PAXminer hourly"),
-            status="success",
+            status="success" if not bb_errors else "partial",
             duration_s=time.time() - current_ts,
-            fields=[("Mode", "scheduled")],
+            fields=[
+                ("Mode", "scheduled"),
+                (
+                    "Results",
+                    f"{bb_imported} imported, {bb_updated} updated, {bb_errors} errors",
+                ),
+            ],
             body=body or None,
-            # Body is per-backblast lines carrying <#channel> tags, which Slack
-            # renders literally inside a fence. Fencing needs plain AO names first.
-            code_block=False,
         ),
     )
 except Exception:

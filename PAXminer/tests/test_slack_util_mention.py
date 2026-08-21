@@ -210,6 +210,24 @@ def test_format_log_message_body_and_failed_status():
     assert failed.splitlines()[-1] == "```"
 
 
+def test_body_stays_below_the_fence_so_links_render():
+    """Per-event detail carries <#channel> and <url|label>, which a fence kills."""
+    text = format_log_message(
+        "The *PAXminer hourly* job was run.",
+        status="success",
+        duration_s=1.5,
+        fields=[("Mode", "scheduled"), ("Results", "2 imported, 0 updated, 0 errors")],
+        body="Backblast successfully imported for <#C1> on <https://x/p1|August 21, 2026>.",
+    )
+    head, fence, tail = text.partition("```\n")
+    fenced, _, below = tail.partition("```")
+    assert "Mode: scheduled" in fenced
+    assert "Status: success (1.5s)" in fenced
+    assert "Results: 2 imported, 0 updated, 0 errors" in fenced
+    assert "<#C1>" not in fenced
+    assert "Backblast successfully imported for <#C1> on <https://x/p1|August 21, 2026>." in below
+
+
 def test_format_log_message_fences_by_default():
     """Every job outcome in paxminer_logs shares one envelope."""
     text = format_log_message("The *User sync* job was run.", status="success")

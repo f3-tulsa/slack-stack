@@ -262,9 +262,10 @@ def format_log_message(
 
     Every job outcome in the log channel uses this shape: the header stays outside
     so its mrkdwn renders, and Status joins the fields inside a fenced block.
+    ``body`` is free-form per-event detail and stays *below* the fence, because it
+    carries links and ``<#channel>`` tags that Slack renders literally inside one.
 
-    Pass ``code_block=False`` only when the fenced content would contain links or
-    ``<#channel>`` tags, which Slack renders literally inside a fence.
+    Pass ``code_block=False`` only to keep a legacy plain-text shape.
     """
     status_bit = str(status)
     if duration_s is not None:
@@ -289,11 +290,9 @@ def format_log_message(
         inner = [f"{k}: {v}" for k, v in labeled]
         if detail and status != "success":
             inner.append(f"Error: {detail}")
-        if extra:
-            inner.append(extra)
         inner.extend(footer)
         fenced = "```\n" + "\n".join(inner) + "\n```" if inner else "```\n```"
-        return f"{header}\n{fenced}"
+        return f"{header}\n{fenced}\n{extra}" if extra else f"{header}\n{fenced}"
     lines = [header, f"Status: {status_bit}"]
     if detail and status != "success":
         lines.append(f"Error: {detail}")
