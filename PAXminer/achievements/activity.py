@@ -272,10 +272,16 @@ def activity_filter_conflicts(spec: dict) -> list[str]:
 
 
 def activity_json_for_version(activity_filter: Any = None) -> str | None:
-    """JSON column payload. Empty filter is SQL NULL, never [] or the beatdown sentinel."""
+    """JSON column payload. Empty filter is SQL NULL, never [] or the beatdown sentinel.
+
+    Bare include array when exclude is empty so a pre-5e reader still parses the
+    rule. The {include, exclude} dict is only written when there is an exclusion.
+    """
     spec = coerce_activity_filter(activity_filter)
     if not spec["include"] and not spec["exclude"]:
         return None
+    if not spec["exclude"]:
+        return json.dumps(spec["include"])
     return json.dumps({"include": spec["include"], "exclude": spec["exclude"]})
 
 
@@ -297,13 +303,11 @@ def activity_list_from_rule(rule: dict) -> list[str]:
     return activity_filter_from_rule(rule)["include"]
 
 
-def _mirror_pointer(version: int | None) -> str:
-    if version is None:
-        return "any"
+def _mirror_pointer(version: int) -> str:
     return f"v{int(version)}"[:32]
 
 
-def activity_legacy_mirror(activity_filter: Any = None, version: int | None = None) -> str:
+def activity_legacy_mirror(activity_filter: Any = None, *, version: int) -> str:
     """Best-effort string for achievements_list.activity (varchar NOT NULL). Empty = any."""
     spec = coerce_activity_filter(activity_filter)
     include = spec["include"]

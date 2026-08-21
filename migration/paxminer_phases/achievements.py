@@ -21,6 +21,7 @@ from achievements.achievement_rules import (  # noqa: E402
 from achievements.activity import (  # noqa: E402
     activity_filter_from_rule,
     activity_json_for_version,
+    activity_legacy_mirror,
     classify_activity_type,
     legacy_activity_to_list,
 )
@@ -151,13 +152,25 @@ def _seed_version_1(cur, schema: str) -> int:
         )
         if cur.fetchone():
             continue
+        stored_metric = row.get("metric")
+        stored_activity = row.get("activity")
+        stored_period = row.get("period")
+        stored_threshold = row.get("threshold")
         seed = seeds_by_code.get(row.get("code"))
         if seed is not None:
-            activity_json = activity_json_for_version(activity_filter_from_rule(seed))
+            metric = seed["metric"]
+            period = seed["period"]
+            threshold = int(seed["threshold"])
+            spec = activity_filter_from_rule(seed)
         else:
-            activity_json = activity_json_for_version(
-                {"include": legacy_activity_to_list(row.get("activity")), "exclude": []}
-            )
+            metric = stored_metric or "posts"
+            period = stored_period or "year"
+            threshold = int(stored_threshold or 1)
+            spec = {
+                "include": legacy_activity_to_list(stored_activity),
+                "exclude": [],
+            }
+        activity_json = activity_json_for_version(spec)
         version_key = f"{row.get('code') or 'achievement'}_v1"
         cur.execute(
             f"""
@@ -174,16 +187,54 @@ def _seed_version_1(cur, schema: str) -> int:
             (
                 row["id"],
                 version_key,
-                row.get("metric") or "posts",
+                metric,
                 activity_json,
-                row.get("period") or "year",
-                int(row.get("threshold") or 1),
+                period,
+                threshold,
                 row["id"],
             ),
         )
-        if cur.rowcount:
-            inserted += 1
-            LOG.info("Seeded version 1 for %s achievement id=%s code=%s", schema, row["id"], row.get("code"))
+        if not cur.rowcount:
+            continue
+        inserted += 1
+        if seed is not None:
+            mirror = activity_legacy_mirror(spec, version=1)
+            cur.execute(
+                f"""
+                UPDATE `{schema}`.`achievements_list`
+                SET metric=%s, activity=%s, period=%s, threshold=%s
+                WHERE id=%s
+                """,
+                (metric, mirror, period, threshold, row["id"]),
+            )
+            LOG.info(
+                "Seeded version 1 for %s achievement id=%s code=%s from catalog "
+                "metric=%s activity=%s period=%s threshold=%s "
+                "(stored was metric=%s activity=%s period=%s threshold=%s)",
+                schema,
+                row["id"],
+                row.get("code"),
+                metric,
+                activity_json,
+                period,
+                threshold,
+                stored_metric,
+                stored_activity,
+                stored_period,
+                stored_threshold,
+            )
+        else:
+            LOG.info(
+                "Seeded version 1 for %s achievement id=%s code=%s from stored "
+                "metric=%s activity=%s period=%s threshold=%s",
+                schema,
+                row["id"],
+                row.get("code"),
+                metric,
+                activity_json,
+                period,
+                threshold,
+            )
     return inserted
 
 

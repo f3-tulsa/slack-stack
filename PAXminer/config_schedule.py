@@ -889,10 +889,17 @@ def parse_schedule_form(payload: dict) -> dict:
     }
 
 
-def validate_schedule_form(values: dict, report_type: str | None) -> dict[str, str]:
+def validate_schedule_form(
+    values: dict,
+    report_type: str | None,
+    *,
+    definition_exists: bool | None = None,
+) -> dict[str, str]:
     errors: dict[str, str] = {}
     if not values.get("report_definition_id"):
         errors["report_definition_id"] = "Select a report"
+    elif definition_exists is False:
+        errors["report_definition_id"] = "That report no longer exists. Select a report."
     dest = values.get("destination_type")
     if report_type and dest and not destination_valid_for_report(report_type, dest):
         errors["destination_type"] = f"Invalid destination for {report_type}"

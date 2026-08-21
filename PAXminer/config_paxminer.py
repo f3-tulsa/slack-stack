@@ -409,6 +409,7 @@ def _achievement_edit_modal(
     row: dict | None = None,
     *,
     activity_options: list[str] | None = None,
+    prefill_from_source: bool = False,
 ) -> dict:
     from achievements.activity import (
         activity_filter_from_rule,
@@ -418,6 +419,7 @@ def _achievement_edit_modal(
 
     is_edit = bool(row and row.get("id"))
     src = dict(row or {})
+    spec = activity_filter_from_rule(src)
     options = unique_activity_labels(
         [
             o
@@ -425,8 +427,12 @@ def _achievement_edit_modal(
             if str(o).strip() and str(o).strip().lower() != "beatdown"
         ]
     )
+    # Keep stored labels selectable when the catalog still has types, so a
+    # retired Event Type is not silently dropped on the next save. An empty
+    # catalog still hides both pickers and preserves the stored filter.
+    if options:
+        options = unique_activity_labels([*options, *spec["include"], *spec["exclude"]])
     activity_opts = _select_options(tuple(options))
-    spec = activity_filter_from_rule(src)
     selected_activities = map_activities_to_options(spec["include"], options)
     initial_activities = [o for o in activity_opts if o["value"] in selected_activities]
     selected_excludes = map_activities_to_options(spec["exclude"], options)
@@ -440,9 +446,9 @@ def _achievement_edit_modal(
         range_mode_options,
     )
 
-    # Add (empty src) defaults to from-created. Duplicate copies the source
-    # range even though it has no id, so it must not take that Add default.
-    if is_edit or src.get("range_mode") is not None:
+    # Add (empty src) defaults to from-created. Duplicate passes
+    # prefill_from_source so a NULL range_mode derives the same way Edit does.
+    if is_edit or prefill_from_source:
         range_mode = normalize_range_mode(
             src.get("range_mode"), effective_from=src.get("effective_from")
         )
@@ -794,7 +800,10 @@ def _validate_achievement(
                 "exclude": spec.get("exclude") or [],
             }
         )
-        if conflicts and spec.get("include") is not None and spec.get("exclude") is not None:
+        # Only name the exclude block when it was actually submitted. After
+        # resolve, include/exclude are never None, and Slack rejects an errors
+        # payload for a block_id that is not in the view.
+        if conflicts and values.get("activity_exclude_submitted", True):
             named = conflicts[0]
             errors["activity_exclude"] = f"{named} is in both Include and Exclude"
     errors.update(

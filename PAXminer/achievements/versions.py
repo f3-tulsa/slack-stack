@@ -21,10 +21,8 @@ def version_key_for(code: str, version: int = 1, when: datetime | None = None) -
     return f"{slug}_v{int(version)}_{stamp}_{uuid4().hex[:8]}"
 
 
-def _spec_from_write_args(activity_filter=None, activity_list=None) -> dict:
-    if activity_filter is not None:
-        return coerce_activity_filter(activity_filter)
-    return coerce_activity_filter(activity_list)
+def _spec_from_write_args(activity_filter=None) -> dict:
+    return coerce_activity_filter(activity_filter)
 
 
 def insert_version(
@@ -42,9 +40,8 @@ def insert_version(
     version: int = 1,
     range_mode: str | None = None,
     activity_filter=None,
-    activity_list=None,
 ) -> int:
-    spec = _spec_from_write_args(activity_filter, activity_list)
+    spec = _spec_from_write_args(activity_filter)
     key = version_key_for(code, version)
     cur.execute(
         f"""
@@ -101,9 +98,8 @@ def mirror_list_params(
     threshold: int,
     version: int,
     activity_filter=None,
-    activity_list=None,
 ) -> None:
-    spec = _spec_from_write_args(activity_filter, activity_list)
+    spec = _spec_from_write_args(activity_filter)
     cur.execute(
         f"""
         UPDATE `{schema}`.`achievements_list`
@@ -134,9 +130,8 @@ def supersede_and_insert(
     created_by: str | None,
     range_mode: str | None = None,
     activity_filter=None,
-    activity_list=None,
 ) -> int:
-    spec = _spec_from_write_args(activity_filter, activity_list)
+    spec = _spec_from_write_args(activity_filter)
     cur.execute(
         f"""
         UPDATE `{schema}`.`achievement_versions`

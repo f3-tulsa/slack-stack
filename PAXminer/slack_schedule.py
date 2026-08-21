@@ -665,7 +665,13 @@ def register_schedule_listeners(app) -> None:
                     else None
                 )
                 errors = validate_schedule_form(
-                    values, (definition or {}).get("report_type")
+                    values,
+                    (definition or {}).get("report_type"),
+                    definition_exists=(
+                        None
+                        if not values.get("report_definition_id")
+                        else definition is not None
+                    ),
                 )
                 if errors:
                     ack(response_action="errors", errors=errors)

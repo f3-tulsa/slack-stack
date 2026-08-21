@@ -718,3 +718,28 @@ def test_plan_realistic_overlay_creates_when_no_calendar_match():
 def test_pick_new_q_reassigns_after_q_removed():
     assert seeder.pick_new_q(["U2", "U3"], "U1", "U1") == "U2"
     assert seeder.pick_new_q([], "U1", "U1") is None
+
+
+def test_ensure_achievement_tables_insert_writes_varchar_mirror():
+    from unittest.mock import MagicMock, patch
+
+    cur = MagicMock()
+    cur.fetchone.return_value = None
+    with (
+        patch.object(seeder, "_table_exists", return_value=True),
+        patch.object(seeder, "_view_exists", return_value=True),
+        patch("paxminer_phases.achievements.migrate_regional_schema"),
+    ):
+        seeder.ensure_achievement_tables(cur, "f3ttown_test")
+    inserts = [
+        c
+        for c in cur.execute.call_args_list
+        if c.args
+        and "INSERT INTO" in str(c.args[0])
+        and "achievements_list" in str(c.args[0])
+    ]
+    assert inserts
+    for call in inserts:
+        activity = call.args[1][5]
+        assert isinstance(activity, str)
+        assert not isinstance(activity, dict)

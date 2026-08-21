@@ -189,6 +189,10 @@ def test_achievements_phase_seeds_version_one_and_is_idempotent():
     cur.fetchone.return_value = {"1": 1}
     assert _seed_version_1(cur, "f3test") == 0
     assert not any("INSERT INTO" in str(c.args[0]) for c in cur.execute.call_args_list)
+    assert not any(
+        c.args and "UPDATE" in str(c.args[0]) and "achievements_list" in str(c.args[0])
+        for c in cur.execute.call_args_list
+    )
 
 
 def test_seed_version_1_writes_spec_json_for_catalog_codes():
@@ -210,10 +214,69 @@ def test_seed_version_1_writes_spec_json_for_catalog_codes():
     assert _seed_version_1(cur, "f3test") == 1
     insert = next(c for c in cur.execute.call_args_list if "INSERT INTO" in str(c.args[0]))
     payload = insert.args[1][3]
-    assert payload is not None
-    assert '"include"' in payload
-    assert "QSource" in payload
+    assert payload == '["QSource"]'
     assert not payload.startswith("qsource")
+
+
+def test_seed_version_1_uses_catalog_rules_for_builtin_alter_defaults():
+    from paxminer_phases.achievements import _seed_version_1
+
+    cur = MagicMock()
+    cur.fetchall.return_value = [
+        {
+            "id": 7,
+            "code": "the_priest",
+            "metric": "posts",
+            "activity": "beatdown",
+            "period": "year",
+            "threshold": 1,
+        }
+    ]
+    cur.fetchone.return_value = None
+    cur.rowcount = 1
+    assert _seed_version_1(cur, "f3test") == 1
+    insert = next(c for c in cur.execute.call_args_list if "INSERT INTO" in str(c.args[0]))
+    assert insert.args[1][2] == "posts"
+    assert insert.args[1][3] == '["QSource"]'
+    assert insert.args[1][4] == "year"
+    assert insert.args[1][5] == 25
+    update = next(
+        c
+        for c in cur.execute.call_args_list
+        if c.args and "UPDATE" in str(c.args[0]) and "achievements_list" in str(c.args[0])
+    )
+    assert update.args[1][0] == "posts"
+    assert update.args[1][1] == "qsource"
+    assert update.args[1][2] == "year"
+    assert update.args[1][3] == 25
+
+
+def test_seed_version_1_non_catalog_derives_from_stored_row():
+    from paxminer_phases.achievements import _seed_version_1
+
+    cur = MagicMock()
+    cur.fetchall.return_value = [
+        {
+            "id": 9,
+            "code": "custom_ao",
+            "metric": "qs",
+            "activity": "Bootcamp",
+            "period": "month",
+            "threshold": 4,
+        }
+    ]
+    cur.fetchone.return_value = None
+    cur.rowcount = 1
+    assert _seed_version_1(cur, "f3test") == 1
+    insert = next(c for c in cur.execute.call_args_list if "INSERT INTO" in str(c.args[0]))
+    assert insert.args[1][2] == "qs"
+    assert insert.args[1][3] == '["Bootcamp"]'
+    assert insert.args[1][4] == "month"
+    assert insert.args[1][5] == 4
+    assert not any(
+        c.args and "UPDATE" in str(c.args[0]) and "achievements_list" in str(c.args[0])
+        for c in cur.execute.call_args_list
+    )
 
 
 def test_achievements_phase_classifies_null_activity_types():
@@ -365,6 +428,30 @@ def test_weaselbot_seed_update_is_cosmetic_only():
     assert updates
     assert "SET name=%s, description=%s, verb=%s" in updates[0]
     assert "metric=%s" not in updates[0]
+
+
+def test_weaselbot_seed_insert_writes_varchar_mirror():
+    from paxminer_phases.weaselbot import ensure_regional_achievements
+
+    cur = MagicMock()
+    cur.fetchone.return_value = None
+    with (
+        patch("paxminer_phases.weaselbot._column_exists", return_value=True),
+        patch("paxminer_phases.weaselbot.ACHIEVEMENTS_VIEW_DDL", "SELECT 1"),
+    ):
+        ensure_regional_achievements(cur, "f3test", upsert_seeds=True)
+    inserts = [
+        c
+        for c in cur.execute.call_args_list
+        if c.args
+        and "INSERT INTO" in str(c.args[0])
+        and "achievements_list" in str(c.args[0])
+    ]
+    assert inserts
+    for call in inserts:
+        activity = call.args[1][5]
+        assert isinstance(activity, str)
+        assert not isinstance(activity, dict)
 
 
 def test_achievements_phase_adds_range_mode_and_backfills():
