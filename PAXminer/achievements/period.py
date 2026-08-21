@@ -70,16 +70,29 @@ def spoken_period(period_start, period_end, period: str) -> str:
     return str(start.year)
 
 
-def backblast_archive_url(ao_id: str | None, timestamp: str | None) -> str | None:
+def backblast_archive_url(
+    ao_id: str | None,
+    timestamp: str | None,
+    *,
+    archive_base: str | None = None,
+) -> str | None:
+    """Permalink to a Backblast message.
+
+    ``archive_base`` must be the workspace host (``https://team.slack.com``) for
+    the link to open in the Slack mobile app; the bare ``slack.com`` fallback
+    only works in a browser.
+    """
     if not ao_id or not timestamp:
         return None
     ts = str(timestamp).replace(".", "")
     if not ts.isdigit():
         return None
-    return f"https://slack.com/archives/{ao_id}/p{ts}"
+    base = (archive_base or "https://slack.com").rstrip("/")
+    return f"{base}/archives/{ao_id}/p{ts}"
 
 
 def format_date_label(d: date) -> str:
+    """The one date format for anything an operator or PAX reads: August 21, 2026."""
     return f"{d.strftime('%B')} {d.day}, {d.year}"
 
 

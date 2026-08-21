@@ -55,6 +55,39 @@ def slack_client(token: str) -> WebClient:
     return client
 
 
+DEFAULT_ARCHIVE_BASE = "https://slack.com"
+_ARCHIVE_BASE_CACHE: dict[str, str] = {}
+
+
+def workspace_archive_base(client: WebClient | None) -> str:
+    """Workspace archive host, e.g. ``https://f3ttown-test.slack.com``.
+
+    Permalinks built on the bare ``slack.com`` host open in the browser but do
+    not deep-link in the Slack mobile app, so every message link has to carry
+    the workspace subdomain. ``auth.test`` returns it; cached per token because
+    it never changes for the life of a container.
+    """
+    if client is None:
+        return DEFAULT_ARCHIVE_BASE
+    key = str(getattr(client, "token", "") or "")
+    cached = _ARCHIVE_BASE_CACHE.get(key)
+    if cached:
+        return cached
+    base = DEFAULT_ARCHIVE_BASE
+    try:
+        url = ((client.auth_test() or {}).get("url") or "").strip()
+        if url.startswith("http"):
+            base = url.rstrip("/")
+    except Exception:
+        logging.debug("auth.test failed; using default archive host", exc_info=True)
+    _ARCHIVE_BASE_CACHE[key] = base
+    return base
+
+
+def clear_archive_base_cache() -> None:
+    _ARCHIVE_BASE_CACHE.clear()
+
+
 def slack_display_name(client: WebClient, user_id: str) -> str:
     """Best-effort Slack display name for operational logs. Never a mention.
 
@@ -214,13 +247,15 @@ def format_log_message(
     body: str | None = None,
     message_count: int | None = None,
     destinations: str | None = None,
-    code_block: bool = False,
+    code_block: bool = True,
 ) -> str:
     """Shared paxminer_logs envelope: header, Status, optional fields, optional body, optional footer.
 
-    Schedule runs, achievement re-evaluate, and miner/sync jobs use this helper.
-    When ``code_block`` is true, Status joins the fields inside a fenced block so
-    Slack mrkdwn in the header still renders.
+    Every job outcome in the log channel uses this shape: the header stays outside
+    so its mrkdwn renders, and Status joins the fields inside a fenced block.
+
+    Pass ``code_block=False`` only when the fenced content would contain links or
+    ``<#channel>`` tags, which Slack renders literally inside a fence.
     """
     status_bit = str(status)
     if duration_s is not None:

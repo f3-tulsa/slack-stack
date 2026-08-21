@@ -337,15 +337,18 @@ def resolve_paxminer_log_channel(region_record, logger, client):
     return get_channel_id("paxminer_logs", logger, client)
 
 
-def short_backblast_date(value) -> str:
-    """Slack mrkdwn date label like Aug 21."""
-    raw = value
+def backblast_date_label(value) -> str:
+    """The one date format for anything an operator or PAX reads: August 21, 2026.
+
+    Mirrors ``achievements.period.format_date_label`` in PAXMiner; the two apps
+    deploy separately and cannot share a module, so keep them in step by hand.
+    """
     if hasattr(value, "strftime"):
-        return f"{value.strftime('%b')} {int(value.strftime('%d'))}"
+        return f"{value.strftime('%B')} {int(value.strftime('%d'))}, {value.strftime('%Y')}"
     text = str(value or "").strip()
     try:
         parsed = datetime.strptime(text[:10], "%Y-%m-%d")
-        return f"{parsed.strftime('%b')} {parsed.day}"
+        return f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
     except ValueError:
         return text or "this event"
 

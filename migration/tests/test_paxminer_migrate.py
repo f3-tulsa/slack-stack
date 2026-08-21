@@ -326,6 +326,8 @@ def test_achievements_ddl_stays_additive_for_slackblast_orm():
     ):
         assert f"`{col}`" in ACHIEVEMENTS_LIST_DDL
     assert "`enabled`" in ACHIEVEMENTS_LIST_DDL
+    assert "`reeval_queued_at`" in ACHIEVEMENTS_LIST_DDL
+    assert "`emoji`" in ACHIEVEMENTS_LIST_DDL
     for col in ("id", "achievement_id", "pax_id", "date_awarded", "created", "updated"):
         assert f"`{col}`" in ACHIEVEMENTS_AWARDED_DDL
     for col in AWARDED_PERIOD_COLUMNS:

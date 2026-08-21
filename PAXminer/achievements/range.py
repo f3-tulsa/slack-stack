@@ -39,6 +39,7 @@ REEVAL_STALE_AFTER = timedelta(minutes=15)
 
 _RANGE_MODE_COL = "varchar(24) DEFAULT NULL"
 _REEVAL_QUEUED_COL = "datetime DEFAULT NULL"
+_EMOJI_COL = "varchar(64) DEFAULT NULL"
 
 
 def normalize_range_mode(mode: str | None, *, effective_from=None) -> str:
@@ -283,10 +284,33 @@ def ensure_reeval_queued_at_column(cur, schema: str) -> bool:
     return True
 
 
+def has_emoji_column(cur, schema: str) -> bool:
+    """Whether achievements_list.emoji exists. Read paths gate on this."""
+    return _column_exists(cur, schema, "achievements_list", "emoji")
+
+
+def ensure_emoji_column(cur, schema: str) -> bool:
+    """Add nullable achievements_list.emoji if missing."""
+    if has_emoji_column(cur, schema):
+        return False
+    cur.execute(
+        f"ALTER TABLE `{schema}`.`achievements_list` "
+        f"ADD COLUMN `emoji` {_EMOJI_COL}"
+    )
+    return True
+
+
 def ensure_achievement_range_columns(cur, schema: str) -> dict[str, bool]:
+    """Self-heal the admin-path columns the migration adds.
+
+    Named for range mode, but it covers every ``achievements_list`` column the
+    edit and re-evaluate paths write, so a region on a pre-migration schema can
+    still save. Adding one here beats adding a call site (see 5f).
+    """
     return {
         "range_mode": ensure_range_mode_column(cur, schema),
         "reeval_queued_at": ensure_reeval_queued_at_column(cur, schema),
+        "emoji": ensure_emoji_column(cur, schema),
     }
 
 

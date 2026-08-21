@@ -694,6 +694,9 @@ try:
             status="success",
             duration_s=time.time() - current_ts,
             body=body or None,
+            # Body is per-backblast lines carrying <#channel> tags, which Slack
+            # renders literally inside a fence. Fencing needs plain AO names first.
+            code_block=False,
         ),
     )
 except Exception:

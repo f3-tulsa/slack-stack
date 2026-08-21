@@ -139,9 +139,19 @@ def test_ensure_columns_alters_when_missing():
     added = ensure_achievement_range_columns(cur, "f3test")
     assert added["range_mode"] is True
     assert added["reeval_queued_at"] is True
+    assert added["emoji"] is True
     joined = " ".join(str(c) for c in cur.execute.call_args_list)
     assert "ADD COLUMN `range_mode`" in joined
     assert "ADD COLUMN `reeval_queued_at`" in joined
+    assert "ADD COLUMN `emoji`" in joined
+
+
+def test_ensure_columns_is_a_noop_when_present():
+    cur = MagicMock()
+    cur.fetchone.return_value = {"c": 1}
+    added = ensure_achievement_range_columns(cur, "f3test")
+    assert added == {"range_mode": False, "reeval_queued_at": False, "emoji": False}
+    assert not any("ADD COLUMN" in str(c) for c in cur.execute.call_args_list)
 
 
 def test_try_acquire_rejects_fresh_lock_and_overrides_stale():

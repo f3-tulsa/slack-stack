@@ -504,7 +504,6 @@ def format_schedule_log_line(
         fields=fields,
         message_count=messages,
         destinations=dest,
-        code_block=True,
     )
 
 

@@ -6,6 +6,7 @@ import random
 from datetime import date
 from unittest.mock import MagicMock, patch
 
+import pytest
 from slack_sdk.errors import SlackApiError
 
 
@@ -153,10 +154,16 @@ def test_award_log_line_grant_and_revoke_share_suffix():
     assert "revoked from `Nacho`" in revoke
     assert "after evaluating" in grant
     assert "after evaluating" in revoke
-    assert "this Backblast" in grant
+    assert "the Backblast from <" in grant
+    assert "|August 16, 2026>" in grant
     bare = award_log_line({**row, "ao_id": None, "timestamp": None}, "Nacho", granted=False)
     assert "after evaluating" not in bare
-    assert bare.endswith("for period August 2026.") or "for period" in bare
+    assert bare.endswith("for period August 2026.")
+
+    scoped = award_log_line(
+        row, "Nacho", granted=True, archive_base="https://f3ttown-test.slack.com"
+    )
+    assert "https://f3ttown-test.slack.com/archives/C_AO/p1750000000000001" in scoped
 
 
 def test_emoji_select_options_cap_union_and_list_failure():
@@ -226,6 +233,99 @@ def test_stored_emoji_survives_when_missing_from_options():
     )
     assert parsed["emoji"] == "gone_custom"
     assert _with_initial(emoji_block["element"]["options"], "gone_custom")
+
+
+def test_backblast_links_use_the_workspace_host():
+    """Bare slack.com archive links do not deep-link in the Slack mobile app."""
+    from achievements.period import backblast_archive_url
+    from slack_util import clear_archive_base_cache, workspace_archive_base
+
+    assert backblast_archive_url("C0APCSRGBB9", "1787335245.777559") == (
+        "https://slack.com/archives/C0APCSRGBB9/p1787335245777559"
+    )
+    assert backblast_archive_url(
+        "C0APCSRGBB9", "1787335245.777559", archive_base="https://f3ttown-test.slack.com/"
+    ) == "https://f3ttown-test.slack.com/archives/C0APCSRGBB9/p1787335245777559"
+    assert backblast_archive_url(None, "1787335245.777559") is None
+    assert backblast_archive_url("C1", "not-a-ts") is None
+
+    clear_archive_base_cache()
+    client = MagicMock(token="xoxb-1")
+    client.auth_test.return_value = {"url": "https://f3ttown-test.slack.com/"}
+    assert workspace_archive_base(client) == "https://f3ttown-test.slack.com"
+    assert workspace_archive_base(client) == "https://f3ttown-test.slack.com"
+    assert client.auth_test.call_count == 1
+
+    clear_archive_base_cache()
+    broken = MagicMock(token="xoxb-2")
+    broken.auth_test.side_effect = RuntimeError("nope")
+    assert workspace_archive_base(broken) == "https://slack.com"
+    assert workspace_archive_base(None) == "https://slack.com"
+
+
+def test_award_messages_carry_the_workspace_host_and_full_date():
+    from achievements.announcements import channel_grant_messages
+
+    g = {
+        "pax_id": "U01AAAAAAA1",
+        "achievement_id": 1,
+        "date_awarded": date(2026, 8, 21),
+        "ao_id": "C0APCSRGBB9",
+        "timestamp": "1787335245.777559",
+        "rule": {"name": "Beast", "verb": "posting"},
+    }
+    msgs = channel_grant_messages(
+        [g],
+        year=2026,
+        names={"U01AAAAAAA1": "A"},
+        known_ids={"U01AAAAAAA1"},
+        ytd_totals={"U01AAAAAAA1": 1},
+        rng=random.Random(0),
+        archive_base="https://f3ttown-test.slack.com",
+    )
+    assert (
+        "<https://f3ttown-test.slack.com/archives/C0APCSRGBB9/p1787335245777559"
+        "|August 21, 2026>" in msgs[0][0]
+    )
+
+
+def test_shared_rules_sql_omits_emoji_so_leaderboard_never_needs_it():
+    from achievements.runner import RULES_ONE_SQL, RULES_SQL, _RULES_SQL_EMOJI
+
+    assert "a.emoji" not in RULES_SQL
+    assert "a.emoji" not in RULES_ONE_SQL
+    assert "a.emoji" in _RULES_SQL_EMOJI
+    for sql in (RULES_SQL, RULES_ONE_SQL, _RULES_SQL_EMOJI):
+        assert "v.range_mode" in sql
+        assert "superseded_at IS NULL" in sql
+
+
+def test_load_rules_falls_back_when_emoji_column_is_missing():
+    """A schema that predates the 5g migration still evaluates."""
+    from achievements.runner import _load_rules
+
+    happy = MagicMock()
+    happy.fetchall.return_value = [{"id": 3, "name": "Beast", "emoji": "muscle"}]
+    loaded = _load_rules(happy, "f3test")
+    assert loaded[0]["emoji"] == "muscle"
+    assert happy.execute.call_count == 1
+    assert "a.emoji" in str(happy.execute.call_args.args[0])
+
+    pre_5g = MagicMock()
+    pre_5g.execute.side_effect = [
+        Exception("1054 (42S22): Unknown column 'a.emoji' in 'field list'"),
+        None,
+    ]
+    pre_5g.fetchall.return_value = [{"id": 3, "name": "Beast"}]
+    loaded = _load_rules(pre_5g, "f3test")
+    assert loaded[0]["emoji"] is None
+    assert pre_5g.execute.call_count == 2
+    assert "a.emoji" not in str(pre_5g.execute.call_args.args[0])
+
+    other = MagicMock()
+    other.execute.side_effect = Exception("connection lost")
+    with pytest.raises(Exception, match="connection lost"):
+        _load_rules(other, "f3test")
 
 
 def test_emoji_only_edit_does_not_mint_or_queue():
