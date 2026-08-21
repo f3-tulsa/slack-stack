@@ -139,12 +139,14 @@ def search_emoji_options(
 ) -> list[dict]:
     """Options for the picker, filtered by what the operator typed.
 
-    Ordering puts the closest matches first: names that start with the query,
-    then names that merely contain it, with workspace emoji ahead of standard
-    ones so a region's own Slackmojis are easy to reach.
+    Workspace emoji come first in both the unfiltered list and the search
+    results. Slack only shows the first handful without scrolling, so burying a
+    region's own Slackmojis under the curated standard set reads as "my custom
+    emoji are missing".
     """
     text = (query or "").strip().strip(":").lower()
     stored_name = normalize_emoji_name(stored)
+    custom_clean: list[str] = []
     pool: list[str] = []
     seen: set[str] = set()
     for name in [*(custom or []), *(standard or [])]:
@@ -152,10 +154,19 @@ def search_emoji_options(
         if clean and clean not in seen:
             seen.add(clean)
             pool.append(clean)
+    custom_seen: set[str] = set()
+    for name in custom or []:
+        clean = normalize_emoji_name(name)
+        if clean and clean not in custom_seen:
+            custom_seen.add(clean)
+            custom_clean.append(clean)
 
     if not text:
-        ordered = [n for n in CURATED_AWARD_EMOJI if n in seen]
-        ordered += [n for n in pool if n not in set(ordered)]
+        ordered = list(custom_clean)
+        taken = set(ordered)
+        ordered += [n for n in CURATED_AWARD_EMOJI if n in seen and n not in taken]
+        taken.update(ordered)
+        ordered += [n for n in pool if n not in taken]
     else:
         starts = [n for n in pool if n.lower().startswith(text)]
         contains = [n for n in pool if text in n.lower() and not n.lower().startswith(text)]

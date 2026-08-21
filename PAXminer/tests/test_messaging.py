@@ -212,9 +212,18 @@ def test_emoji_search_ranks_matches_and_respects_the_option_cap():
     scoped = search_emoji_options(":f3_", custom=custom, standard=standard)
     assert [o["value"] for o in scoped][1:] == ["f3_ruck", "f3_logo"]
 
+    # Workspace emoji lead the unfiltered list. Slack shows only the first few
+    # without scrolling, so custom buried under the curated set reads as absent.
     empty = search_emoji_options("", custom=custom, standard=standard)
-    assert [o["value"] for o in empty][1] == "fire"
-    assert "f3_ruck" in [o["value"] for o in empty]
+    values = [o["value"] for o in empty]
+    assert values[1:3] == ["f3_ruck", "f3_logo"]
+    assert values.index("f3_logo") < values.index("fire")
+    assert "fire" in values
+
+    many_standard = [f"std_{i}" for i in range(400)]
+    crowded = search_emoji_options("", custom=custom, standard=many_standard)
+    crowded_values = [o["value"] for o in crowded]
+    assert crowded_values[1:3] == ["f3_ruck", "f3_logo"]
 
     huge = search_emoji_options(
         None, custom=[f"custom_{i}" for i in range(400)], standard=list(standard)
