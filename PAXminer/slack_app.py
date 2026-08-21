@@ -75,10 +75,12 @@ from slack_http import ADMIN_REQUIRED_TEXT, is_http_request, is_slack_admin, not
 
 LOCAL_DEVELOPMENT = not os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
 
+# Bolt clears the root handlers the Lambda runtime installed, so one has to be
+# put back or the front door logs nothing at all in CloudWatch.
 SlackRequestHandler.clear_all_log_handlers()
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-if LOCAL_DEVELOPMENT:
+if not logger.handlers:
     logger.addHandler(logging.StreamHandler())
 
 app = App(
@@ -284,9 +286,18 @@ def handle_emoji_options(ack, body, client, logger):
     try:
         custom, standard = load_emoji_names(client, team_id=team_id)
     except Exception:
-        logger.debug("emoji options load failed", exc_info=True)
+        logger.warning("emoji options load failed team=%s", team_id, exc_info=True)
         custom, standard = [], []
-    ack(options=search_emoji_options(query, custom=custom, standard=standard))
+    options = search_emoji_options(query, custom=custom, standard=standard)
+    logger.info(
+        "emoji options team=%s query=%r custom=%s standard=%s returned=%s",
+        team_id,
+        query,
+        len(custom),
+        len(standard),
+        len(options),
+    )
+    ack(options=options)
 
 
 app.options(EMOJI_OPTIONS_ACTION_ID)(handle_emoji_options)

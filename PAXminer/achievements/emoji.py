@@ -108,9 +108,17 @@ def load_emoji_names(client: Any, *, team_id: str = "") -> tuple[list[str], list
                     if text and text not in seen:
                         seen.add(text)
                         standard.append(text)
-        except Exception:
-            LOG.debug("emoji.list failed team=%s", key, exc_info=True)
+            LOG.info(
+                "emoji.list team=%s custom=%s standard=%s", key, len(custom), len(standard)
+            )
+        except Exception as exc:
+            # Warning, not debug: a silent fallback here looks identical to
+            # "the workspace has no custom emoji", which is not a thing.
+            err = getattr(getattr(exc, "response", None), "get", lambda _k: None)("error")
+            LOG.warning("emoji.list failed team=%s error=%s", key, err or exc, exc_info=True)
             custom, standard = [], []
+    else:
+        LOG.warning("emoji.list skipped team=%s: no Slack client", key)
     if not standard:
         standard = list(CURATED_AWARD_EMOJI)
     _EMOJI_CACHE[key] = (now, custom, standard)
