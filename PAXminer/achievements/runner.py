@@ -284,6 +284,7 @@ def run_achievements_for_region(
     allow_revoke: bool | None = None,
     period_year: int | None = None,
     emit_logs: bool = True,
+    rejudge_prior_versions: bool = False,
 ) -> dict:
     started = time.time()
     today = date.today()
@@ -392,7 +393,7 @@ def run_achievements_for_region(
                     held_grandfathered += 1
                     continue
                 if current_vid is None or int(award_vid) != current_vid:
-                    if hold_prior_version_awards(
+                    if not rejudge_prior_versions or hold_prior_version_awards(
                         rule.get("range_mode"),
                         effective_from=rule.get("effective_from"),
                     ):
@@ -669,6 +670,7 @@ def reconcile_rule_awards(
                 allow_revoke=True,
                 period_year=year,
                 emit_logs=False,
+                rejudge_prior_versions=True,
             )
             last_result = result
             if result.get("skipped"):
