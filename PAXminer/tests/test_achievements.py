@@ -1349,9 +1349,11 @@ def test_achievement_failure_log_uses_schema_name():
                 _post_achievement_failure_log(region_row, RuntimeError("boom"))
 
     assert len(log_lines) == 1
-    assert "The *Achievements* job was run as scheduled" in log_lines[0]
+    assert log_lines[0].startswith("The *Achievements* job was run.")
+    assert "Mode: scheduled" in log_lines[0]
     assert "Status: failed" in log_lines[0]
-    assert "boom" in log_lines[0]
+    assert "Error: boom" in log_lines[0]
+    assert log_lines[0].rstrip().endswith("```")
     assert not log_lines[0].startswith("-")
 
 
@@ -1371,18 +1373,20 @@ def test_run_summary_line_non_backfill_uses_envelope():
         rules=3,
         start=date(2026, 1, 1),
         end=date(2026, 8, 19),
-        channel="<#CACH>",
+        channel="CACH",
         dms=2,
         dm_failed=0,
         duration_s=1.5,
     )
-    assert text.startswith("The *Achievements (reconcile)* job was run as scheduled")
+    assert text.startswith("The *Achievements* job was run.")
+    assert "Mode: reconcile" in text
     assert "Status: success (1.5s)" in text
     assert "Results: 3 rules, 2 granted, 1 revoked, 5 held (1 grandfathered)" in text
     assert "Period: 2026-01-01 to 2026-08-19" in text
-    assert "Destination(s): <#CACH>, 2 DMs" in text
+    assert "Destination(s): CACH, 2 DMs" in text
     assert not text.startswith("-")
     assert "<@" not in text
+    assert "<#" not in text
 
 
 def test_run_summary_line_automatic_backfill_header():

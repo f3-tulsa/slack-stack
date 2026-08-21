@@ -128,9 +128,16 @@ def test_resolve_display_name_uses_profile_and_skips_ids():
     assert resolve_display_name(None, "UADMIN1234") == "admin"
 
 
+def test_log_header_is_one_grammar_for_jobs_and_reports():
+    from slack_util import log_header
+
+    assert log_header("Achievements") == "The *Achievements* job was run."
+    assert log_header("Kotter", noun="report") == "The *Kotter* report was run."
+
+
 def test_format_log_message_matches_schedule_envelope():
     text = format_log_message(
-        "The *Award Achievements* report was run as scheduled",
+        "The *Award Achievements* report was run.",
         status="success",
         duration_s=11.0,
         fields=[
@@ -140,7 +147,7 @@ def test_format_log_message_matches_schedule_envelope():
         message_count=0,
         destinations="none",
     )
-    assert text.startswith("The *Award Achievements* report was run as scheduled")
+    assert text.startswith("The *Award Achievements* report was run.")
     assert "Status: success (11.0s)" in text
     assert "Results: 13 rules, 0 granted, 0 revoked, 0 held" in text
     assert "Period: 2026-01-01 to 2026-08-19" in text
@@ -180,32 +187,32 @@ def test_strip_leading_log_dashes():
 def test_format_log_message_body_and_failed_status():
     """The miner opts out of the fence because its body carries <#channel> tags."""
     text = format_log_message(
-        "The *PAXminer hourly* job was run as scheduled",
+        "The *PAXminer hourly* job was run.",
         status="success",
         duration_s=1.5,
         body=" - Backblast imported for AO: <#C1>",
         code_block=False,
     )
-    assert text.startswith("The *PAXminer hourly* job was run as scheduled")
+    assert text.startswith("The *PAXminer hourly* job was run.")
     assert "Status: success (1.5s)" in text
     assert "Backblast imported for AO: <#C1>" in text
     assert " - Backblast" not in text
     assert "```" not in text
 
     failed = format_log_message(
-        "The *Achievements* job was run as scheduled",
+        "The *Achievements* job was run.",
         status="failed",
         detail="boom",
     )
-    assert failed.startswith("The *Achievements* job was run as scheduled")
+    assert failed.startswith("The *Achievements* job was run.")
     assert "Status: failed" in failed
-    assert "boom" in failed
+    assert "Error: boom" in failed
     assert failed.splitlines()[-1] == "```"
 
 
 def test_format_log_message_fences_by_default():
     """Every job outcome in paxminer_logs shares one envelope."""
-    text = format_log_message("The *User sync* job was run as scheduled", status="success")
+    text = format_log_message("The *User sync* job was run.", status="success")
     header, _, rest = text.partition("\n")
     assert "Status:" not in header
     assert rest.startswith("```")

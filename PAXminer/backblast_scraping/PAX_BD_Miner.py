@@ -21,7 +21,12 @@ _PAX_ROOT = Path(__file__).resolve().parent.parent
 if str(_PAX_ROOT) not in sys.path:
     sys.path.insert(0, str(_PAX_ROOT))
 from paxminer_db import connect_from_credentials_ini
-from slack_util import format_log_message, strip_leading_log_dashes, ticked_display_name
+from slack_util import (
+    format_log_message,
+    log_header,
+    strip_leading_log_dashes,
+    ticked_display_name,
+)
 import logging
 import math
 from BD_Update_Utils import determine_db_action, find_match, retrievePreviousBackblasts, DbAction
@@ -690,9 +695,10 @@ try:
     slack.chat_postMessage(
         channel=log_dest,
         text=format_log_message(
-            "The *PAXminer hourly* job was run as scheduled",
+            log_header("PAXminer hourly"),
             status="success",
             duration_s=time.time() - current_ts,
+            fields=[("Mode", "scheduled")],
             body=body or None,
             # Body is per-backblast lines carrying <#channel> tags, which Slack
             # renders literally inside a fence. Fencing needs plain AO names first.

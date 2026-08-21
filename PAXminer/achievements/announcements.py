@@ -12,7 +12,14 @@ from achievements.copy import (
 from achievements.period import backblast_archive_url, format_date_label, spoken_period
 from scheduling import format_iso_range
 from slack_blocks import section
-from slack_util import format_log_message, mention, ordinal_suffix, plain_name, ticked_display_name
+from slack_util import (
+    format_log_message,
+    log_header,
+    mention,
+    ordinal_suffix,
+    plain_name,
+    ticked_display_name,
+)
 
 AWARD_OPENERS = (
     "Congrats :raised_hands: to our man",
@@ -380,10 +387,11 @@ def run_summary_line(
         fail = f" ({dm_failed} failed)" if dm_failed else ""
         dest_parts.append(f"{dms} DMs{fail}")
     return format_log_message(
-        f"The *Achievements ({kind})* job was run as scheduled",
+        log_header("Achievements"),
         status="success",
         duration_s=duration_s,
         fields=[
+            ("Mode", kind),
             ("Results", results),
             ("Period", span or ""),
         ],

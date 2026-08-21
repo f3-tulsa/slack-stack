@@ -29,6 +29,7 @@ from common.encryption import decrypt_field
 from slack_util import (
     format_log_message,
     is_slack_user_id,
+    log_header,
     mention,
     open_dm_channel,
     post_log,
@@ -890,9 +891,10 @@ def _post_achievement_failure_log(region_row: dict, exc: Exception) -> None:
         post_log(
             client,
             format_log_message(
-                "The *Achievements* job was run as scheduled",
+                log_header("Achievements"),
                 status="failed",
                 detail=str(exc)[:500],
+                fields=[("Mode", "scheduled")],
             ),
             region=region_row,
         )

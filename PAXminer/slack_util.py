@@ -237,6 +237,15 @@ def strip_leading_log_dashes(text: str) -> str:
     return "\n".join(lines)
 
 
+def log_header(title: str, *, noun: str = "job") -> str:
+    """The one header grammar for paxminer_logs: ``The *Name* job was run.``
+
+    What triggered the run belongs in the fenced ``Mode`` field, not the header,
+    so every producer reads the same whether it was scheduled or hand-run.
+    """
+    return f"The *{title}* {noun} was run."
+
+
 def format_log_message(
     header: str,
     *,
@@ -279,7 +288,7 @@ def format_log_message(
             labeled = labeled[:insert_at] + [("Status", status_bit)] + labeled[insert_at:]
         inner = [f"{k}: {v}" for k, v in labeled]
         if detail and status != "success":
-            inner.append(str(detail))
+            inner.append(f"Error: {detail}")
         if extra:
             inner.append(extra)
         inner.extend(footer)
@@ -287,7 +296,7 @@ def format_log_message(
         return f"{header}\n{fenced}"
     lines = [header, f"Status: {status_bit}"]
     if detail and status != "success":
-        lines.append(str(detail))
+        lines.append(f"Error: {detail}")
     if labeled:
         lines.append("")
         lines.extend(f"{k}: {v}" for k, v in labeled)
