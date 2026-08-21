@@ -326,7 +326,7 @@ def run_summary_line(
             duration_s=duration_s,
             fields=[
                 ("Achievement", name),
-                ("Results", f"{granted} granted, {revoked} revoked, {unchanged} unchanged"),
+                ("Results", f"{granted} granted, {revoked} revoked, {unchanged} unchanged{held_detail}"),
                 ("Period", span),
             ],
         )

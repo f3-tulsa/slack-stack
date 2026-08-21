@@ -11,6 +11,7 @@ from datetime import date, timedelta
 import pandas as pd
 
 from achievements.activity import classify_null_activity_types
+from achievements.range import hold_prior_version_awards
 from achievements.announcements import (
     channel_grant_messages,
     channel_revoke_message,
@@ -41,7 +42,7 @@ LOG = logging.getLogger(__name__)
 RULES_SQL = """
 SELECT a.id AS id, a.id AS achievement_id, a.code, a.name, a.description, a.verb,
        a.enabled, v.id AS version_id, v.version_key, v.metric, v.activity,
-       v.period, v.threshold, v.effective_from, v.effective_to
+       v.period, v.threshold, v.effective_from, v.effective_to, v.range_mode
 FROM `{schema}`.`achievements_list` a
 JOIN `{schema}`.`achievement_versions` v
   ON v.achievement_id = a.id AND v.superseded_at IS NULL
@@ -52,7 +53,7 @@ ORDER BY a.id
 RULES_ONE_SQL = """
 SELECT a.id AS id, a.id AS achievement_id, a.code, a.name, a.description, a.verb,
        a.enabled, v.id AS version_id, v.version_key, v.metric, v.activity,
-       v.period, v.threshold, v.effective_from, v.effective_to
+       v.period, v.threshold, v.effective_from, v.effective_to, v.range_mode
 FROM `{schema}`.`achievements_list` a
 JOIN `{schema}`.`achievement_versions` v
   ON v.achievement_id = a.id AND v.superseded_at IS NULL
@@ -391,9 +392,13 @@ def run_achievements_for_region(
                     held_grandfathered += 1
                     continue
                 if current_vid is None or int(award_vid) != current_vid:
-                    held += 1
-                    held_older_version += 1
-                    continue
+                    if hold_prior_version_awards(
+                        rule.get("range_mode"),
+                        effective_from=rule.get("effective_from"),
+                    ):
+                        held += 1
+                        held_older_version += 1
+                        continue
                 bucket = _row_period_key(row, period)
                 if (str(row["pax_id"]), aid, bucket) in qual_keys:
                     held += 1
@@ -430,6 +435,8 @@ def run_achievements_for_region(
             "grants": len(grants),
             "revokes": len(revokes),
             "held": held,
+            "held_older_version": held_older_version,
+            "held_grandfathered": held_grandfathered,
             "dry_run": True,
         }
 
@@ -581,6 +588,8 @@ def run_achievements_for_region(
         "grants": len(grants),
         "revokes": len(revokes),
         "held": held,
+        "held_older_version": held_older_version,
+        "held_grandfathered": held_grandfathered,
         "dm_failed": dm_failed,
         "duration_s": duration_s,
         "rules": len(rules),
@@ -635,7 +644,13 @@ def reconcile_rule_awards(
         if hasattr(end, "date") and callable(end.date):
             end = end.date()
 
-        totals = {"grants": 0, "revokes": 0, "held": 0}
+        totals = {
+            "grants": 0,
+            "revokes": 0,
+            "held": 0,
+            "held_older_version": 0,
+            "held_grandfathered": 0,
+        }
         last_result: dict = {}
         for year, chunk_start, chunk_end in iter_year_windows(start, end):
             result = run_achievements_for_region(
@@ -661,6 +676,8 @@ def reconcile_rule_awards(
             totals["grants"] += int(result.get("grants") or 0)
             totals["revokes"] += int(result.get("revokes") or 0)
             totals["held"] += int(result.get("held") or 0)
+            totals["held_older_version"] += int(result.get("held_older_version") or 0)
+            totals["held_grandfathered"] += int(result.get("held_grandfathered") or 0)
 
         token_enc = region_row.get("slack_token")
         channel = resolve_achievement_channel(conn, pm_schema, regional_schema, region_row)
@@ -684,8 +701,8 @@ def reconcile_rule_awards(
                         granted=totals["grants"],
                         revoked=totals["revokes"],
                         held=totals["held"],
-                        held_grandfathered=0,
-                        held_older_version=0,
+                        held_grandfathered=totals["held_grandfathered"],
+                        held_older_version=totals["held_older_version"],
                         held_out_of_range=0,
                         rules=1,
                         start=start,
