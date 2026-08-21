@@ -729,3 +729,121 @@ def test_resolve_paxminer_log_channel_falls_back_to_name():
             got = helper_functions.resolve_paxminer_log_channel(region, MagicMock(), MagicMock())
     assert got == "CNAME"
     by_name.assert_called_once()
+
+
+def test_build_backblast_edit_summary_scalars_body_and_cap():
+    from types import SimpleNamespace
+
+    prior = SimpleNamespace(
+        q_user_id="UQ_OLD",
+        coq_user_id="UC_OLD",
+        pax_count=10,
+        fng_count=0,
+        bd_date="2026-08-20",
+        ao_id="C1",
+        backblast="old",
+    )
+    names = {"UQ_OLD": "OldQ", "UQ_NEW": "NewQ", "UC_OLD": "OldCoQ", "U1": "One", "U2": "Two"}
+    lines = helper_functions.build_backblast_edit_summary(
+        prior=prior,
+        q_user_id="UQ_NEW",
+        coq_user_id=None,
+        current_pax_ids={"UQ_NEW", "U1"},
+        prior_pax_ids={"UQ_OLD", "UC_OLD", "U2"},
+        pax_count=12,
+        fng_count=1,
+        bd_date="2026-08-21",
+        ao_id="C2",
+        body_changed=True,
+        names=names,
+    )
+    assert "Q: OldQ → NewQ" in lines
+    assert "CoQ: OldCoQ → none" in lines
+    assert any(ln.startswith("PAX added:") for ln in lines)
+    assert any(ln.startswith("PAX removed:") for ln in lines)
+    assert "Count: 10 → 12" in lines
+    assert "FNGs: 0 → 1" in lines
+    assert "Date: 2026-08-20 → 2026-08-21" in lines
+    assert "AO: C1 → C2" in lines
+    assert "Backblast body was edited" in lines
+    unchanged = helper_functions.build_backblast_edit_summary(
+        prior=prior,
+        q_user_id="UQ_OLD",
+        coq_user_id="UC_OLD",
+        current_pax_ids={"UQ_OLD", "UC_OLD", "U2"},
+        prior_pax_ids={"UQ_OLD", "UC_OLD", "U2"},
+        pax_count=10,
+        fng_count=0,
+        bd_date="2026-08-20",
+        ao_id="C1",
+        body_changed=False,
+        names=names,
+    )
+    assert unchanged == []
+    mass_prior = SimpleNamespace(
+        q_user_id="Q",
+        coq_user_id=None,
+        pax_count=1,
+        fng_count=0,
+        bd_date="2026-08-20",
+        ao_id="C1",
+        backblast="x",
+    )
+    many_added = {f"U{i}" for i in range(20)}
+    mass = helper_functions.build_backblast_edit_summary(
+        prior=mass_prior,
+        q_user_id="Q2",
+        coq_user_id="C2",
+        current_pax_ids=many_added,
+        prior_pax_ids=set(),
+        pax_count=20,
+        fng_count=3,
+        bd_date="2026-08-21",
+        ao_id="C9",
+        body_changed=True,
+        names={},
+    )
+    added_line = next(ln for ln in mass if ln.startswith("PAX added:"))
+    assert "+12 more" in added_line
+    padded = helper_functions.build_backblast_edit_summary(
+        prior=mass_prior,
+        q_user_id="Q2",
+        coq_user_id="C2",
+        current_pax_ids=many_added,
+        prior_pax_ids={"Z1", "Z2", "Z3", "Z4", "Z5", "Z6", "Z7", "Z8", "Z9"},
+        pax_count=20,
+        fng_count=3,
+        bd_date="2026-08-21",
+        ao_id="C9",
+        body_changed=True,
+        names={},
+    )
+    assert any(ln.startswith("+") and ln.endswith("more changes") for ln in padded) or len(padded) <= helper_functions.BACKBLAST_EDIT_SUMMARY_CAP + 1
+
+
+def test_format_backblast_paxminer_log_shapes():
+    imported = helper_functions.format_backblast_paxminer_log(
+        edited=False,
+        ao_id="C123",
+        date_label="Aug 21",
+        permalink="https://example.com/p",
+    )
+    assert imported == "Backblast successfully imported for <#C123> on <https://example.com/p|Aug 21>."
+    edited = helper_functions.format_backblast_paxminer_log(
+        edited=True,
+        ao_id="C123",
+        date_label="Aug 21",
+        permalink="https://example.com/p",
+        summary_lines=["Q: A → B", "Backblast body was edited"],
+    )
+    assert edited.startswith("Backblast successfully edited for <#C123> on <https://example.com/p|Aug 21>.")
+    assert "```" in edited
+    assert "Q: A → B" in edited
+    no_block = helper_functions.format_backblast_paxminer_log(
+        edited=True,
+        ao_id="C123",
+        date_label="Aug 21",
+        permalink="https://example.com/p",
+        summary_lines=[],
+    )
+    assert "```" not in no_block

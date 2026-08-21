@@ -23,3 +23,10 @@ def test_manifest_enables_app_home_and_app_home_opened():
     events = data["settings"]["event_subscriptions"]
     assert "app_home_opened" in events.get("bot_events", [])
     assert events.get("request_url")
+
+
+def test_manifest_includes_emoji_read_and_reactions_write():
+    data = json.loads(_MANIFEST.read_text(encoding="utf-8"))
+    scopes = data["oauth_config"]["scopes"]["bot"]
+    assert "emoji:read" in scopes
+    assert "reactions:write" in scopes

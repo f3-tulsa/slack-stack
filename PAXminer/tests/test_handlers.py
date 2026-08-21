@@ -194,6 +194,36 @@ def test_achievement_rule_backfill_clears_lock_on_bad_dates():
     assert unlock.call_args.args[2] == 3
 
 
+def test_achievement_rule_backfill_passes_action_to_reconcile():
+    from handlers import schedule_handler
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchone.return_value = {"schema_name": "f3test"}
+
+    with patch("handlers.connect_from_env", return_value=mock_conn):
+        with patch("handlers._pm_schema", return_value="paxminer_test"):
+            with patch("handlers._registry_database", return_value="paxminer_test"):
+                with patch("achievements.runner.reconcile_rule_awards", return_value={"grants": 0}) as recon:
+                    resp = schedule_handler(
+                        {
+                            "source": "achievement_rule_backfill",
+                            "schema": "f3test",
+                            "achievement_id": 3,
+                            "actor": "UADMIN1234",
+                            "action": "created",
+                            "automatic": True,
+                        },
+                        None,
+                    )
+    assert resp["statusCode"] == 200
+    assert recon.call_args.kwargs["action"] == "created"
+    assert recon.call_args.kwargs["automatic"] is True
+    assert recon.call_args.kwargs["actor"] == "UADMIN1234"
+
+
 def test_achievements_leaderboard_smoke():
     with patch("handlers.connect_from_env") as mock_conn:
         mock_conn.return_value.close = MagicMock()

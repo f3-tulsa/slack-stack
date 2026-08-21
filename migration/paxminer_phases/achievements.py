@@ -96,6 +96,9 @@ def _ensure_list_and_awarded_columns(cur, schema: str) -> dict:
         "reeval_queued_at": _add_column(
             cur, schema, "achievements_list", "reeval_queued_at", "DATETIME DEFAULT NULL"
         ),
+        "emoji": _add_column(
+            cur, schema, "achievements_list", "emoji", "VARCHAR(64) DEFAULT NULL"
+        ),
         "range_mode": _add_column(
             cur, schema, "achievement_versions", "range_mode", "VARCHAR(24) DEFAULT NULL"
         ),

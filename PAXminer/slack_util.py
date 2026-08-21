@@ -8,6 +8,7 @@ import os
 import re
 import ssl
 import time
+from collections.abc import Sequence
 from typing import Any
 
 from slack_sdk import WebClient
@@ -213,17 +214,17 @@ def format_log_message(
     body: str | None = None,
     message_count: int | None = None,
     destinations: str | None = None,
+    code_block: bool = False,
 ) -> str:
     """Shared paxminer_logs envelope: header, Status, optional fields, optional body, optional footer.
 
     Schedule runs, achievement re-evaluate, and miner/sync jobs use this helper.
+    When ``code_block`` is true, Status joins the fields inside a fenced block so
+    Slack mrkdwn in the header still renders.
     """
     status_bit = str(status)
     if duration_s is not None:
         status_bit = f"{status} ({float(duration_s):.1f}s)"
-    lines = [header, f"Status: {status_bit}"]
-    if detail and status != "success":
-        lines.append(str(detail))
     labeled = [(k, v) for k, v in (fields or []) if v]
     extra = strip_leading_log_dashes(body).strip() if body else ""
     footer: list[str] = []
@@ -231,6 +232,27 @@ def format_log_message(
         footer.append(f"Number of Messages: {message_count}")
     if destinations is not None:
         footer.append(f"Destination(s): {destinations}")
+    if code_block:
+        has_status = any(k.lower() == "status" for k, _ in labeled)
+        if not has_status:
+            insert_at = 0
+            for i, (k, _) in enumerate(labeled):
+                if k in ("Author", "Action", "Mode"):
+                    insert_at = i + 1
+                else:
+                    break
+            labeled = labeled[:insert_at] + [("Status", status_bit)] + labeled[insert_at:]
+        inner = [f"{k}: {v}" for k, v in labeled]
+        if detail and status != "success":
+            inner.append(str(detail))
+        if extra:
+            inner.append(extra)
+        inner.extend(footer)
+        fenced = "```\n" + "\n".join(inner) + "\n```" if inner else "```\n```"
+        return f"{header}\n{fenced}"
+    lines = [header, f"Status: {status_bit}"]
+    if detail and status != "success":
+        lines.append(str(detail))
     if labeled:
         lines.append("")
         lines.extend(f"{k}: {v}" for k, v in labeled)
@@ -254,6 +276,45 @@ def plain_name(user_id: Any = None, name: Any = None) -> str:
     return "PAX"
 
 
+def _reaction_names(reaction: str | Sequence[str] | None) -> list[str]:
+    if not reaction:
+        return []
+    if isinstance(reaction, str):
+        names = [reaction]
+    else:
+        names = [str(r) for r in reaction]
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in names:
+        name = str(raw).strip().strip(":")
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def _apply_reactions(client: WebClient, channel: str, ts: str, names: list[str]) -> None:
+    """Best-effort reactions. Isolated per emoji; never raises; never retries the post."""
+    for name in names:
+        try:
+            client.reactions_add(channel=channel, name=name, timestamp=ts)
+        except SlackApiError as e:
+            err = None
+            try:
+                err = e.response.get("error") if e.response is not None else None
+            except Exception:
+                err = None
+            logging.info(
+                "reaction %s skipped channel=%s error=%s",
+                name,
+                channel,
+                err or e,
+            )
+        except Exception:
+            logging.debug("reaction %s failed channel=%s", name, channel, exc_info=True)
+
+
 def post_message(
     client: WebClient,
     channel: str,
@@ -261,7 +322,7 @@ def post_message(
     *,
     blocks: list | None = None,
     add_reaction: bool = False,
-    reaction: str = "fire",
+    reaction: str | Sequence[str] | None = "fire",
     unfurl_links: bool = False,
     unfurl_media: bool = False,
     max_retries: int = 5,
@@ -276,12 +337,11 @@ def post_message(
     if blocks:
         kwargs["blocks"] = blocks
     last_error: Exception | None = None
+    response = None
     for attempt in range(max_retries):
         try:
             response = client.chat_postMessage(**kwargs)
-            if add_reaction and response.get("ts"):
-                client.reactions_add(channel=channel, name=reaction, timestamp=response["ts"])
-            return
+            break
         except SlackApiError as e:
             last_error = e
             if e.response is not None and e.response.status_code == 429:
@@ -297,34 +357,57 @@ def post_message(
                     logging.exception("Failed to join/post channel=%s", channel)
                     raise
             raise
-    if last_error:
-        raise last_error
-    raise RuntimeError(f"chat_postMessage failed after {max_retries} attempts channel={channel}")
+    else:
+        if last_error:
+            raise last_error
+        raise RuntimeError(f"chat_postMessage failed after {max_retries} attempts channel={channel}")
+    names = _reaction_names(reaction) if add_reaction else []
+    ts = (response or {}).get("ts")
+    if names and ts:
+        _apply_reactions(client, channel, ts, names)
 
 
 def post_messages(
     client: WebClient,
     channel: str,
-    items: list[tuple[str, list | None]],
+    items: list[tuple],
     *,
     delay_s: float = 0.4,
     add_reaction_first: bool = False,
-    reaction: str = "fire",
+    add_reaction: bool = False,
+    reaction: str | Sequence[str] | None = "fire",
 ) -> None:
-    """Post successive messages with a pause between them; retries 429s more than once."""
+    """Post successive messages with a pause between them; retries 429s more than once.
+
+    Each item is ``(text, blocks)`` or ``(text, blocks, reactions)``. A 3-tuple's
+    reactions list is applied to that message only and does not re-enter the post retry.
+    """
     for i, item in enumerate(items):
         if isinstance(item, tuple):
-            text, blocks = item[0], item[1] if len(item) > 1 else None
+            text = item[0]
+            blocks = item[1] if len(item) > 1 else None
+            item_reactions = item[2] if len(item) > 2 else None
         else:
-            text, blocks = str(item), None
+            text, blocks, item_reactions = str(item), None, None
         if i:
             time.sleep(delay_s)
+        if item_reactions is not None:
+            names = _reaction_names(item_reactions)
+            post_message(
+                client,
+                channel,
+                text,
+                blocks=blocks,
+                add_reaction=bool(names),
+                reaction=names or reaction,
+            )
+            continue
         post_message(
             client,
             channel,
             text,
             blocks=blocks,
-            add_reaction=add_reaction_first and i == 0,
+            add_reaction=add_reaction or (add_reaction_first and i == 0),
             reaction=reaction,
         )
 

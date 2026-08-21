@@ -431,15 +431,14 @@ def test_schedules_list_uses_overflow_rows_and_subline():
         "disable:9",
         "delete:9",
     ]
-    sub = " ".join(
-        el.get("text") or ""
+    overflow_text = " ".join(
+        (b.get("text") or {}).get("text") or ""
         for b in view["blocks"]
-        if b.get("type") == "context"
-        for el in b.get("elements") or []
+        if b.get("type") == "section" and b.get("accessory")
     )
-    assert "Enabled" in sub
-    assert "Weekly @ 07:00" in sub
-    assert "Last run: skipped (2026-07-18)" in sub
+    assert "Enabled" in overflow_text
+    assert "Weekly @ 07:00" in overflow_text
+    assert "Last run: skipped (2026-07-18)" in overflow_text
     assert "submit" not in view
 
 
@@ -504,10 +503,11 @@ def test_format_run_result_variants():
             "duration_s": 0.6,
         }
     )
-    assert "The *Kotter* report was run as scheduled" in text
+    assert "The *Kotter* report was run." in text
+    assert "Mode: scheduled" in text
     assert "Status: success (0.6s)" in text
     assert "Number of Messages: 2" in text
-    assert "<#C1>" in text
+    assert "<#" not in text
 
     text, _ = format_run_result(
         {
@@ -532,7 +532,7 @@ def test_format_run_result_variants():
         }
     )
     assert "Status: failed (1.2s)" in text
-    assert "\nboom\n" in text or text.splitlines()[2] == "boom"
+    assert "boom" in text
     assert "Destination(s): none" in text
 
 
@@ -550,9 +550,11 @@ def test_format_schedule_log_line_variants():
             "duration_s": 0.5,
         },
     )
-    assert line.startswith("The *Kotter* report was run as scheduled")
+    assert line.startswith("The *Kotter* report was run.")
+    assert "Mode: scheduled" in line
     assert "Status: success (0.5s)" in line
-    assert "<#C0APR1E1137>" in line
+    assert "<#" not in line
+    assert "C0APR1E1137" in line
     assert "Number of Messages: 2" in line
     assert "<@" not in line
 
@@ -564,8 +566,7 @@ def test_format_schedule_log_line_variants():
             "skipped": "no destinations configured",
         },
     )
-    assert "Status: skipped (0.0s)" in line
-    assert "no destinations configured" in line
+    assert line is None
 
     line = format_schedule_log_line(
         "f3ttown_test",
@@ -608,7 +609,8 @@ def test_post_schedule_outcome_log_uses_schema_name():
                 _post_schedule_outcome_log(region, result)
 
     assert len(log_lines) == 1
-    assert log_lines[0].startswith("The *kotter* report was run as scheduled")
+    assert log_lines[0].startswith("The *kotter* report was run.")
+    assert "Mode: scheduled" in log_lines[0]
     assert "Tulsa" not in log_lines[0]
 
 
@@ -913,8 +915,8 @@ def test_format_run_result_includes_posted_failed_channels():
         }
     )
     assert "Status: success (0.0s)" in text
-    assert "<#C111>" in text
-    assert "Destination(s): <#C111>" in text
+    assert "<#" not in text
+    assert "Destination(s): #The Fort" in text
 
 
 def test_format_schedule_log_line_includes_destinations():
@@ -1264,13 +1266,12 @@ def test_reports_list_uses_overflow_not_list_duplicate():
         if b.get("type") == "section" and (b.get("accessory") or {}).get("type") == "overflow"
     ]
     assert menus[0]["options"][2]["text"]["text"] == "Enable"
-    sub = " ".join(
-        el.get("text") or ""
+    overflow_text = " ".join(
+        (b.get("text") or {}).get("text") or ""
         for b in view["blocks"]
-        if b.get("type") == "context"
-        for el in b.get("elements") or []
+        if b.get("type") == "section" and (b.get("accessory") or {}).get("type") == "overflow"
     )
-    assert "Disabled" in sub
+    assert "Disabled" in overflow_text
     edit = _report_edit_modal("T1", "f3test", row)
     edit_ids = [
         e.get("action_id")
@@ -1423,10 +1424,12 @@ def test_format_schedule_log_line_manual_vs_scheduled_and_dm_dest():
             "duration_s": 0.4,
         },
     )
-    assert scheduled.startswith("The *Achievement leaderboard* report was run as scheduled")
+    assert scheduled.startswith("The *Achievement leaderboard* report was run.")
     assert "<@" not in scheduled
-    assert "Destination(s): <#C0APR1E1137>" in scheduled
+    assert "<#" not in scheduled
+    assert "Destination(s): C0APR1E1137" in scheduled
     assert "Status: success (0.4s)" in scheduled
+    assert "Mode: scheduled" in scheduled
 
     manual = format_schedule_log_line(
         "x",
@@ -1440,7 +1443,7 @@ def test_format_schedule_log_line_manual_vs_scheduled_and_dm_dest():
             "duration_s": 1.2,
         },
     )
-    assert "was run manually by `admin`" in manual
+    assert "Mode: manually by admin" in manual
     assert "`UADMIN1234`" not in manual
     assert "<@UADMIN1234>" not in manual
     assert "Status: failed (1.2s)" in manual
@@ -1459,7 +1462,7 @@ def test_format_schedule_log_line_manual_vs_scheduled_and_dm_dest():
             "duration_s": 8.5,
         },
     )
-    assert "The *PAX charts (DM)* report was run as scheduled" in dm
+    assert "The *PAX charts (DM)* report was run." in dm
     assert "Destination(s): DM to all PAX" in dm
     assert "specified PAX" not in dm
     assert "Number of Messages: 12" in dm
@@ -1496,7 +1499,7 @@ def test_format_schedule_log_line_results_period_and_specific_pax():
             "posted_channels": [{"channel_id": "C9"}],
         },
     )
-    assert "The *Kotter* report was run as scheduled" in named
+    assert "The *Kotter* report was run." in named
     assert "Kotter report report" not in named
 
     specific_dm = format_schedule_log_line(
@@ -1553,6 +1556,7 @@ def test_queue_achievement_backfill_serializes_dates():
         "schema": "f3test",
         "achievement_id": 4,
         "actor": "U1",
+        "action": "re-evaluated",
         "start": "2026-03-01",
         "end": "2026-08-18",
     }
@@ -1576,6 +1580,8 @@ def test_queue_achievement_backfill_marks_automatic():
     payload = json.loads(mock_client.invoke.call_args.kwargs["Payload"].decode("utf-8"))
     assert payload["automatic"] is True
     assert payload["source"] == "achievement_rule_backfill"
+    assert payload["action"] == "re-evaluated"
+
 
 class _CatchApp:
     def __init__(self):

@@ -263,13 +263,15 @@ def test_modals_with_input_blocks_include_submit():
         if b.get("type") == "section"
     ]
     assert "paxminer_achievement_more" in accessory_ids
-    sublines = [
-        el.get("text")
+    overflow = next(
+        b
         for b in list_with["blocks"]
-        if b.get("type") == "context"
-        for el in b.get("elements") or []
-    ]
-    assert any("Week - 6 posts" in (t or "") for t in sublines)
+        if (b.get("accessory") or {}).get("action_id") == "paxminer_achievement_more"
+    )
+    assert "Week - 6 posts" in overflow["text"]["text"]
+    idx = list_with["blocks"].index(overflow)
+    following = list_with["blocks"][idx + 1] if idx + 1 < len(list_with["blocks"]) else {}
+    assert following.get("type") != "context"
     assert any(
         el.get("action_id") == "paxminer_achievement_backfill"
         for b in list_with["blocks"]
@@ -288,6 +290,7 @@ def test_modals_with_input_blocks_include_submit():
     assert "apply_mode" not in edit_ids
     assert "no_end_date" not in edit_ids
     assert "range_mode" in edit_ids
+    assert "emoji" in edit_ids
     range_block = next(b for b in edit["blocks"] if b.get("block_id") == "range_mode")
     range_labels = [o["text"]["text"] for o in range_block["element"]["options"]]
     assert "From when the achievement was created" in range_labels
@@ -585,7 +588,7 @@ def test_cosmetic_edit_does_not_mint_version():
                                                 handle_achievement_edit_submit(ack, body, MagicMock(), MagicMock())
     mint.assert_not_called()
     update_sql = " ".join(str(c) for c in mock_cur.execute.call_args_list)
-    assert "SET name=%s, description=%s, verb=%s" in update_sql
+    assert "SET name=%s, description=%s, verb=%s, emoji=%s" in update_sql
     assert "enabled=%s" not in update_sql
 
 
@@ -706,6 +709,7 @@ def test_clearing_activity_chips_stores_any_and_queues_reeval():
     mint.assert_called_once()
     assert mint.call_args.kwargs["activity_filter"] == {"include": [], "exclude": []}
     queue.assert_called_once()
+    assert queue.call_args.kwargs["action"] == "changed"
 
 
 def test_overlapping_include_exclude_acks_form_error():
@@ -906,6 +910,7 @@ def test_parameter_edit_mints_version_and_can_queue_backfill():
     assert mint.call_args.kwargs["range_mode"] == "from_created"
     queue.assert_called_once()
     assert queue.call_args.kwargs["automatic"] is True
+    assert queue.call_args.kwargs["action"] == "changed"
 
 
 def test_range_only_all_attendance_updates_current_and_queues():
@@ -985,6 +990,7 @@ def test_range_only_all_attendance_updates_current_and_queues():
     assert upd.call_args.kwargs["range_mode"] == "all_attendance"
     queue.assert_called_once()
     assert queue.call_args.kwargs["automatic"] is True
+    assert queue.call_args.kwargs["action"] == "changed"
 
 
 def test_description_only_does_not_move_since_rules_changed():
@@ -1313,6 +1319,7 @@ def test_backfill_button_queues_worker():
     assert queue.call_args.kwargs["start"] == "2026-01-01"
     assert queue.call_args.kwargs["end"] == "2026-08-18"
     assert queue.call_args.kwargs.get("automatic") is not True
+    assert queue.call_args.kwargs["action"] == "re-evaluated"
 
 
 def test_backfill_button_rejects_in_flight_lock():
@@ -1574,11 +1581,14 @@ def test_delete_all_achievements_loops_single_delete_and_logs_each():
     logs = [call.args[2] for call in notice.call_args_list]
     channels = [call.args[1] for call in notice.call_args_list]
     assert "Six Pack" in logs[0]
-    assert "deleted by `Klint`" in logs[0]
-    assert "10 awards from 4 PAX" in logs[0]
+    assert "Action: deleted" in logs[0]
+    assert "Author: Klint" in logs[0]
+    assert "Awards: 0 granted, 10 revoked, 0 unchanged" in logs[0]
     assert "Centurion" in logs[1]
-    assert "deleted by `Klint`" in logs[1]
-    assert "Klint" not in channels[0]
+    assert "Action: deleted" in logs[1]
+    assert "was deleted by" in channels[0]
+    assert "(10 revoked)" in channels[0]
+    assert "Six Pack" in channels[0]
     sql = " ".join(str(c) for c in mock_cur.execute.call_args_list)
     assert sql.count("achievements_awarded") >= 2
     assert sql.count("achievement_versions") >= 2
@@ -1673,6 +1683,7 @@ def test_restore_defaults_adds_like_new_and_queues_reeval():
     assert queue.call_args_list[0].kwargs["automatic"] is True
     assert queue.call_args_list[0].kwargs["achievement_id"] == 10
     assert queue.call_args_list[0].kwargs["actor"] == "UADMIN"
+    assert queue.call_args_list[0].kwargs["action"] == "created"
     notice.assert_not_called()
     assert f"{len(seeds)} missing builtin" in refresh.call_args.args[4]
     assert "Re-evaluate queued" in refresh.call_args.args[4]
@@ -1957,8 +1968,10 @@ def test_add_and_edit_achievement_update_view_instead_of_push():
 def test_overflow_row_and_parse_action():
     from slack_blocks import OVERFLOW_ENABLE, overflow_row, parse_overflow_action
 
-    row = overflow_row("Six Pack", "paxminer_achievement_more", 7, enabled=False)
+    row = overflow_row("Six Pack", "paxminer_achievement_more", 7, enabled=False, subline="Disabled | Week - 6 posts")
     assert row["accessory"]["type"] == "overflow"
+    assert "*Six Pack*" in row["text"]["text"]
+    assert "_Disabled | Week - 6 posts_" in row["text"]["text"]
     labels = [o["text"]["text"] for o in row["accessory"]["options"]]
     assert labels == ["Edit", "Duplicate", "Enable", "Delete"]
     verb, oid = parse_overflow_action(

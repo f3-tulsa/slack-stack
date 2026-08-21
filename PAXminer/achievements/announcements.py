@@ -2,12 +2,33 @@
 
 from __future__ import annotations
 
+import random
 from datetime import date
 
+from achievements.copy import (
+    achievement_admin_log_line,
+    admin_channel_line,
+)
 from achievements.period import backblast_archive_url, format_date_label, spoken_period
 from scheduling import format_iso_range
-from slack_blocks import chunk_messages, chunk_sections, fallback_text, section
+from slack_blocks import section
 from slack_util import format_log_message, mention, ordinal_suffix, plain_name, ticked_display_name
+
+AWARD_OPENERS = (
+    "Congrats :raised_hands: to our man",
+    "T-Claps :clap: for our man",
+    "Give a fist bump :punch: to our man",
+    "Props :muscle: to our man",
+    "Check out :eyes: our man",
+    "Shout out :mega: to our man",
+    "Hardware alert :trophy: for our man",
+    "Nice work :100: by our man",
+    "Ring the bell :bell: for our man",
+    "Big day :tada: for our man",
+    "Hats off :tophat: to our man",
+    "Beast mode :weight_lifter: by our man",
+    "Salute :saluting_face: our man",
+)
 
 
 def _as_date(value) -> date | None:
@@ -62,6 +83,26 @@ def _family_label(rule: dict) -> str:
     return f"*{name}*"
 
 
+def pick_award_openers(n: int, rng: random.Random) -> list[str]:
+    """Distinct openers for a batch, then with-replacement once the list is exhausted."""
+    pool = list(AWARD_OPENERS)
+    if n <= 0:
+        return []
+    if n <= len(pool):
+        return rng.sample(pool, n)
+    chosen = rng.sample(pool, len(pool))
+    chosen.extend(rng.choices(pool, k=n - len(pool)))
+    return chosen
+
+
+def _award_reactions(rule: dict | None) -> list[str]:
+    names = ["fire"]
+    extra = str((rule or {}).get("emoji") or "").strip().strip(":")
+    if extra and extra not in names:
+        names.append(extra)
+    return names
+
+
 def channel_grant_messages(
     grants: list[dict],
     *,
@@ -69,51 +110,25 @@ def channel_grant_messages(
     names: dict[str, str],
     known_ids: set[str] | None,
     ytd_totals: dict[str, int],
-    ytd_family: dict[tuple[str, int], int],
-) -> list[tuple[str, list[dict], bool]]:
-    """Return (text, blocks, add_reaction) per channel message, grouped by achievement."""
-    by_aid: dict[int, list[dict]] = {}
-    for g in grants:
-        by_aid.setdefault(int(g["achievement_id"]), []).append(g)
-    out: list[tuple[str, list[dict], bool]] = []
-    for _aid, group in by_aid.items():
-        rule = group[0]["rule"]
+    ytd_family: dict[tuple[str, int], int] | None = None,
+    rng: random.Random | None = None,
+) -> list[tuple[str, list[dict], list[str]]]:
+    """One public message per grant. ``rng`` pins opener selection in tests."""
+    del year, ytd_family
+    picker = rng or random.Random()
+    openers = pick_award_openers(len(grants), picker)
+    out: list[tuple[str, list[dict], list[str]]] = []
+    for g, opener in zip(grants, openers):
+        rule = g.get("rule") or {}
         label = _family_label(rule)
-        if len(group) == 1:
-            g = group[0]
-            tag = mention(g["pax_id"], names.get(g["pax_id"]), known_ids=known_ids)
-            total = ytd_totals.get(g["pax_id"], 0)
-            idx = ytd_family.get((g["pax_id"], int(g["achievement_id"])), 0)
-            ending = ordinal_suffix(idx)
-            text = (
-                f"Congrats to our man {tag} who just unlocked the achievement {label}! "
-                f"He earned this {_earned_at(g)}. "
-                f"This is achievement #{total} in {year} for {tag} and the {idx}{ending} "
-                f"time this year he's earned this award. Encourage this HIM to keep it up!"
-            )
-            out.append((text, [section(text)], True))
-            continue
-        header = (
-            f"T-Claps :clap: for these men who just unlocked the achievement {label}! "
-            f"Encourage these HIM to keep it up!"
+        tag = mention(g["pax_id"], names.get(g["pax_id"]), known_ids=known_ids)
+        total = ytd_totals.get(g["pax_id"], 0)
+        text = (
+            f"{opener} {tag} who just unlocked the achievement {label}! "
+            f"He earned this {_earned_at(g)}. "
+            f"This is achievement #{total} this year. Encourage this HIM to keep it up!"
         )
-        lines = [
-            f"{mention(g['pax_id'], names.get(g['pax_id']), known_ids=known_ids)} "
-            f"earned {_earned_at(g)}"
-            for g in group
-        ]
-        body = header + "\n" + "\n".join(lines)
-        blocks = [section(header)]
-        blocks.extend(chunk_sections(["\n".join(lines)]))
-        first = True
-        for chunk in chunk_messages(blocks):
-            text = fallback_text(chunk)
-            if not first:
-                cont = f"{label} (continued)"
-                chunk = [section(cont), *chunk]
-                text = fallback_text(chunk)
-            out.append((text, chunk, first))
-            first = False
+        out.append((text, [section(text)], _award_reactions(rule)))
     return out
 
 
@@ -239,44 +254,33 @@ def dm_revoke_messages(
     return out
 
 
-def grant_log_line(grant: dict, display_name: str | None) -> str:
-    name = (grant.get("rule") or {}).get("name") or "achievement"
+def award_log_line(row: dict, display_name: str | None, *, granted: bool) -> str:
+    name = (row.get("rule") or {}).get("name") or "achievement"
     period = spoken_period(
-        grant.get("period_start"), grant.get("period_end"), grant.get("period") or "year"
+        row.get("period_start"), row.get("period_end"), row.get("period") or "year"
     )
-    d = _as_date(grant.get("date_awarded"))
-    label = format_date_label(d) if d else "this event"
-    link = date_link(grant.get("date_awarded"), grant.get("ao_id"), grant.get("timestamp"), label=label)
-    who = plain_name(grant.get("pax_id"), display_name)
-    return (
-        f"Achievement *{name}* was granted to `{who}` for period {period} "
-        f"after posting at {link}"
-    )
+    who = plain_name(row.get("pax_id"), display_name)
+    verb = "granted to" if granted else "revoked from"
+    ao_id = row.get("trigger_ao_id") or row.get("ao_id")
+    ts = row.get("trigger_timestamp") or row.get("timestamp")
+    d = row.get("trigger_date") or row.get("date_awarded")
+    link = date_link(d, ao_id, ts, label="this Backblast") if (ao_id and ts) else None
+    suffix = f" after evaluating {link}" if link else ""
+    return f"Achievement *{name}* was {verb} `{who}` for period {period}{suffix}."
+
+
+def grant_log_line(grant: dict, display_name: str | None) -> str:
+    return award_log_line(grant, display_name, granted=True)
 
 
 def revoke_log_line(
     row: dict,
     display_name: str | None,
     *,
-    webhook: bool,
+    webhook: bool = False,
 ) -> str:
-    name = (row.get("rule") or {}).get("name") or "achievement"
-    period = _revoke_period_label(row)
-    who = plain_name(row.get("pax_id"), display_name)
-    d = _as_date(row.get("trigger_date") or row.get("date_awarded"))
-    ao_id = row.get("trigger_ao_id") or row.get("ao_id")
-    ts = row.get("trigger_timestamp") or row.get("timestamp")
-    if webhook:
-        label = format_date_label(d) if d else "this event"
-        link = date_link(d, ao_id, ts, label=label) if (ao_id and ts) else None
-        suffix = f" after an edit on {link}" if link else " after an edit"
-    elif ao_id and ts and d:
-        label = format_date_label(d)
-        link = date_link(d, ao_id, ts, label=label)
-        suffix = f" after attendance no longer qualified at {link}"
-    else:
-        suffix = " after attendance no longer qualified"
-    return f"Achievement *{name}* was revoked from `{who}` for period {period}{suffix}"
+    del webhook
+    return award_log_line(row, display_name, granted=False)
 
 
 def run_summary_line(
@@ -298,6 +302,11 @@ def run_summary_line(
     actor: str | None = None,
     achievement_name: str | None = None,
     automatic: bool = False,
+    action: str | None = None,
+    code: str | None = None,
+    version: str | None = None,
+    rules_text: str | None = None,
+    affected_pax: int | None = None,
 ) -> str:
     held_bits = []
     if held_grandfathered:
@@ -309,26 +318,26 @@ def run_summary_line(
     held_detail = f" ({', '.join(held_bits)})" if held_bits else ""
     span = format_iso_range(start, end)
     if kind == "backfill":
-        who = ticked_display_name(actor, fallback="admin")
+        del automatic
         name = achievement_name or "achievement"
         span = format_iso_range(start, end) or (
             f"{start.isoformat() if start else 'all-time'} to {end.isoformat() if end else 'present'}"
         )
-        unchanged = held
-        header = (
-            "Achievement re-evaluate ran automatically after a rule change"
-            if automatic
-            else f"Achievement re-evaluate triggered by {who}"
-        )
-        return format_log_message(
-            header,
+        return achievement_admin_log_line(
+            name=name,
+            action=action or "re-evaluated",
+            author=actor,
             status="success",
             duration_s=duration_s,
-            fields=[
-                ("Achievement", name),
-                ("Results", f"{granted} granted, {revoked} revoked, {unchanged} unchanged{held_detail}"),
-                ("Period", span),
-            ],
+            code=code,
+            version=version,
+            rules=rules_text,
+            period=span,
+            granted=granted,
+            revoked=revoked,
+            unchanged=held,
+            affected_pax=affected_pax,
+            held_detail=held_detail,
         )
 
     results = (
@@ -353,9 +362,21 @@ def run_summary_line(
     )
 
 
-def reconcile_channel_line(name: str, granted: int, revoked: int, unchanged: int) -> str:
-    del unchanged  # public copy no longer reports the unchanged count
-    return (
-        f"Achievement *{name}* was corrected "
-        f"({granted} granted, {revoked} revoked)."
+def reconcile_channel_line(
+    name: str,
+    granted: int,
+    revoked: int,
+    unchanged: int,
+    *,
+    action: str = "changed",
+    admin_mention: str = "`admin`",
+) -> str | None:
+    """Back-compat wrapper around admin_channel_line."""
+    return admin_channel_line(
+        action,
+        name,
+        admin_mention,
+        granted=granted,
+        revoked=revoked,
+        unchanged=unchanged,
     )

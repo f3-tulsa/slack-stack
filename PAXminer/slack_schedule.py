@@ -136,6 +136,7 @@ def queue_achievement_backfill(
     start: str | None = None,
     end: str | None = None,
     automatic: bool = False,
+    action: str = "re-evaluated",
 ) -> None:
     """Ack-friendly async invoke of reconcile_rule_awards via ScheduleFunction."""
     import boto3
@@ -148,6 +149,7 @@ def queue_achievement_backfill(
         "schema": schema,
         "achievement_id": int(achievement_id),
         "actor": actor or "",
+        "action": action or "re-evaluated",
     }
     start_s = _json_date(start)
     end_s = _json_date(end)

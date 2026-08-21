@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS `{schema}`.`achievements_list` (
   `threshold` int NOT NULL DEFAULT 1,
   `enabled` tinyint NOT NULL DEFAULT 1,
   `reeval_queued_at` datetime DEFAULT NULL,
+  `emoji` varchar(64) DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `code` (`code`),
   KEY `enabled` (`enabled`)

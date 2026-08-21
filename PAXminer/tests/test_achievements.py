@@ -612,24 +612,26 @@ def test_run_achievements_grants_and_posts():
                         side_effect=lambda _c, n, _s: n,
                     ):
                         with patch("achievements.runner.evaluate_rule", return_value=qual):
-                            with patch("achievements.runner.post_message") as mock_post:
-                                with patch(
-                                    "achievements.runner.open_dm_channel", return_value="D1"
-                                ):
-                                    result = run_achievements_for_region(
-                                        mock_conn,
-                                        pm_schema="paxminer_test",
-                                        regional_schema="f3test",
-                                        region_row=region_row,
-                                        dry_run=False,
-                                    )
+                            with patch("achievements.runner.post_messages") as mock_batch:
+                                with patch("achievements.runner.post_message") as mock_post:
+                                    with patch(
+                                        "achievements.runner.open_dm_channel", return_value="D1"
+                                    ):
+                                        result = run_achievements_for_region(
+                                            mock_conn,
+                                            pm_schema="paxminer_test",
+                                            regional_schema="f3test",
+                                            region_row=region_row,
+                                            dry_run=False,
+                                        )
 
     assert result["grants"] == 1
     assert result["revokes"] == 0
     insert_calls = [c for c in mock_cur.execute.call_args_list if "INSERT" in str(c)]
     assert insert_calls
     assert "INSERT IGNORE" in str(insert_calls[0])
-    assert mock_post.call_count >= 2  # channel + DM
+    assert mock_batch.call_count >= 1
+    assert mock_post.call_count >= 1  # DM
     # Per-grant commit so a timeout mid-loop cannot re-announce uncommitted rows.
     assert mock_conn.commit.call_count >= 1
     mock_conn.commit.assert_called_once()
@@ -935,12 +937,16 @@ def test_achievement_subline_shows_disabled_when_enabled_is_zero():
     }
     assert achievement_subline(row) == "Disabled | Month - 6 posts"
     modal = _achievements_list_modal("T1", "f3test", [row])
-    texts = [
-        (b.get("elements") or [{}])[0].get("text")
+    overflow = next(
+        b
         for b in modal["blocks"]
-        if b.get("type") == "context"
-    ]
-    assert any(t and t.startswith("Disabled |") for t in texts)
+        if (b.get("accessory") or {}).get("action_id") == "paxminer_achievement_more"
+    )
+    assert "*6 pack*" in overflow["text"]["text"]
+    assert "_Disabled | Month - 6 posts_" in overflow["text"]["text"]
+    idx = modal["blocks"].index(overflow)
+    following = modal["blocks"][idx + 1] if idx + 1 < len(modal["blocks"]) else {}
+    assert following.get("type") != "context"
 
 
 def test_achievement_edit_modal_disabled_row_is_unchecked():
@@ -1403,10 +1409,12 @@ def test_run_summary_line_automatic_backfill_header():
         achievement_name="Six Pack",
         automatic=True,
     )
-    assert "ran automatically after a rule change" in text
+    assert "Achievement *Six Pack* was processed." in text
+    assert "Action: re-evaluated" in text
+    assert "Author: admin" in text
+    assert "Awards: 1 granted, 2 revoked, 3 unchanged" in text
     assert "triggered by" not in text
-    assert "Achievement: Six Pack" in text
-    assert "Results: 1 granted, 2 revoked, 3 unchanged" in text
+    assert "ran automatically" not in text
 
 
 def test_run_summary_line_backfill_names_older_version_holds():
@@ -1433,7 +1441,7 @@ def test_run_summary_line_backfill_names_older_version_holds():
         achievement_name="The Priest",
         automatic=True,
     )
-    assert "Results: 0 granted, 0 revoked, 4 unchanged (4 older version)" in text
+    assert "Awards: 0 granted, 0 revoked, 4 unchanged (4 older version)" in text
 
 
 def test_achievements_emit_per_event_paxminer_logs():
@@ -1954,10 +1962,12 @@ def test_channel_single_and_batch_copy():
     assert "<@U01AAAAAAA1>" in text
     assert "*Leader of Men*" in text
     assert "<#C_AO>" in text
-    assert "in 2026" in text
+    assert "this year" in text
     assert "Encourage this HIM to keep it up!" in text
     assert "Keep up the good work!" not in text
     assert "unfurl" not in text.lower()
+    assert "Congrats to our man" not in text
+    assert "for these men" not in text
     g2 = dict(g1, pax_id="U01AAAAAAA2")
     batch = channel_grant_messages(
         [g1, g2],
@@ -1966,10 +1976,12 @@ def test_channel_single_and_batch_copy():
         known_ids={"U01AAAAAAA1", "U01AAAAAAA2"},
         ytd_totals={"U01AAAAAAA1": 23, "U01AAAAAAA2": 2},
         ytd_family={("U01AAAAAAA1", 1): 5, ("U01AAAAAAA2", 1): 1},
+        rng=__import__("random").Random(0),
     )
-    btext = batch[0][0]
-    assert "T-Claps" in btext
-    assert "achievement #23" not in btext
+    assert len(batch) == 2
+    assert "for these men" not in batch[0][0]
+    assert "for these men" not in batch[1][0]
+    assert batch[0][0].split(" who just unlocked")[0] != batch[1][0].split(" who just unlocked")[0]
     dms = dm_grant_messages(
         [g1, dict(g1, achievement_id=2, rule={"name": "6 pack", "verb": "posting at 6 beatdowns in a week"})],
         year=2026,
@@ -2106,7 +2118,7 @@ def test_genuine_revoke_posts_channel_dm_and_log():
     assert "Keep showing up and you'll get it back!" in dm_msgs[0]
     assert len(logs) == 1
     assert "was revoked from" in logs[0]
-    assert "after an edit on" in logs[0]
+    assert "after evaluating" in logs[0]
     assert "<@" not in logs[0]
 
 
@@ -2212,13 +2224,13 @@ def test_reconcile_rule_awards_silent_channel_summary():
     assert mock_run.call_args.kwargs["rejudge_prior_versions"] is True
     assert mock_run.call_args.kwargs["emit_logs"] is False
     assert len(posts) == 1
-    assert "Achievement *Centurion* was corrected" in posts[0][1]
+    assert "Achievement *Centurion* was re-evaluated by" in posts[0][1]
+    assert "(89 granted, 141 revoked, 73 unchanged)" in posts[0][1]
     assert mock_dm.call_count == 0
     assert len(logs) == 1
-    assert "Achievement re-evaluate triggered by `admin`" in logs[0]
-    assert "Status: success" in logs[0]
-    assert "Achievement: Centurion" in logs[0]
-    assert "Results: 89 granted, 141 revoked, 73 unchanged" in logs[0]
+    assert "Achievement *Centurion* was processed." in logs[0]
+    assert "Action: re-evaluated" in logs[0]
+    assert "Awards: 89 granted, 141 revoked, 73 unchanged" in logs[0]
     assert "`UADMIN1234`" not in logs[0]
 
 
@@ -2265,10 +2277,9 @@ def test_reconcile_rule_awards_skips_channel_when_noop():
     assert result["held"] == 26
     assert posts == []
     assert len(logs) == 1
-    assert "Achievement re-evaluate triggered by `admin`" in logs[0]
-    assert "Status: success" in logs[0]
-    assert "Achievement: 6 pack" in logs[0]
-    assert "Results: 0 granted, 0 revoked, 26 unchanged" in logs[0]
+    assert "Achievement *6 pack* was processed." in logs[0]
+    assert "Action: re-evaluated" in logs[0]
+    assert "Awards: 0 granted, 0 revoked, 26 unchanged" in logs[0]
     assert "Period:" in logs[0]
     assert "`UADMIN1234`" not in logs[0]
     assert "was corrected" not in logs[0]
