@@ -229,6 +229,17 @@ def should_auto_queue(*, is_new: bool, params_changed: bool, range_changed: bool
     return bool(params_changed or range_changed)
 
 
+def hold_prior_version_awards(mode: str | None, *, effective_from=None) -> bool:
+    """Freeze older-version awards only when the window starts at the last rule change.
+
+    All attendance, from created, and custom re-judge history (and may revoke).
+    """
+    return (
+        normalize_range_mode(mode, effective_from=effective_from)
+        == RANGE_SINCE_RULES_CHANGED
+    )
+
+
 def window_narrowed(old_from, old_to, new_from, new_to) -> bool:
     """True when the new window is a strict subset of the old one."""
     old_f, old_t = iso_date(old_from), iso_date(old_to)

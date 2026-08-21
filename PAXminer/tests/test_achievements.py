@@ -1374,6 +1374,33 @@ def test_run_summary_line_automatic_backfill_header():
     assert "Results: 1 granted, 2 revoked, 3 unchanged" in text
 
 
+def test_run_summary_line_backfill_names_older_version_holds():
+    from datetime import date
+
+    from achievements.announcements import run_summary_line
+
+    text = run_summary_line(
+        kind="backfill",
+        granted=0,
+        revoked=0,
+        held=4,
+        held_grandfathered=0,
+        held_older_version=4,
+        held_out_of_range=0,
+        rules=1,
+        start=date(2026, 1, 28),
+        end=date(2026, 8, 20),
+        channel=None,
+        dms=0,
+        dm_failed=0,
+        duration_s=None,
+        actor="admin",
+        achievement_name="The Priest",
+        automatic=True,
+    )
+    assert "Results: 0 granted, 0 revoked, 4 unchanged (4 older version)" in text
+
+
 def test_achievements_emit_per_event_paxminer_logs():
     """Grant and revoke each emit a paxminer_logs line."""
     from achievements import runner as runner_mod
@@ -1700,7 +1727,7 @@ def test_populated_activity_list_filters():
     assert out.iloc[0]["date_awarded"] == date(2026, 8, 1)
 
 
-def test_rule_edit_does_not_revoke_older_version():
+def _older_version_reeval(range_mode, *, qualify=False, effective_from=None):
     from achievements.runner import run_achievements_for_region
 
     rule = {
@@ -1712,6 +1739,8 @@ def test_rule_edit_does_not_revoke_older_version():
         "enabled": 1,
         "metric": "posts",
         "threshold": 8,
+        "range_mode": range_mode,
+        "effective_from": effective_from,
     }
     awarded_row = {
         "id": 9,
@@ -1724,6 +1753,25 @@ def test_rule_edit_does_not_revoke_older_version():
         "period_start": date(2026, 8, 10),
         "period_end": date(2026, 8, 16),
     }
+    qualified = pd.DataFrame()
+    if qualify:
+        qualified = pd.DataFrame(
+            [
+                {
+                    "pax_id": "U1",
+                    "achievement_id": 1,
+                    "period_key": "2026-W33",
+                    "period_bucket": "2026-W33",
+                    "date_awarded": date(2026, 8, 10),
+                    "period_start": date(2026, 8, 10),
+                    "period_end": date(2026, 8, 16),
+                    "qualifying_count": 8,
+                    "ao_id": "C_AO",
+                    "timestamp": None,
+                    "version_id": 2,
+                }
+            ]
+        )
     mock_conn = MagicMock()
     mock_cur = MagicMock()
     mock_conn.cursor.return_value.__enter__.return_value = mock_cur
@@ -1734,8 +1782,8 @@ def test_rule_edit_does_not_revoke_older_version():
         with patch("achievements.runner.slack_client"):
             with patch("achievements.runner.load_nation_attendance", return_value=nation):
                 with patch("achievements.runner.attach_home_regions", side_effect=lambda c, n, s: n):
-                    with patch("achievements.runner.evaluate_rule", return_value=pd.DataFrame()):
-                        result = run_achievements_for_region(
+                    with patch("achievements.runner.evaluate_rule", return_value=qualified):
+                        return run_achievements_for_region(
                             mock_conn,
                             pm_schema="pm",
                             regional_schema="f3test",
@@ -1747,7 +1795,26 @@ def test_rule_edit_does_not_revoke_older_version():
                             pax_user_ids={"U1"},
                             dry_run=True,
                         )
+
+
+def test_rule_edit_does_not_revoke_older_version_when_since_rules_changed():
+    result = _older_version_reeval("since_rules_changed")
     assert result["revokes"] == 0
+    assert result["held_older_version"] == 1
+
+
+def test_rule_edit_revokes_older_version_when_backdating():
+    for mode in ("all_attendance", "from_created", "custom"):
+        result = _older_version_reeval(mode)
+        assert result["revokes"] == 1, mode
+        assert result["held_older_version"] == 0, mode
+
+
+def test_backdate_keeps_older_version_award_if_still_qualifies():
+    result = _older_version_reeval("all_attendance", qualify=True)
+    assert result["revokes"] == 0
+    assert result["grants"] == 0
+    assert result["held"] == 1
 
 
 def test_null_version_is_grandfathered():
