@@ -191,6 +191,31 @@ def test_achievements_phase_seeds_version_one_and_is_idempotent():
     assert not any("INSERT INTO" in str(c.args[0]) for c in cur.execute.call_args_list)
 
 
+def test_seed_version_1_writes_spec_json_for_catalog_codes():
+    from paxminer_phases.achievements import _seed_version_1
+
+    cur = MagicMock()
+    cur.fetchall.return_value = [
+        {
+            "id": 7,
+            "code": "the_priest",
+            "metric": "posts",
+            "activity": "qsource",
+            "period": "year",
+            "threshold": 25,
+        }
+    ]
+    cur.fetchone.return_value = None
+    cur.rowcount = 1
+    assert _seed_version_1(cur, "f3test") == 1
+    insert = next(c for c in cur.execute.call_args_list if "INSERT INTO" in str(c.args[0]))
+    payload = insert.args[1][3]
+    assert payload is not None
+    assert '"include"' in payload
+    assert "QSource" in payload
+    assert not payload.startswith("qsource")
+
+
 def test_achievements_phase_classifies_null_activity_types():
     from datetime import date
 

@@ -6,10 +6,11 @@ from datetime import date, datetime
 from uuid import uuid4
 
 from achievements.activity import (
+    activity_filter_from_rule,
     activity_json_for_version,
     activity_legacy_mirror,
-    activity_list_from_rule,
-    canonicalize_activity_filter,
+    coerce_activity_filter,
+    resolve_activity_filter_for_save,
 )
 
 
@@ -20,6 +21,12 @@ def version_key_for(code: str, version: int = 1, when: datetime | None = None) -
     return f"{slug}_v{int(version)}_{stamp}_{uuid4().hex[:8]}"
 
 
+def _spec_from_write_args(activity_filter=None, activity_list=None) -> dict:
+    if activity_filter is not None:
+        return coerce_activity_filter(activity_filter)
+    return coerce_activity_filter(activity_list)
+
+
 def insert_version(
     cur,
     schema: str,
@@ -27,7 +34,6 @@ def insert_version(
     achievement_id: int,
     code: str,
     metric: str,
-    activity_list: list[str],
     period: str,
     threshold: int,
     effective_from: date | None,
@@ -35,7 +41,10 @@ def insert_version(
     created_by: str | None,
     version: int = 1,
     range_mode: str | None = None,
+    activity_filter=None,
+    activity_list=None,
 ) -> int:
+    spec = _spec_from_write_args(activity_filter, activity_list)
     key = version_key_for(code, version)
     cur.execute(
         f"""
@@ -49,7 +58,7 @@ def insert_version(
             version,
             key,
             metric,
-            activity_json_for_version(activity_list),
+            activity_json_for_version(spec),
             period,
             threshold,
             effective_from,
@@ -88,17 +97,26 @@ def mirror_list_params(
     achievement_id: int,
     *,
     metric: str,
-    activity_list: list[str],
     period: str,
     threshold: int,
+    version: int,
+    activity_filter=None,
+    activity_list=None,
 ) -> None:
+    spec = _spec_from_write_args(activity_filter, activity_list)
     cur.execute(
         f"""
         UPDATE `{schema}`.`achievements_list`
         SET metric=%s, activity=%s, period=%s, threshold=%s
         WHERE id=%s
         """,
-        (metric, activity_legacy_mirror(activity_list)[:32], period, threshold, achievement_id),
+        (
+            metric,
+            activity_legacy_mirror(spec, version=version)[:32],
+            period,
+            threshold,
+            achievement_id,
+        ),
     )
 
 
@@ -109,14 +127,16 @@ def supersede_and_insert(
     achievement_id: int,
     code: str,
     metric: str,
-    activity_list: list[str],
     period: str,
     threshold: int,
     effective_from: date | None,
     effective_to: date | None,
     created_by: str | None,
     range_mode: str | None = None,
+    activity_filter=None,
+    activity_list=None,
 ) -> int:
+    spec = _spec_from_write_args(activity_filter, activity_list)
     cur.execute(
         f"""
         UPDATE `{schema}`.`achievement_versions`
@@ -132,7 +152,7 @@ def supersede_and_insert(
         achievement_id=achievement_id,
         code=code,
         metric=metric,
-        activity_list=activity_list,
+        activity_filter=spec,
         period=period,
         threshold=threshold,
         effective_from=effective_from,
@@ -146,21 +166,25 @@ def supersede_and_insert(
         schema,
         achievement_id,
         metric=metric,
-        activity_list=activity_list,
+        activity_filter=spec,
         period=period,
         threshold=threshold,
+        version=version,
     )
     return vid
 
 
 def params_changed(existing: dict, values: dict) -> bool:
-    old_activity = {a.lower() for a in activity_list_from_rule(existing)}
-    new_activity = {
-        a.lower() for a in canonicalize_activity_filter(values.get("activity_list") or [])
-    }
+    old = activity_filter_from_rule(existing)
+    new = resolve_activity_filter_for_save(values, existing)
+    old_inc = {a.lower() for a in old["include"]}
+    new_inc = {a.lower() for a in new["include"]}
+    old_exc = {a.lower() for a in old["exclude"]}
+    new_exc = {a.lower() for a in new["exclude"]}
     return (
         (existing.get("metric") or "posts") != (values.get("metric") or "posts")
-        or old_activity != new_activity
+        or old_inc != new_inc
+        or old_exc != new_exc
         or (existing.get("period") or "year") != (values.get("period") or "year")
         or int(existing.get("threshold") or 1) != int(values.get("threshold") or 1)
     )

@@ -17,6 +17,11 @@ from achievements.achievement_rules import (  # noqa: E402
     RULE_COLUMNS,
 )
 
+from achievements.activity import (  # noqa: E402
+    activity_filter_from_rule,
+    activity_legacy_mirror,
+)
+
 from paxminer_phases.db import (  # noqa: E402
     _column_exists,
     _pm_schema,
@@ -194,7 +199,7 @@ def ensure_regional_achievements(cur, regional_schema: str, *, upsert_seeds: boo
                         seed["verb"],
                         seed["code"],
                         seed["metric"],
-                        seed["activity"],
+                        activity_legacy_mirror(activity_filter_from_rule(seed), version=1),
                         seed["period"],
                         seed["threshold"],
                     ),
@@ -205,7 +210,7 @@ def ensure_regional_achievements(cur, regional_schema: str, *, upsert_seeds: boo
                 seed["code"],
                 seed["name"],
                 seed["metric"],
-                seed["activity"],
+                activity_legacy_mirror(activity_filter_from_rule(seed), version=1),
                 seed["period"],
                 seed["threshold"],
             )

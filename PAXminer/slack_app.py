@@ -754,16 +754,18 @@ app.action(DELETE_ALL_ACHIEVEMENTS_ACTION_ID)(handle_delete_all_achievements)
 
 def _values_from_builtin_seed(seed: dict) -> dict:
     """Form-shaped values for a catalog seed. Builtins cover all attendance dates."""
-    from achievements.activity import activity_list_from_rule
+    from achievements.activity import activity_filter_from_rule
     from achievements.range import RANGE_ALL_ATTENDANCE
 
+    spec = activity_filter_from_rule(seed)
     return {
         "name": seed["name"],
         "description": seed["description"],
         "verb": seed["verb"],
         "code": seed["code"],
         "metric": seed["metric"],
-        "activity_list": activity_list_from_rule(seed),
+        "activity_filter": spec,
+        "activity_list": spec["include"],
         "period": seed["period"],
         "threshold": int(seed["threshold"]),
         "enabled": 1,
@@ -775,9 +777,10 @@ def _values_from_builtin_seed(seed: dict) -> dict:
 
 def _add_one_achievement(cur, schema: str, values: dict, user_id: str, *, mode, from_date, to_date) -> int:
     """Same list + version insert as saving a new achievement from the add form."""
-    from achievements.activity import activity_legacy_mirror
+    from achievements.activity import activity_legacy_mirror, resolve_activity_filter_for_save
     from achievements.versions import insert_version
 
+    spec = resolve_activity_filter_for_save(values, None)
     cur.execute(
         f"""
         INSERT INTO `{schema}`.`achievements_list`
@@ -790,7 +793,7 @@ def _add_one_achievement(cur, schema: str, values: dict, user_id: str, *, mode, 
             values["verb"],
             values["code"],
             values["metric"],
-            activity_legacy_mirror(values["activity_list"])[:32],
+            activity_legacy_mirror(spec, version=1)[:32],
             values["period"],
             values["threshold"],
             values.get("enabled", 1),
@@ -803,7 +806,7 @@ def _add_one_achievement(cur, schema: str, values: dict, user_id: str, *, mode, 
         achievement_id=achievement_id,
         code=values["code"],
         metric=values["metric"],
-        activity_list=values["activity_list"],
+        activity_filter=spec,
         period=values["period"],
         threshold=values["threshold"],
         effective_from=from_date,
@@ -1142,12 +1145,10 @@ def handle_achievement_edit_submit(ack, body, client, logger):
             ensure_achievement_range_columns(cur, regional_schema)
             earliest = earliest_beatdown_date(cur, regional_schema)
             existing = _load_achievement(cur, regional_schema, achievement_id) if achievement_id else None
-            if values.get("activity_list") is None:
-                from achievements.activity import activity_list_from_rule
+            from achievements.activity import resolve_activity_filter_for_save
 
-                values["activity_list"] = (
-                    activity_list_from_rule(existing) if existing else []
-                )
+            values["activity_filter"] = resolve_activity_filter_for_save(values, existing)
+            values["activity_list"] = values["activity_filter"]["include"]
             errors = _validate_achievement(
                 values,
                 require_code=not bool(achievement_id),
@@ -1229,7 +1230,7 @@ def handle_achievement_edit_submit(ack, body, client, logger):
                         achievement_id=int(achievement_id),
                         code=values["code"],
                         metric=values["metric"],
-                        activity_list=values["activity_list"],
+                        activity_filter=values["activity_filter"],
                         period=values["period"],
                         threshold=values["threshold"],
                         effective_from=from_date,

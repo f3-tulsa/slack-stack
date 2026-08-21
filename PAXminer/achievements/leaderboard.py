@@ -8,9 +8,9 @@ from datetime import date
 import pandas as pd
 
 from achievements.attendance import attach_home_regions, filter_activity, load_nation_attendance, period_key
-from achievements.engine import awarded_period_bucket
-from achievements.period import period_key_for_date
-from achievements.runner import resolve_achievement_channel
+from achievements.engine import awarded_period_bucket, period_in_effective_range
+from achievements.period import period_bounds, period_key_for_date
+from achievements.runner import RULES_SQL, resolve_achievement_channel
 from common.encryption import decrypt_field
 from slack_blocks import chunk_messages, chunk_sections, fallback_text, header, section
 from slack_util import mention, post_message, slack_client, workspace_user_ids
@@ -21,15 +21,22 @@ GAP_SIZES = (1, 2)
 
 
 def _progress_for_rule(nation_df: pd.DataFrame, rule: dict, schema: str) -> pd.DataFrame:
+    if not int(rule.get("enabled", 1) or 0):
+        return pd.DataFrame()
+    period = rule.get("period", "year")
+    start, end = period_bounds(date.today(), period)
+    if not period_in_effective_range(start, end, rule):
+        return pd.DataFrame()
     df = filter_activity(
         nation_df[nation_df["region"] == schema].copy(),
-        rule.get("activity", "beatdown"),
+        rule.get("activity"),
     )
     metric = rule.get("metric", "posts")
-    period = rule.get("period", "year")
     threshold = int(rule.get("threshold", 1))
-    if metric == "qs":
+    if metric == "qs" and not df.empty:
         df = df[df["q_flag"] == 1]
+    if df.empty:
+        return pd.DataFrame()
     df["period_bucket"] = period_key(df["date"], period)
     current_bucket = period_bucket_for_today(period)
 
@@ -113,6 +120,8 @@ def build_almost_there_message(
         awarded_keys.add((row["pax_id"], int(row["achievement_id"]), bucket))
 
     for rule in rules:
+        if not int(rule.get("enabled", 1) or 0):
+            continue
         prog = _progress_for_rule(nation_df, rule, schema)
         aid = int(rule["id"])
         period = rule["period"]
@@ -159,7 +168,7 @@ def _load_region_award_inputs(
         return {"skipped": "missing schema, channel, or token"}
 
     with conn.cursor() as cur:
-        cur.execute(f"SELECT * FROM `{schema}`.`achievements_list` ORDER BY id")
+        cur.execute(RULES_SQL.format(schema=schema))
         rules = cur.fetchall()
         if window is not None:
             start, end = window
@@ -191,7 +200,16 @@ def _load_region_award_inputs(
     nation = None
     if load_nation:
         # Single-region only; cross-region / down-range attendance needs the F3 Nation API.
-        nation = attach_home_regions(conn, load_nation_attendance(conn, [schema]), [schema])
+        today = date.today()
+        start = date(today.year, 1, 1)
+        week_start, _ = period_bounds(today, "week")
+        if week_start < start:
+            start = week_start
+        nation = attach_home_regions(
+            conn,
+            load_nation_attendance(conn, [schema], start=start, end=today),
+            [schema],
+        )
     return {
         "schema": schema,
         "channel": channel,
