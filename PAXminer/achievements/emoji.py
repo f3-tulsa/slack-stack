@@ -1,4 +1,15 @@
-"""Per-achievement reaction emoji picker. Cosmetic and unversioned."""
+"""Per-achievement reaction emoji picker. Cosmetic and unversioned.
+
+Block Kit has no emoji picker element, so the modal uses an ``external_select``
+whose option labels render the emoji (a ``plain_text`` object with ``emoji:
+true`` turns ``:fire:`` into the image). External select means Slack sends the
+operator's keystrokes to an options handler, so the whole workspace emoji set is
+searchable instead of being truncated to the 100 options a static select allows.
+
+``emoji.list`` with ``include_categories`` returns both halves of that set: the
+workspace Slackmojis and Slack's own standard Unicode emoji names. No bundled
+emoji dataset to drift out of date.
+"""
 
 from __future__ import annotations
 
@@ -10,18 +21,16 @@ LOG = logging.getLogger(__name__)
 
 NONE_EMOJI_VALUE = "_none"
 MAX_EMOJI_OPTIONS = 100
-_EMOJI_TTL_S = 60.0
-_EMOJI_CACHE: dict[str, tuple[float, list[str]]] = {}
+_EMOJI_TTL_S = 300.0
+_EMOJI_CACHE: dict[str, tuple[float, list[str], list[str]]] = {}
 
-# Award-flavored standard emoji. Option labels render via Slack's :name: conversion.
+# Shown before the operator types anything, so the menu opens on something useful.
 CURATED_AWARD_EMOJI = (
     "fire",
     "trophy",
     "medal",
     "sports_medal",
     "first_place_medal",
-    "second_place_medal",
-    "third_place_medal",
     "crown",
     "star",
     "star2",
@@ -34,28 +43,18 @@ CURATED_AWARD_EMOJI = (
     "thumbsup",
     "tada",
     "confetti_ball",
-    "balloon",
     "bell",
     "mega",
-    "loudspeaker",
     "eyes",
-    "heart",
     "boom",
     "zap",
     "rocket",
-    "checkered_flag",
     "dart",
-    "golf",
     "weight_lifter",
     "running",
-    "dash",
     "sunny",
-    "rainbow",
     "gem",
     "tophat",
-    "saluting_face",
-    "pray",
-    "ok_hand",
     "handshake",
 )
 
@@ -81,26 +80,84 @@ def emoji_option(name: str) -> dict:
     }
 
 
-def list_custom_emoji(client: Any, *, team_id: str = "") -> list[str]:
-    """Workspace Slackmojis from emoji.list. Empty on failure. Cached per team."""
+def none_option() -> dict:
+    return {"text": {"type": "plain_text", "text": "None"}, "value": NONE_EMOJI_VALUE}
+
+
+def load_emoji_names(client: Any, *, team_id: str = "") -> tuple[list[str], list[str]]:
+    """``(custom, standard)`` emoji names for the workspace. Empty on failure.
+
+    Cached per team: the modal reopens constantly via Edit and Duplicate, and
+    ``emoji.list`` is Tier 2.
+    """
     key = (team_id or "").strip() or "default"
     now = time.time()
     hit = _EMOJI_CACHE.get(key)
     if hit and now - hit[0] < _EMOJI_TTL_S:
-        return list(hit[1])
-    names: list[str] = []
-    if client is None:
-        _EMOJI_CACHE[key] = (now, names)
-        return names
-    try:
-        resp = client.emoji_list()
-        custom = (resp or {}).get("emoji") or {}
-        names = sorted(str(n) for n in custom if n)
-    except Exception:
-        LOG.debug("emoji.list failed team=%s", key, exc_info=True)
-        names = []
-    _EMOJI_CACHE[key] = (now, names)
-    return list(names)
+        return list(hit[1]), list(hit[2])
+    custom: list[str] = []
+    standard: list[str] = []
+    if client is not None:
+        try:
+            resp = client.emoji_list(include_categories=True) or {}
+            custom = sorted(str(n) for n in (resp.get("emoji") or {}) if n)
+            seen: set[str] = set()
+            for category in resp.get("categories") or []:
+                for name in (category or {}).get("emoji_names") or []:
+                    text = str(name)
+                    if text and text not in seen:
+                        seen.add(text)
+                        standard.append(text)
+        except Exception:
+            LOG.debug("emoji.list failed team=%s", key, exc_info=True)
+            custom, standard = [], []
+    if not standard:
+        standard = list(CURATED_AWARD_EMOJI)
+    _EMOJI_CACHE[key] = (now, custom, standard)
+    return list(custom), list(standard)
+
+
+def list_custom_emoji(client: Any, *, team_id: str = "") -> list[str]:
+    """Workspace Slackmojis only. Kept for callers that do not need the standard set."""
+    return load_emoji_names(client, team_id=team_id)[0]
+
+
+def search_emoji_options(
+    query: str | None,
+    *,
+    custom: list[str] | None = None,
+    standard: list[str] | None = None,
+    stored: str | None = None,
+) -> list[dict]:
+    """Options for the picker, filtered by what the operator typed.
+
+    Ordering puts the closest matches first: names that start with the query,
+    then names that merely contain it, with workspace emoji ahead of standard
+    ones so a region's own Slackmojis are easy to reach.
+    """
+    text = (query or "").strip().strip(":").lower()
+    stored_name = normalize_emoji_name(stored)
+    pool: list[str] = []
+    seen: set[str] = set()
+    for name in [*(custom or []), *(standard or [])]:
+        clean = normalize_emoji_name(name)
+        if clean and clean not in seen:
+            seen.add(clean)
+            pool.append(clean)
+
+    if not text:
+        ordered = [n for n in CURATED_AWARD_EMOJI if n in seen]
+        ordered += [n for n in pool if n not in set(ordered)]
+    else:
+        starts = [n for n in pool if n.lower().startswith(text)]
+        contains = [n for n in pool if text in n.lower() and not n.lower().startswith(text)]
+        ordered = starts + contains
+
+    if stored_name and stored_name not in ordered:
+        ordered.insert(0, stored_name)
+
+    room = MAX_EMOJI_OPTIONS - 1  # None occupies one slot
+    return [none_option(), *[emoji_option(n) for n in ordered[:room]]]
 
 
 def emoji_select_options(
@@ -108,31 +165,24 @@ def emoji_select_options(
     *,
     stored: str | None = None,
 ) -> list[dict]:
-    """None + curated standard + workspace Slackmojis, capped at 100. Stored always present."""
+    """Unfiltered option list. Used by the options handler's empty-query response."""
+    return search_emoji_options(None, custom=custom_names, stored=stored)
+
+
+def emoji_select_element(action_id: str, stored: str | None = None) -> dict:
+    """Searchable picker. Options come from the options handler, not the view.
+
+    ``initial_option`` is built from the stored name rather than looked up, so an
+    emoji that was deleted from the workspace still round-trips a save instead of
+    being silently cleared (the 5f f6 rule, applied here).
+    """
     stored_name = normalize_emoji_name(stored)
-    seen: set[str] = set()
-    ordered: list[str] = []
-
-    def _add(name: str | None) -> None:
-        n = normalize_emoji_name(name)
-        if not n or n in seen:
-            return
-        seen.add(n)
-        ordered.append(n)
-
-    for name in CURATED_AWARD_EMOJI:
-        _add(name)
-    for name in custom_names or []:
-        _add(name)
-    if stored_name and stored_name not in seen:
-        ordered.insert(0, stored_name)
-        seen.add(stored_name)
-    room = MAX_EMOJI_OPTIONS - 1  # None occupies one slot
-    if stored_name and stored_name in ordered[room:]:
-        ordered = [stored_name, *[n for n in ordered if n != stored_name]]
-    ordered = ordered[:room]
-    options = [
-        {"text": {"type": "plain_text", "text": "None"}, "value": NONE_EMOJI_VALUE},
-        *[emoji_option(n) for n in ordered],
-    ]
-    return options[:MAX_EMOJI_OPTIONS]
+    element: dict = {
+        "type": "external_select",
+        "action_id": action_id,
+        "min_query_length": 0,
+        "placeholder": {"type": "plain_text", "text": "Search emoji", "emoji": True},
+    }
+    if stored_name:
+        element["initial_option"] = emoji_option(stored_name)
+    return element

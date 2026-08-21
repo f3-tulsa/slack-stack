@@ -31,6 +31,7 @@ from config_paxminer import (
     DELETE_ALL_ACHIEVEMENTS_ACTION_ID,
     DUPLICATE_ACHIEVEMENT_ACTION_ID,
     EDIT_ACHIEVEMENT_ACTION_ID,
+    EMOJI_OPTIONS_ACTION_ID,
     MORE_ACHIEVEMENT_ACTION_ID,
     REEVAL_FROM_ACTION_ID,
     REEVAL_TO_ACTION_ID,
@@ -267,6 +268,28 @@ def handle_add_achievement(ack, body, client, logger):
 
 
 app.action(ADD_ACHIEVEMENT_ACTION_ID)(handle_add_achievement)
+
+
+def handle_emoji_options(ack, body, client, logger):
+    """Typeahead for the award-reaction picker.
+
+    Slack requires the options back synchronously inside 3 seconds, so this
+    cannot be a lazy listener. ``emoji.list`` is cached per workspace and the
+    match is done in memory.
+    """
+    from achievements.emoji import load_emoji_names, search_emoji_options
+
+    team_id = (body.get("team") or {}).get("id") or body.get("team_id") or ""
+    query = body.get("value") or ""
+    try:
+        custom, standard = load_emoji_names(client, team_id=team_id)
+    except Exception:
+        logger.debug("emoji options load failed", exc_info=True)
+        custom, standard = [], []
+    ack(options=search_emoji_options(query, custom=custom, standard=standard))
+
+
+app.options(EMOJI_OPTIONS_ACTION_ID)(handle_emoji_options)
 
 
 def _refresh_achievements_list(

@@ -32,6 +32,9 @@ REEVAL_FROM_ACTION_ID = "paxminer_achievement_reeval_from"
 REEVAL_TO_ACTION_ID = "paxminer_achievement_reeval_to"
 ACHIEVEMENTS_PAGE_PREV_ACTION_ID = "paxminer_achievements_page_prev"
 ACHIEVEMENTS_PAGE_NEXT_ACTION_ID = "paxminer_achievements_page_next"
+# Distinct from the shared "val" action_id so the options handler matches only
+# the emoji picker.
+EMOJI_OPTIONS_ACTION_ID = "paxminer_achievement_emoji"
 
 METRICS = ("posts", "qs", "distinct_aos", "posts_at_single_ao")
 PERIODS = ("week", "month", "year")
@@ -456,11 +459,9 @@ def _achievement_edit_modal(
         version_created=src.get("version_created"),
         earliest_beatdown=src.get("earliest_beatdown"),
     )
-    from achievements.emoji import emoji_select_options, list_custom_emoji, normalize_emoji_name
+    from achievements.emoji import emoji_select_element, normalize_emoji_name
 
     stored_emoji = normalize_emoji_name(src.get("emoji"))
-    custom_emoji = list_custom_emoji(client, team_id=team_id) if client is not None else []
-    emoji_opts = emoji_select_options(custom_emoji, stored=stored_emoji)
     blocks: list[dict] = []
     if is_edit:
         blocks.append(
@@ -515,14 +516,10 @@ def _achievement_edit_modal(
                 "label": {"type": "plain_text", "text": "Award reaction (optional)"},
                 "hint": {
                     "type": "plain_text",
-                    "text": "Added next to :fire: on the public award message.",
+                    "text": "Type to search every emoji in this workspace. "
+                    "Added next to :fire: on the public award message.",
                 },
-                "element": {
-                    "type": "static_select",
-                    "action_id": "val",
-                    "options": emoji_opts,
-                    **_with_initial(emoji_opts, stored_emoji),
-                },
+                "element": emoji_select_element(EMOJI_OPTIONS_ACTION_ID, stored_emoji),
             },
         ]
     )
@@ -734,8 +731,8 @@ def _parse_achievement_form(payload: dict) -> dict:
         return (state.get(block_id, {}).get("val", {}) or {}).get("value", "") or ""
         # strip below
 
-    def _select(block_id: str) -> str:
-        sel = (state.get(block_id, {}).get("val", {}) or {}).get("selected_option") or {}
+    def _select(block_id: str, action_id: str = "val") -> str:
+        sel = (state.get(block_id, {}).get(action_id, {}) or {}).get("selected_option") or {}
         return (sel.get("value") or "").strip()
 
     def _multi(block_id: str) -> list[str]:
@@ -774,7 +771,7 @@ def _parse_achievement_form(payload: dict) -> dict:
         "effective_to": _date("effective_to"),
         "activity_list": include,
         "activity_filter": {"include": include, "exclude": exclude},
-        "emoji": _select("emoji"),
+        "emoji": _select("emoji", EMOJI_OPTIONS_ACTION_ID) or _select("emoji"),
     }
     from achievements.emoji import normalize_emoji_name
 

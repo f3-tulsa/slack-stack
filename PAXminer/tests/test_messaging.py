@@ -166,36 +166,101 @@ def test_award_log_line_grant_and_revoke_share_suffix():
     assert "https://f3ttown-test.slack.com/archives/C_AO/p1750000000000001" in scoped
 
 
-def test_emoji_select_options_cap_union_and_list_failure():
-    from achievements.emoji import (
-        CURATED_AWARD_EMOJI,
-        MAX_EMOJI_OPTIONS,
-        NONE_EMOJI_VALUE,
-        clear_emoji_cache,
-        emoji_select_options,
-        list_custom_emoji,
-    )
+def test_emoji_list_supplies_custom_and_standard_names():
+    from achievements.emoji import CURATED_AWARD_EMOJI, clear_emoji_cache, load_emoji_names
 
     clear_emoji_cache()
-    custom = [f"custom_{i}" for i in range(80)]
-    opts = emoji_select_options(custom, stored="retired_slackmoji")
-    assert len(opts) <= MAX_EMOJI_OPTIONS
+    client = MagicMock()
+    client.emoji_list.return_value = {
+        "emoji": {"f3_logo": "https://x/1.png", "shipit": "alias:squirrel"},
+        "categories": [
+            {"name": "Smileys", "emoji_names": ["grinning", "joy"]},
+            {"name": "Activities", "emoji_names": ["soccer", "joy"]},
+        ],
+    }
+    custom, standard = load_emoji_names(client, team_id="T1")
+    assert custom == ["f3_logo", "shipit"]
+    assert standard == ["grinning", "joy", "soccer"]
+    assert client.emoji_list.call_args.kwargs["include_categories"] is True
+
+    load_emoji_names(client, team_id="T1")
+    assert client.emoji_list.call_count == 1
+
+    clear_emoji_cache()
+    broken = MagicMock()
+    broken.emoji_list.side_effect = RuntimeError("missing_scope")
+    custom, standard = load_emoji_names(broken, team_id="T2")
+    assert custom == []
+    assert standard == list(CURATED_AWARD_EMOJI)
+
+
+def test_emoji_search_ranks_matches_and_respects_the_option_cap():
+    from achievements.emoji import (
+        MAX_EMOJI_OPTIONS,
+        NONE_EMOJI_VALUE,
+        search_emoji_options,
+    )
+
+    custom = ["f3_ruck", "f3_logo"]
+    standard = ["fire", "firecracker", "campfire", "joy"]
+
+    opts = search_emoji_options("fire", custom=custom, standard=standard)
     values = [o["value"] for o in opts]
     assert values[0] == NONE_EMOJI_VALUE
-    assert "retired_slackmoji" in values
-    assert "fire" in values
+    assert values[1:] == ["fire", "firecracker", "campfire"]
+
+    scoped = search_emoji_options(":f3_", custom=custom, standard=standard)
+    assert [o["value"] for o in scoped][1:] == ["f3_ruck", "f3_logo"]
+
+    empty = search_emoji_options("", custom=custom, standard=standard)
+    assert [o["value"] for o in empty][1] == "fire"
+    assert "f3_ruck" in [o["value"] for o in empty]
+
+    huge = search_emoji_options(
+        None, custom=[f"custom_{i}" for i in range(400)], standard=list(standard)
+    )
+    assert len(huge) == MAX_EMOJI_OPTIONS
+
+    assert search_emoji_options("zzzz", custom=custom, standard=standard) == [
+        {"text": {"type": "plain_text", "text": "None"}, "value": NONE_EMOJI_VALUE}
+    ]
+
+
+def test_emoji_options_handler_acks_within_the_options_contract():
+    from slack_app import handle_emoji_options
+
+    from achievements.emoji import clear_emoji_cache
+
+    clear_emoji_cache()
+    ack = MagicMock()
     client = MagicMock()
-    client.emoji_list.side_effect = RuntimeError("missing_scope")
-    names = list_custom_emoji(client, team_id="T1")
-    assert names == []
-    fallback = emoji_select_options(names)
-    assert [o["value"] for o in fallback[1 : 1 + len(CURATED_AWARD_EMOJI)]][:3] == list(
-        CURATED_AWARD_EMOJI
-    )[:3]
+    client.emoji_list.return_value = {
+        "emoji": {"f3_ruck": "https://x/1.png"},
+        "categories": [{"name": "Smileys", "emoji_names": ["fire"]}],
+    }
+    handle_emoji_options(
+        ack, {"team": {"id": "T1"}, "value": "f3"}, client, MagicMock()
+    )
+    assert [o["value"] for o in ack.call_args.kwargs["options"]][1:] == ["f3_ruck"]
+
+    clear_emoji_cache()
+    ack2 = MagicMock()
+    broken = MagicMock()
+    broken.emoji_list.side_effect = RuntimeError("missing_scope")
+    handle_emoji_options(ack2, {"team": {"id": "T2"}, "value": "fir"}, broken, MagicMock())
+    # emoji.list failed, so only the curated fallback is searchable.
+    assert [o["value"] for o in ack2.call_args.kwargs["options"]][1:] == [
+        "fire",
+        "first_place_medal",
+    ]
 
 
 def test_stored_emoji_survives_when_missing_from_options():
-    from config_paxminer import _achievement_edit_modal, _parse_achievement_form, _with_initial
+    from config_paxminer import (
+        EMOJI_OPTIONS_ACTION_ID,
+        _achievement_edit_modal,
+        _parse_achievement_form,
+    )
 
     row = {
         "id": 3,
@@ -211,9 +276,15 @@ def test_stored_emoji_survives_when_missing_from_options():
     }
     modal = _achievement_edit_modal("T1", "f3test", row)
     emoji_block = next(b for b in modal["blocks"] if b.get("block_id") == "emoji")
-    values = [o["value"] for o in emoji_block["element"]["options"]]
-    assert "gone_custom" in values
-    assert emoji_block["element"]["initial_option"]["value"] == "gone_custom"
+    element = emoji_block["element"]
+    assert element["type"] == "external_select"
+    assert element["action_id"] == EMOJI_OPTIONS_ACTION_ID
+    assert element["min_query_length"] == 0
+    assert "options" not in element
+    # An emoji deleted from the workspace still round-trips instead of clearing.
+    assert element["initial_option"]["value"] == "gone_custom"
+    assert emoji_block["optional"] is True
+
     parsed = _parse_achievement_form(
         {
             "view": {
@@ -225,14 +296,21 @@ def test_stored_emoji_survives_when_missing_from_options():
                         "metric": {"val": {"selected_option": {"value": "posts"}}},
                         "period": {"val": {"selected_option": {"value": "week"}}},
                         "threshold": {"val": {"value": "6"}},
-                        "emoji": {"val": {"selected_option": {"value": "gone_custom"}}},
+                        "emoji": {
+                            EMOJI_OPTIONS_ACTION_ID: {
+                                "selected_option": {"value": "gone_custom"}
+                            }
+                        },
                     }
                 }
             }
         }
     )
     assert parsed["emoji"] == "gone_custom"
-    assert _with_initial(emoji_block["element"]["options"], "gone_custom")
+
+    blank = _achievement_edit_modal("T1", "f3test", {**row, "emoji": None})
+    blank_el = next(b for b in blank["blocks"] if b.get("block_id") == "emoji")["element"]
+    assert "initial_option" not in blank_el
 
 
 def test_backblast_links_use_the_workspace_host():
