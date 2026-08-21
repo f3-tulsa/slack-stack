@@ -175,18 +175,114 @@ def canonicalize_activity_filter(labels: list[str] | None) -> list[str]:
     )
 
 
-def activity_json_for_version(activity_list: list[str] | None) -> str | None:
+def canonicalize_exclude_filter(labels: list[str] | None) -> list[str]:
+    """Trim, dedupe, drop unlabeled. No beatdown-sentinel collapse (unlike include)."""
+    items = unique_activity_labels(
+        [str(x) for x in (labels or []) if str(x).strip()]
+    )
+    return unique_activity_labels(
+        [a for a in items if a.lower() != UNLABELED_POST_TYPE]
+    )
+
+
+def empty_activity_filter() -> dict[str, list[str]]:
+    return {"include": [], "exclude": []}
+
+
+def normalize_activity_filter(spec: dict | None) -> dict[str, list[str]]:
+    spec = spec or {}
+    return {
+        "include": canonicalize_activity_filter(spec.get("include") or []),
+        "exclude": canonicalize_exclude_filter(spec.get("exclude") or []),
+    }
+
+
+VERSION_POINTER_RE = re.compile(r"^v\d+$", re.I)
+
+
+def activity_filter_from_rule(rule: dict | None) -> dict[str, list[str]]:
+    """Spec from version JSON, a bare include array, a dict, or a legacy enum string."""
+    raw = (rule or {}).get("activity")
+    if raw is None or raw == "" or raw == []:
+        return empty_activity_filter()
+    if isinstance(raw, dict):
+        return normalize_activity_filter(raw)
+    if isinstance(raw, list):
+        return {
+            "include": canonicalize_activity_filter(
+                [str(x) for x in raw if str(x).strip()]
+            ),
+            "exclude": [],
+        }
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", errors="replace")
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text.startswith("{") or text.startswith("["):
+            try:
+                parsed = json.loads(text)
+                return activity_filter_from_rule({"activity": parsed})
+            except json.JSONDecodeError:
+                pass
+        return {
+            "include": canonicalize_activity_filter(legacy_activity_to_list(text)),
+            "exclude": [],
+        }
+    return empty_activity_filter()
+
+
+def coerce_activity_filter(value: Any) -> dict[str, list[str]]:
+    if isinstance(value, dict) and (
+        "include" in value or "exclude" in value or not value
+    ):
+        return normalize_activity_filter(value)
+    return activity_filter_from_rule({"activity": value})
+
+
+def resolve_activity_filter_for_save(values: dict, existing: dict | None) -> dict[str, list[str]]:
+    prior = activity_filter_from_rule(existing) if existing else empty_activity_filter()
+    filt = values.get("activity_filter")
+    if isinstance(filt, dict) and ("include" in filt or "exclude" in filt):
+        include = filt.get("include")
+        exclude = filt.get("exclude")
+        if include is None:
+            include = prior["include"]
+        if exclude is None:
+            exclude = prior["exclude"]
+        return normalize_activity_filter({"include": include or [], "exclude": exclude or []})
+    if values.get("activity_list") is not None:
+        return {
+            "include": canonicalize_activity_filter(values.get("activity_list") or []),
+            "exclude": prior["exclude"],
+        }
+    return prior
+
+
+def activity_filter_conflicts(spec: dict) -> list[str]:
+    include = spec.get("include") or []
+    exclude_lower = {a.lower() for a in (spec.get("exclude") or [])}
+    seen: set[str] = set()
+    out: list[str] = []
+    for label in include:
+        key = str(label).lower()
+        if key in exclude_lower and key not in seen:
+            seen.add(key)
+            out.append(str(label))
+    return out
+
+
+def activity_json_for_version(activity_filter: Any = None) -> str | None:
     """JSON column payload. Empty filter is SQL NULL, never [] or the beatdown sentinel."""
-    cleaned = canonicalize_activity_filter(activity_list)
-    if not cleaned:
+    spec = coerce_activity_filter(activity_filter)
+    if not spec["include"] and not spec["exclude"]:
         return None
-    return json.dumps(cleaned)
+    return json.dumps({"include": spec["include"], "exclude": spec["exclude"]})
 
 
 def legacy_activity_to_list(activity: str | None) -> list[str]:
     """Map old enum (beatdown|qsource|any) to a versioned activity list. Empty = all types."""
     raw = (activity or "").strip().lower()
-    if raw in ("", "any", "*", "all", UNLABELED_POST_TYPE):
+    if raw in ("", "any", "*", "all", UNLABELED_POST_TYPE) or VERSION_POINTER_RE.fullmatch(raw):
         return []
     if raw in QSOURCE_LABELS:
         return unique_activity_labels(["qsource", "QSource", "Q-Source"])
@@ -197,55 +293,57 @@ def legacy_activity_to_list(activity: str | None) -> list[str]:
 
 
 def activity_list_from_rule(rule: dict) -> list[str]:
-    raw = rule.get("activity")
-    if raw is None or raw == "" or raw == []:
-        return []
-    if isinstance(raw, list):
-        return canonicalize_activity_filter([str(x) for x in raw if str(x).strip()])
-    if isinstance(raw, (bytes, bytearray)):
-        raw = raw.decode("utf-8", errors="replace")
-    if isinstance(raw, str):
-        text = raw.strip()
-        if text.startswith("["):
-            try:
-                parsed = json.loads(text)
-                if isinstance(parsed, list):
-                    return canonicalize_activity_filter(
-                        [str(x) for x in parsed if str(x).strip()]
-                    )
-            except json.JSONDecodeError:
-                pass
-        return canonicalize_activity_filter(legacy_activity_to_list(text))
-    return []
+    """Include list only. Empty include is any-event on that side (excludes may still apply)."""
+    return activity_filter_from_rule(rule)["include"]
 
 
-def activity_legacy_mirror(activity_list: list[str]) -> str:
-    """Best-effort string for achievements_list.activity (varchar NOT NULL). Empty = any."""
-    cleaned = canonicalize_activity_filter(activity_list)
-    if not cleaned:
+def _mirror_pointer(version: int | None) -> str:
+    if version is None:
         return "any"
-    lowered = {a.lower() for a in cleaned}
-    if lowered <= QSOURCE_LABELS or "qsource" in lowered:
-        if not (lowered & {"bootcamp", "rucking", "ruck"}):
-            return "qsource"
+    return f"v{int(version)}"[:32]
+
+
+def activity_legacy_mirror(activity_filter: Any = None, version: int | None = None) -> str:
+    """Best-effort string for achievements_list.activity (varchar NOT NULL). Empty = any."""
+    spec = coerce_activity_filter(activity_filter)
+    include = spec["include"]
+    exclude = spec["exclude"]
+    if exclude:
+        return _mirror_pointer(version)
+    if not include:
+        return "any"
+    lowered = {a.lower() for a in include}
+    if (lowered <= QSOURCE_LABELS or "qsource" in lowered) and not (
+        lowered & {"bootcamp", "rucking", "ruck"}
+    ):
+        return "qsource"
     if lowered <= RUCK_LABELS:
         return "rucking"
-    if len(cleaned) > 1:
-        return "any"
-    return cleaned[0][:32]
+    if len(include) > 1:
+        return _mirror_pointer(version)
+    return include[0][:32]
 
 
-def filter_by_activity_types(df, activity_list: list[str]):
+def filter_by_activity_types(df, activity_filter):
     if df is None or getattr(df, "empty", True):
         return df
-    activity_list = canonicalize_activity_filter(activity_list)
-    if not activity_list:
+    spec = coerce_activity_filter(activity_filter)
+    include = spec["include"]
+    exclude = spec["exclude"]
+    if not include and not exclude:
         return df
     if "activity_type" not in df.columns:
         return df
-    lowered = {a.lower() for a in activity_list}
-    col = df["activity_type"].fillna("beatdown").astype(str).str.lower()
-    return df[col.isin(lowered)]
+    col = df["activity_type"].fillna(UNLABELED_POST_TYPE).astype(str).str.strip()
+    col = col.mask(col.eq(""), UNLABELED_POST_TYPE).str.lower()
+    out = df
+    if include:
+        out = out[col.isin({a.lower() for a in include})]
+        col = out["activity_type"].fillna(UNLABELED_POST_TYPE).astype(str).str.strip()
+        col = col.mask(col.eq(""), UNLABELED_POST_TYPE).str.lower()
+    if exclude:
+        out = out[~col.isin({a.lower() for a in exclude})]
+    return out
 
 
 def classify_null_activity_types(cur, schema: str) -> None:

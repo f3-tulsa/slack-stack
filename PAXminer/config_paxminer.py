@@ -91,10 +91,19 @@ def _with_initial(options: list[dict], value: str | None) -> dict:
 
 
 def _achievement_summary(row: dict) -> str:
-    from achievements.activity import activity_list_from_rule
+    from achievements.activity import activity_filter_from_rule
 
-    activities = activity_list_from_rule(row)
-    activity_label = ", ".join(activities) if activities else "all activities"
+    spec = activity_filter_from_rule(row)
+    include = spec["include"]
+    exclude = spec["exclude"]
+    if not include and not exclude:
+        activity_label = "all activities"
+    elif include and not exclude:
+        activity_label = ", ".join(include)
+    elif not include and exclude:
+        activity_label = f"all except {', '.join(exclude)}"
+    else:
+        activity_label = f"{', '.join(include)} (excluding {', '.join(exclude)})"
     version = row.get("version") or row.get("version_key") or "v?"
     enabled = "on" if int(row.get("enabled") or 0) else "off"
     return (
@@ -402,7 +411,7 @@ def _achievement_edit_modal(
     activity_options: list[str] | None = None,
 ) -> dict:
     from achievements.activity import (
-        activity_list_from_rule,
+        activity_filter_from_rule,
         map_activities_to_options,
         unique_activity_labels,
     )
@@ -417,8 +426,11 @@ def _achievement_edit_modal(
         ]
     )
     activity_opts = _select_options(tuple(options))
-    selected_activities = map_activities_to_options(activity_list_from_rule(src), options)
+    spec = activity_filter_from_rule(src)
+    selected_activities = map_activities_to_options(spec["include"], options)
     initial_activities = [o for o in activity_opts if o["value"] in selected_activities]
+    selected_excludes = map_activities_to_options(spec["exclude"], options)
+    initial_excludes = [o for o in activity_opts if o["value"] in selected_excludes]
     from achievements.range import (
         RANGE_CUSTOM,
         RANGE_FROM_CREATED,
@@ -537,17 +549,38 @@ def _achievement_edit_modal(
                 "optional": True,
                 "label": {
                     "type": "plain_text",
-                    "text": "Event types (empty = any event)",
+                    "text": "Include event types (empty = all)",
                 },
                 "hint": {
                     "type": "plain_text",
-                    "text": "Slackblast Event Types. Empty matches unlabeled posts too.",
+                    "text": "Slackblast Event Types. Empty include matches unlabeled posts too.",
                 },
                 "element": {
                     "type": "multi_static_select",
                     "action_id": "val",
                     "options": activity_opts,
                     **({"initial_options": initial_activities} if initial_activities else {}),
+                },
+            }
+        )
+        blocks.append(
+            {
+                "type": "input",
+                "block_id": "activity_exclude",
+                "optional": True,
+                "label": {
+                    "type": "plain_text",
+                    "text": "Exclude event types (optional)",
+                },
+                "hint": {
+                    "type": "plain_text",
+                    "text": "These types never count, even when Include is empty.",
+                },
+                "element": {
+                    "type": "multi_static_select",
+                    "action_id": "val",
+                    "options": activity_opts,
+                    **({"initial_options": initial_excludes} if initial_excludes else {}),
                 },
             }
         )
@@ -670,7 +703,11 @@ def _parse_modal_values(payload: dict) -> dict:
 
 
 def _parse_achievement_form(payload: dict) -> dict:
-    from achievements.activity import canonicalize_activity_filter, unique_activity_labels
+    from achievements.activity import (
+        canonicalize_activity_filter,
+        canonicalize_exclude_filter,
+        unique_activity_labels,
+    )
 
     state = payload.get("view", {}).get("state", {}).get("values", {})
 
@@ -690,11 +727,21 @@ def _parse_achievement_form(payload: dict) -> dict:
             )
         )
 
+    def _multi_exclude(block_id: str) -> list[str]:
+        opts = (state.get(block_id, {}).get("val", {}) or {}).get("selected_options") or []
+        return canonicalize_exclude_filter(
+            unique_activity_labels(
+                [str(o.get("value")).strip() for o in opts if o.get("value")]
+            )
+        )
+
     def _date(block_id: str) -> str | None:
         return (state.get(block_id, {}).get("val", {}) or {}).get("selected_date")
 
     threshold = _to_int(_text("threshold").strip(), None)
 
+    include = _multi("activity") if "activity" in state else None
+    exclude = _multi_exclude("activity_exclude") if "activity_exclude" in state else None
     parsed = {
         "name": _text("name").strip(),
         "description": _text("description").strip(),
@@ -706,12 +753,9 @@ def _parse_achievement_form(payload: dict) -> dict:
         "range_mode": _select("range_mode") or "from_created",
         "effective_from": _date("effective_from"),
         "effective_to": _date("effective_to"),
+        "activity_list": include,
+        "activity_filter": {"include": include, "exclude": exclude},
     }
-    # Absent picker (context-only modal) vs present-and-empty (operator cleared chips).
-    if "activity" in state:
-        parsed["activity_list"] = _multi("activity")
-    else:
-        parsed["activity_list"] = None
     return parsed
 
 
@@ -723,6 +767,7 @@ def _validate_achievement(
     version_created=None,
     earliest_beatdown=None,
 ) -> dict[str, str]:
+    from achievements.activity import activity_filter_conflicts
     from achievements.range import range_validation_errors
 
     errors: dict[str, str] = {}
@@ -741,6 +786,17 @@ def _validate_achievement(
         errors["threshold"] = "Enter a whole number"
     elif values["threshold"] < 1:
         errors["threshold"] = "Threshold must be at least 1"
+    spec = values.get("activity_filter")
+    if isinstance(spec, dict):
+        conflicts = activity_filter_conflicts(
+            {
+                "include": spec.get("include") or [],
+                "exclude": spec.get("exclude") or [],
+            }
+        )
+        if conflicts and spec.get("include") is not None and spec.get("exclude") is not None:
+            named = conflicts[0]
+            errors["activity_exclude"] = f"{named} is in both Include and Exclude"
     errors.update(
         range_validation_errors(
             values,

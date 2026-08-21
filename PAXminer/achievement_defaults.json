@@ -5,7 +5,7 @@
     "verb": "posting for 25 Qsource lessons",
     "code": "the_priest",
     "metric": "posts",
-    "activity": "qsource",
+    "activity": { "include": ["QSource"], "exclude": [] },
     "period": "year",
     "threshold": 25
   },
@@ -15,7 +15,7 @@
     "verb": "posting at 4 Qsources in a month",
     "code": "the_monk",
     "metric": "posts",
-    "activity": "qsource",
+    "activity": { "include": ["QSource"], "exclude": [] },
     "period": "month",
     "threshold": 4
   },
@@ -25,7 +25,7 @@
     "verb": "Qing at 4 posts in a month",
     "code": "leader_of_men",
     "metric": "qs",
-    "activity": "any",
+    "activity": { "include": [], "exclude": [] },
     "period": "month",
     "threshold": 4
   },
@@ -35,7 +35,7 @@
     "verb": "Qing at 6 posts in a month",
     "code": "the_boss",
     "metric": "qs",
-    "activity": "any",
+    "activity": { "include": [], "exclude": [] },
     "period": "month",
     "threshold": 6
   },
@@ -45,7 +45,7 @@
     "verb": "Qing at 6 posts in a week",
     "code": "be_the_hammer_not_the_nail",
     "metric": "qs",
-    "activity": "any",
+    "activity": { "include": [], "exclude": [] },
     "period": "week",
     "threshold": 6
   },
@@ -55,7 +55,7 @@
     "verb": "Qing at 7 different AOs in a month",
     "code": "cadre",
     "metric": "distinct_aos",
-    "activity": "any",
+    "activity": { "include": [], "exclude": [] },
     "period": "month",
     "threshold": 7
   },
@@ -65,7 +65,7 @@
     "verb": "Qing at 20 posts in a year",
     "code": "el_presidente",
     "metric": "qs",
-    "activity": "any",
+    "activity": { "include": [], "exclude": [] },
     "period": "year",
     "threshold": 20
   },
@@ -75,7 +75,7 @@
     "verb": "posting at 25 posts in a year",
     "code": "el_quatro",
     "metric": "posts",
-    "activity": "any",
+    "activity": { "include": [], "exclude": [] },
     "period": "year",
     "threshold": 25
   },
@@ -85,7 +85,7 @@
     "verb": "posting at 50 posts in a year",
     "code": "golden_boy",
     "metric": "posts",
-    "activity": "any",
+    "activity": { "include": [], "exclude": [] },
     "period": "year",
     "threshold": 50
   },
@@ -95,7 +95,7 @@
     "verb": "posting at 100 posts in a year",
     "code": "centurion",
     "metric": "posts",
-    "activity": "any",
+    "activity": { "include": [], "exclude": [] },
     "period": "year",
     "threshold": 100
   },
@@ -105,7 +105,7 @@
     "verb": "posting at 150 posts in a year",
     "code": "karate_kid",
     "metric": "posts",
-    "activity": "any",
+    "activity": { "include": [], "exclude": [] },
     "period": "year",
     "threshold": 150
   },
@@ -115,7 +115,7 @@
     "verb": "posting at 200 posts in a year",
     "code": "crazy_person",
     "metric": "posts",
-    "activity": "any",
+    "activity": { "include": [], "exclude": [] },
     "period": "year",
     "threshold": 200
   },
@@ -125,7 +125,7 @@
     "verb": "posting at 6 posts in a week",
     "code": "6_pack",
     "metric": "posts",
-    "activity": "any",
+    "activity": { "include": [], "exclude": [] },
     "period": "week",
     "threshold": 6
   },
@@ -135,7 +135,7 @@
     "verb": "posting 50 times at an AO",
     "code": "holding_down_the_fort",
     "metric": "posts_at_single_ao",
-    "activity": "any",
+    "activity": { "include": [], "exclude": [] },
     "period": "year",
     "threshold": 50
   }

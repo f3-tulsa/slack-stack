@@ -7,7 +7,7 @@ from datetime import date
 
 import pandas as pd
 
-from achievements.activity import activity_list_from_rule, filter_by_activity_types
+from achievements.activity import activity_filter_from_rule, filter_by_activity_types
 from achievements.period import period_key_series
 from slack_util import home_region_date_tiers
 
@@ -197,4 +197,4 @@ def period_key(series: pd.Series, period: str) -> pd.Series:
 
 
 def filter_activity(df: pd.DataFrame, activity) -> pd.DataFrame:
-    return filter_by_activity_types(df, activity_list_from_rule({"activity": activity}))
+    return filter_by_activity_types(df, activity_filter_from_rule({"activity": activity}))

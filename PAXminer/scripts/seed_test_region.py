@@ -45,6 +45,12 @@ if str(_REPO_ROOT / "migration") not in sys.path:
 
 LOG = logging.getLogger("seed_test_region")
 
+from achievements.activity import activity_filter_from_rule, activity_legacy_mirror  # noqa: E402
+
+
+def _activity_word(achievement: dict) -> str:
+    return activity_legacy_mirror(activity_filter_from_rule(achievement), version=1)
+
 SEED_SENTINEL = "[SEED]"
 SEED_JSON = '{"seed": true}'
 # Legacy synthetic IDs from older seeder runs — purge-only; never create new ones.
@@ -372,7 +378,7 @@ def _midpoint_date(lo: date, hi: date) -> date:
 def co_triggered_achievements(achievement: dict, catalog: Iterable[dict]) -> list[str]:
     """Names of other seeds that would also grant given the same attendance shape."""
     metric = achievement.get("metric")
-    activity = achievement.get("activity")
+    activity = _activity_word(achievement)
     period = achievement.get("period")
     threshold = int(achievement.get("threshold") or 0)
     code = achievement.get("code")
@@ -382,7 +388,7 @@ def co_triggered_achievements(achievement: dict, catalog: Iterable[dict]) -> lis
             continue
         if (
             other.get("metric") == metric
-            and other.get("activity") == activity
+            and _activity_word(other) == activity
             and other.get("period") == period
             and int(other.get("threshold") or 0) <= threshold
         ):
@@ -512,7 +518,7 @@ def _plan_achievement(
 ) -> SeedPlan:
     rng = random.Random(42)
     metric = achievement.get("metric") or "posts"
-    activity = achievement.get("activity") or "beatdown"
+    activity = _activity_word(achievement)
     period = achievement.get("period") or "year"
     threshold = int(achievement.get("threshold") or 1)
     name = str(achievement.get("name") or achievement.get("code") or "achievement")
@@ -1188,7 +1194,7 @@ def ensure_achievement_tables(cur, schema: str) -> None:
                     seed["verb"],
                     seed["code"],
                     seed["metric"],
-                    seed["activity"],
+                    activity_legacy_mirror(activity_filter_from_rule(seed), version=1),
                     seed["period"],
                     seed["threshold"],
                 ),

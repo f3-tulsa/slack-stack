@@ -587,7 +587,14 @@ def test_cosmetic_edit_does_not_mint_version():
     assert "enabled=%s" not in update_sql
 
 
-def _achievement_edit_submit_body(*, include_activity: bool, selected_options=None, name="The Priest"):
+def _achievement_edit_submit_body(
+    *,
+    include_activity: bool,
+    selected_options=None,
+    name="The Priest",
+    include_exclude: bool = False,
+    exclude_options=None,
+):
     values = {
         "name": {"val": {"value": name}},
         "description": {"val": {"value": "d"}},
@@ -601,6 +608,10 @@ def _achievement_edit_submit_body(*, include_activity: bool, selected_options=No
     if include_activity:
         values["activity"] = {
             "val": {"selected_options": selected_options if selected_options is not None else []}
+        }
+    if include_exclude:
+        values["activity_exclude"] = {
+            "val": {"selected_options": exclude_options if exclude_options is not None else []}
         }
     return {
         "user": {"id": "U1"},
@@ -691,8 +702,38 @@ def test_clearing_activity_chips_stores_any_and_queues_reeval():
                                                     ack, body, MagicMock(), MagicMock()
                                                 )
     mint.assert_called_once()
-    assert mint.call_args.kwargs["activity_list"] == []
+    assert mint.call_args.kwargs["activity_filter"] == {"include": [], "exclude": []}
     queue.assert_called_once()
+
+
+def test_overlapping_include_exclude_acks_form_error():
+    from slack_app import handle_achievement_edit_submit
+
+    ack = MagicMock()
+    body = _achievement_edit_submit_body(
+        include_activity=True,
+        selected_options=[{"value": "Bootcamp"}, {"value": "Rucking"}],
+        include_exclude=True,
+        exclude_options=[{"value": "Rucking"}],
+    )
+    existing = _qsource_existing_row()
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch("slack_app._region_context_from_body", return_value=("T1", "f3test", {"region": "t"})):
+            with patch("slack_app.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                with patch("slack_app._load_achievement", return_value=existing):
+                    with patch("slack_app.earliest_beatdown_date", return_value="2025-01-01"):
+                        with patch("achievements.range.ensure_achievement_range_columns"):
+                            with patch("achievements.versions.supersede_and_insert") as mint:
+                                handle_achievement_edit_submit(
+                                    ack, body, MagicMock(), MagicMock()
+                                )
+    mint.assert_not_called()
+    ack.assert_called_once()
+    assert ack.call_args.kwargs["response_action"] == "errors"
+    assert "Rucking" in ack.call_args.kwargs["errors"]["activity_exclude"]
 
 
 def test_reenable_does_not_mint_version_or_force_today():
@@ -1416,7 +1457,7 @@ def test_delete_one_achievement_sql_matches_single_delete():
 
 
 def test_restore_defaults_adds_like_new_and_queues_reeval():
-    from achievements.activity import activity_list_from_rule
+    from achievements.activity import activity_filter_from_rule
     from config_paxminer import load_achievement_defaults
     from slack_app import handle_restore_achievements
 
@@ -1472,10 +1513,10 @@ def test_restore_defaults_adds_like_new_and_queues_reeval():
     for seed in seeds:
         kwargs = by_code[seed["code"]]
         assert kwargs["range_mode"] == "all_attendance"
-        assert kwargs["activity_list"] == activity_list_from_rule(seed)
-    assert by_code["the_priest"]["activity_list"]
-    assert by_code["the_monk"]["activity_list"]
-    assert by_code["leader_of_men"]["activity_list"] == []
+        assert kwargs["activity_filter"] == activity_filter_from_rule(seed)
+    assert by_code["the_priest"]["activity_filter"]["include"]
+    assert by_code["the_monk"]["activity_filter"]["include"]
+    assert by_code["leader_of_men"]["activity_filter"]["include"] == []
     assert queue.call_count == len(seeds)
     assert queue.call_args_list[0].kwargs["automatic"] is True
     assert queue.call_args_list[0].kwargs["achievement_id"] == 10
