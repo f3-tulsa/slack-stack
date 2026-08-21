@@ -11,6 +11,7 @@ _REPO = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_REPO / "PAXminer"))
 
 from achievements.achievement_rules import (  # noqa: E402
+    ACHIEVEMENT_SEEDS,
     ACHIEVEMENT_VERSIONS_DDL,
     ACHIEVEMENTS_AWARDED_DDL,
     ACHIEVEMENTS_LIST_DDL,
@@ -18,6 +19,7 @@ from achievements.achievement_rules import (  # noqa: E402
     AWARDED_PERIOD_COLUMNS,
 )
 from achievements.activity import (  # noqa: E402
+    activity_filter_from_rule,
     activity_json_for_version,
     classify_activity_type,
     legacy_activity_to_list,
@@ -129,6 +131,7 @@ def _ensure_list_and_awarded_columns(cur, schema: str) -> dict:
 
 
 def _seed_version_1(cur, schema: str) -> int:
+    seeds_by_code = {s["code"]: s for s in ACHIEVEMENT_SEEDS}
     cur.execute(
         f"""
         SELECT id, code, metric, activity, period, threshold
@@ -148,7 +151,13 @@ def _seed_version_1(cur, schema: str) -> int:
         )
         if cur.fetchone():
             continue
-        activity_json = activity_json_for_version(legacy_activity_to_list(row.get("activity")))
+        seed = seeds_by_code.get(row.get("code"))
+        if seed is not None:
+            activity_json = activity_json_for_version(activity_filter_from_rule(seed))
+        else:
+            activity_json = activity_json_for_version(
+                {"include": legacy_activity_to_list(row.get("activity")), "exclude": []}
+            )
         version_key = f"{row.get('code') or 'achievement'}_v1"
         cur.execute(
             f"""

@@ -2639,7 +2639,7 @@ def test_insert_version_stores_sql_null_for_empty_activity():
         effective_to=None,
         created_by="U1",
     )
-    assert cur.execute.call_args[0][1][4] == '["Bootcamp"]'
+    assert cur.execute.call_args[0][1][4] == '{"include": ["Bootcamp"], "exclude": []}'
 
 
 def test_version_key_includes_version_and_is_unique_for_same_minute_saves():
@@ -2679,3 +2679,310 @@ def test_version_key_includes_version_and_is_unique_for_same_minute_saves():
         version=3,
     )
     assert cur.execute.call_args[0][1][2].startswith("the_priest_v3_")
+
+
+def test_activity_filter_exclude_only_keeps_unlabeled_and_other_types():
+    import pandas as pd
+
+    from achievements.activity import filter_by_activity_types
+
+    df = pd.DataFrame(
+        {"activity_type": ["Bootcamp", "QSource", "beatdown", "", None]}
+    )
+    out = filter_by_activity_types(df, {"include": [], "exclude": ["QSource"]})
+    assert len(out) == 4
+    assert len(out) < len(df)
+    assert "QSource" not in list(out["activity_type"])
+
+
+def test_activity_filter_null_nan_empty_survive_exclude_fail_include():
+    import pandas as pd
+    import numpy as np
+
+    from achievements.activity import filter_by_activity_types
+
+    df = pd.DataFrame({"activity_type": [None, np.nan, ""]})
+    excluded = filter_by_activity_types(df, {"include": [], "exclude": ["QSource"]})
+    assert len(excluded) == 3
+    included = filter_by_activity_types(df, {"include": ["Bootcamp"], "exclude": []})
+    assert len(included) == 0
+
+
+def test_activity_filter_include_plus_exclude_and_overlap_exclude_wins():
+    import pandas as pd
+
+    from achievements.activity import filter_by_activity_types
+
+    df = pd.DataFrame({"activity_type": ["Bootcamp", "Rucking", "QSource"]})
+    both = filter_by_activity_types(
+        df, {"include": ["Bootcamp", "Rucking"], "exclude": ["Rucking"]}
+    )
+    assert list(both["activity_type"]) == ["Bootcamp"]
+    case = filter_by_activity_types(
+        df, {"include": ["Bootcamp"], "exclude": ["qsource"]}
+    )
+    assert list(case["activity_type"]) == ["Bootcamp"]
+    dropped = filter_by_activity_types(
+        df, {"include": ["Bootcamp"], "exclude": ["QSource"]}
+    )
+    assert list(dropped["activity_type"]) == ["Bootcamp"]
+
+
+def test_exclude_canonicalizer_does_not_collapse_bootcamp_with_beatdown():
+    from achievements.activity import (
+        canonicalize_activity_filter,
+        canonicalize_exclude_filter,
+    )
+
+    assert canonicalize_activity_filter(["beatdown", "Bootcamp"]) == []
+    assert canonicalize_exclude_filter(["beatdown", "Bootcamp"]) == ["Bootcamp"]
+    assert canonicalize_exclude_filter(["beatdown"]) == []
+
+
+def test_filter_missing_activity_type_column_returns_unfiltered():
+    import pandas as pd
+
+    from achievements.activity import filter_by_activity_types
+
+    df = pd.DataFrame({"ao_id": [1, 2]})
+    out = filter_by_activity_types(df, {"include": ["Bootcamp"], "exclude": []})
+    assert len(out) == 2
+
+
+def test_legacy_activity_pointer_and_compat_shapes():
+    from achievements.activity import (
+        activity_filter_from_rule,
+        activity_legacy_mirror,
+        activity_list_from_rule,
+        legacy_activity_to_list,
+    )
+
+    assert legacy_activity_to_list("v3") == []
+    assert activity_list_from_rule({"activity": "v3"}) == []
+    assert activity_filter_from_rule({"activity": ["Bootcamp"]}) == {
+        "include": ["Bootcamp"],
+        "exclude": [],
+    }
+    assert activity_filter_from_rule({"activity": "qsource"})["include"]
+    assert activity_filter_from_rule(
+        {"activity": {"include": [], "exclude": ["QSource"]}}
+    ) == {"include": [], "exclude": ["QSource"]}
+    assert activity_legacy_mirror({"include": [], "exclude": []}) == "any"
+    assert activity_legacy_mirror({"include": ["QSource"], "exclude": []}) == "qsource"
+    assert (
+        activity_legacy_mirror({"include": [], "exclude": ["QSource"]}, version=3) == "v3"
+    )
+    assert (
+        activity_legacy_mirror(
+            {"include": ["Bootcamp", "Rucking"], "exclude": []}, version=2
+        )
+        == "v2"
+    )
+
+
+def test_params_changed_detects_exclude_only_edit():
+    from achievements.versions import params_changed
+
+    existing = {
+        "metric": "posts",
+        "activity": {"include": ["Bootcamp"], "exclude": []},
+        "period": "year",
+        "threshold": 10,
+    }
+    values = {
+        "metric": "posts",
+        "activity_filter": {"include": ["Bootcamp"], "exclude": ["QSource"]},
+        "period": "year",
+        "threshold": 10,
+    }
+    assert params_changed(existing, values)
+    values["activity_filter"] = {"include": ["Bootcamp"], "exclude": []}
+    assert not params_changed(existing, values)
+
+
+def test_overlapping_include_exclude_is_form_error():
+    from config_paxminer import _validate_achievement
+
+    errors = _validate_achievement(
+        {
+            "name": "X",
+            "code": "x",
+            "metric": "posts",
+            "period": "year",
+            "threshold": 1,
+            "range_mode": "from_created",
+            "effective_from": None,
+            "effective_to": None,
+            "activity_filter": {
+                "include": ["Bootcamp", "Rucking"],
+                "exclude": ["Rucking"],
+            },
+        }
+    )
+    assert "Rucking" in errors["activity_exclude"]
+
+
+def test_edit_modal_round_trips_include_and_exclude():
+    from config_paxminer import _achievement_edit_modal, _parse_achievement_form
+
+    modal = _achievement_edit_modal(
+        "T1",
+        "f3test",
+        {
+            "id": 3,
+            "name": "Custom",
+            "code": "custom",
+            "description": "d",
+            "verb": "posting",
+            "metric": "posts",
+            "activity": {"include": ["Bootcamp"], "exclude": ["QSource"]},
+            "period": "year",
+            "threshold": 10,
+            "enabled": 1,
+        },
+        activity_options=["Bootcamp", "QSource", "Rucking"],
+    )
+    include = next(b for b in modal["blocks"] if b.get("block_id") == "activity")
+    exclude = next(b for b in modal["blocks"] if b.get("block_id") == "activity_exclude")
+    assert [o["value"] for o in include["element"]["initial_options"]] == ["Bootcamp"]
+    assert [o["value"] for o in exclude["element"]["initial_options"]] == ["QSource"]
+    parsed = _parse_achievement_form(
+        {
+            "view": {
+                "state": {
+                    "values": {
+                        "activity": {
+                            "val": {"selected_options": [{"value": "Bootcamp"}]}
+                        },
+                        "activity_exclude": {
+                            "val": {"selected_options": [{"value": "QSource"}]}
+                        },
+                    }
+                }
+            }
+        }
+    )
+    assert parsed["activity_filter"] == {
+        "include": ["Bootcamp"],
+        "exclude": ["QSource"],
+    }
+    absent = _parse_achievement_form({"view": {"state": {"values": {}}}})
+    assert absent["activity_filter"]["include"] is None
+    assert absent["activity_filter"]["exclude"] is None
+    cleared = _parse_achievement_form(
+        {
+            "view": {
+                "state": {
+                    "values": {
+                        "activity": {"val": {"selected_options": []}},
+                        "activity_exclude": {"val": {"selected_options": []}},
+                    }
+                }
+            }
+        }
+    )
+    assert cleared["activity_filter"] == {"include": [], "exclude": []}
+
+
+def test_update_current_range_does_not_rewrite_mirror():
+    from achievements.versions import update_current_range
+
+    cur = MagicMock()
+    update_current_range(
+        cur,
+        "f3test",
+        3,
+        effective_from="2026-01-01",
+        effective_to=None,
+        range_mode="custom",
+    )
+    sql = cur.execute.call_args[0][0]
+    assert "activity" not in sql.lower() or "achievements_list" not in sql.lower()
+    assert "achievements_list" not in sql
+
+
+def test_achievement_seeds_use_include_exclude_shape():
+    from achievements.achievement_rules import ACHIEVEMENT_SEEDS
+    from achievements.activity import activity_filter_from_rule, activity_legacy_mirror
+
+    assert len(ACHIEVEMENT_SEEDS) == 14
+    for seed in ACHIEVEMENT_SEEDS:
+        spec = activity_filter_from_rule(seed)
+        assert spec["exclude"] == []
+        mirror = activity_legacy_mirror(spec, version=1)
+        assert isinstance(mirror, str)
+        assert len(mirror) <= 32
+    by_code = {s["code"]: activity_filter_from_rule(s) for s in ACHIEVEMENT_SEEDS}
+    assert by_code["the_priest"]["include"]
+    assert by_code["the_monk"]["include"]
+    assert by_code["6_pack"] == {"include": [], "exclude": []}
+    assert by_code["leader_of_men"] == {"include": [], "exclude": []}
+
+
+def test_almost_there_uses_version_json_not_mirror():
+    from achievements.leaderboard import _progress_for_rule
+
+    nation = pd.concat(
+        [
+            _posts("U1", ["2026-08-01", "2026-08-02"], activity="Bootcamp"),
+            _posts("U1", ["2026-08-03"], activity="QSource"),
+        ],
+        ignore_index=True,
+    )
+    rule = {
+        "id": 9,
+        "name": "No QSource",
+        "enabled": 1,
+        "metric": "posts",
+        "activity": {"include": [], "exclude": ["QSource"]},
+        "period": "year",
+        "threshold": 4,
+        "effective_from": None,
+        "effective_to": None,
+    }
+    with patch("achievements.leaderboard.period_bucket_for_today", return_value="2026"):
+        prog = _progress_for_rule(nation, rule, "f3test")
+    assert list(prog["count"]) == [2]
+    assert list(prog["gap"]) == [2]
+
+
+def test_almost_there_respects_effective_range():
+    from achievements.leaderboard import _progress_for_rule
+
+    nation = _posts("U1", ["2026-08-01", "2026-08-02", "2026-08-03"])
+    rule = {
+        "id": 9,
+        "name": "Future",
+        "enabled": 1,
+        "metric": "posts",
+        "activity": {"include": [], "exclude": []},
+        "period": "year",
+        "threshold": 4,
+        "effective_from": date(2027, 1, 1),
+        "effective_to": None,
+    }
+    with patch("achievements.leaderboard.period_bucket_for_today", return_value="2026"):
+        prog = _progress_for_rule(nation, rule, "f3test")
+    assert prog.empty
+
+
+def test_almost_there_skips_disabled_achievements():
+    from achievements.leaderboard import build_almost_there_message, _progress_for_rule
+
+    nation = _posts("U1", ["2026-08-01", "2026-08-02", "2026-08-03"])
+    rule = {
+        "id": 9,
+        "name": "Off",
+        "enabled": 0,
+        "metric": "posts",
+        "activity": {"include": [], "exclude": []},
+        "period": "year",
+        "threshold": 4,
+    }
+    with patch("achievements.leaderboard.period_bucket_for_today", return_value="2026"):
+        prog = _progress_for_rule(nation, rule, "f3test")
+        text, _blocks = build_almost_there_message(
+            nation, [rule], pd.DataFrame(), "f3test", pd.DataFrame()
+        )
+    assert prog.empty
+    assert "Off" not in text
