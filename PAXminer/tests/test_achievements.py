@@ -1290,6 +1290,41 @@ def test_leaderboard_loads_only_regional_schema():
     assert mock_nation.call_args.args[1] == ["f3ttown_test"]
 
 
+def test_plain_leaderboard_skips_achievement_versions_sql():
+    """Monthly leaderboard must not depend on the achievements migration."""
+    from achievements import leaderboard as lb_mod
+
+    region_row = {
+        "schema_name": "f3ttown_test",
+        "achievement_channel": "C_ACH",
+        "slack_token": "enc",
+        "region": "Tulsa",
+    }
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.return_value = []
+
+    with patch.object(lb_mod, "build_leaderboard_message", return_value=("", [])):
+        lb_mod.run_leaderboard_for_region(
+            mock_conn, "paxminer_test", region_row, dry_run=True
+        )
+    sqls = " ".join(str(c.args[0]) for c in mock_cur.execute.call_args_list)
+    assert "achievement_versions" not in sqls
+
+    mock_cur.reset_mock()
+    mock_cur.fetchall.return_value = []
+    with patch.object(lb_mod, "load_nation_attendance", return_value=pd.DataFrame()):
+        with patch.object(lb_mod, "attach_home_regions", side_effect=lambda _c, n, _s: n):
+            with patch.object(lb_mod, "build_almost_there_message", return_value=("", [])):
+                lb_mod.run_almost_there_for_region(
+                    mock_conn, "paxminer_test", region_row, dry_run=True
+                )
+    sqls = " ".join(str(c.args[0]) for c in mock_cur.execute.call_args_list)
+    assert "achievement_versions" in sqls
+
+
 def test_achievement_failure_log_uses_schema_name():
     from achievements.runner import _post_achievement_failure_log
 
@@ -2601,7 +2636,7 @@ def test_insert_version_stores_sql_null_for_empty_activity():
         achievement_id=3,
         code="six_pack",
         metric="posts",
-        activity_list=[],
+        activity_filter=[],
         period="month",
         threshold=6,
         effective_from=None,
@@ -2617,7 +2652,7 @@ def test_insert_version_stores_sql_null_for_empty_activity():
         achievement_id=3,
         code="six_pack",
         metric="posts",
-        activity_list=["beatdown", "Bootcamp", "bootcamp"],
+        activity_filter=["beatdown", "Bootcamp", "bootcamp"],
         period="month",
         threshold=6,
         effective_from=None,
@@ -2632,14 +2667,29 @@ def test_insert_version_stores_sql_null_for_empty_activity():
         achievement_id=3,
         code="six_pack",
         metric="posts",
-        activity_list=["Bootcamp"],
+        activity_filter=["Bootcamp"],
         period="month",
         threshold=6,
         effective_from=None,
         effective_to=None,
         created_by="U1",
     )
-    assert cur.execute.call_args[0][1][4] == '{"include": ["Bootcamp"], "exclude": []}'
+    assert cur.execute.call_args[0][1][4] == '["Bootcamp"]'
+
+    insert_version(
+        cur,
+        "f3test",
+        achievement_id=3,
+        code="six_pack",
+        metric="posts",
+        activity_filter={"include": ["Bootcamp"], "exclude": ["QSource"]},
+        period="month",
+        threshold=6,
+        effective_from=None,
+        effective_to=None,
+        created_by="U1",
+    )
+    assert cur.execute.call_args[0][1][4] == '{"include": ["Bootcamp"], "exclude": ["QSource"]}'
 
 
 def test_version_key_includes_version_and_is_unique_for_same_minute_saves():
@@ -2670,7 +2720,7 @@ def test_version_key_includes_version_and_is_unique_for_same_minute_saves():
         achievement_id=3,
         code="the_priest",
         metric="posts",
-        activity_list=[],
+        activity_filter=[],
         period="year",
         threshold=25,
         effective_from=None,
@@ -2767,8 +2817,8 @@ def test_legacy_activity_pointer_and_compat_shapes():
     assert activity_filter_from_rule(
         {"activity": {"include": [], "exclude": ["QSource"]}}
     ) == {"include": [], "exclude": ["QSource"]}
-    assert activity_legacy_mirror({"include": [], "exclude": []}) == "any"
-    assert activity_legacy_mirror({"include": ["QSource"], "exclude": []}) == "qsource"
+    assert activity_legacy_mirror({"include": [], "exclude": []}, version=1) == "any"
+    assert activity_legacy_mirror({"include": ["QSource"], "exclude": []}, version=1) == "qsource"
     assert (
         activity_legacy_mirror({"include": [], "exclude": ["QSource"]}, version=3) == "v3"
     )
@@ -2820,6 +2870,29 @@ def test_overlapping_include_exclude_is_form_error():
         }
     )
     assert "Rucking" in errors["activity_exclude"]
+
+
+def test_overlapping_include_exclude_skipped_when_exclude_block_absent():
+    from config_paxminer import _validate_achievement
+
+    errors = _validate_achievement(
+        {
+            "name": "X",
+            "code": "x",
+            "metric": "posts",
+            "period": "year",
+            "threshold": 1,
+            "range_mode": "from_created",
+            "effective_from": None,
+            "effective_to": None,
+            "activity_filter": {
+                "include": ["Bootcamp"],
+                "exclude": ["Bootcamp"],
+            },
+            "activity_exclude_submitted": False,
+        }
+    )
+    assert "activity_exclude" not in errors
 
 
 def test_edit_modal_round_trips_include_and_exclude():
@@ -2986,3 +3059,81 @@ def test_almost_there_skips_disabled_achievements():
         )
     assert prog.empty
     assert "Off" not in text
+
+
+def test_stored_type_missing_from_catalog_stays_selected():
+    from config_paxminer import _achievement_edit_modal
+
+    modal = _achievement_edit_modal(
+        "T1",
+        "f3test",
+        {
+            "id": 3,
+            "name": "Custom",
+            "code": "custom",
+            "description": "d",
+            "verb": "posting",
+            "metric": "posts",
+            "activity": {"include": [], "exclude": ["RetiredRuck"]},
+            "period": "year",
+            "threshold": 10,
+            "enabled": 1,
+        },
+        activity_options=["Bootcamp", "QSource"],
+    )
+    exclude = next(b for b in modal["blocks"] if b.get("block_id") == "activity_exclude")
+    values = [o["value"] for o in exclude["element"]["options"]]
+    assert "RetiredRuck" in values
+    assert [o["value"] for o in exclude["element"]["initial_options"]] == ["RetiredRuck"]
+
+
+def test_empty_catalog_still_hides_activity_pickers():
+    from config_paxminer import _achievement_edit_modal
+
+    modal = _achievement_edit_modal(
+        "T1",
+        "f3test",
+        {
+            "id": 3,
+            "name": "Custom",
+            "code": "custom",
+            "description": "d",
+            "verb": "posting",
+            "metric": "posts",
+            "activity": {"include": ["Bootcamp"], "exclude": ["RetiredRuck"]},
+            "period": "year",
+            "threshold": 10,
+            "enabled": 1,
+        },
+        activity_options=[],
+    )
+    ids = [b.get("block_id") for b in modal["blocks"]]
+    assert "activity" not in ids
+    assert "activity_exclude" not in ids
+
+
+def test_duplicate_null_range_mode_prefills_all_attendance():
+    from config_paxminer import _achievement_edit_modal
+
+    row = {
+        "name": "The Priest",
+        "code": "the_priest_copy",
+        "metric": "posts",
+        "activity": ["QSource"],
+        "period": "year",
+        "threshold": 25,
+        "range_mode": None,
+        "effective_from": None,
+        "effective_to": None,
+    }
+    dup = _achievement_edit_modal(
+        "T1", "f3test", row, prefill_from_source=True
+    )
+    edit = _achievement_edit_modal("T1", "f3test", {**row, "id": 3})
+    dup_range = next(b for b in dup["blocks"] if b.get("block_id") == "range_mode")
+    edit_range = next(b for b in edit["blocks"] if b.get("block_id") == "range_mode")
+    assert dup_range["element"]["initial_option"]["value"] == "all_attendance"
+    assert edit_range["element"]["initial_option"]["value"] == "all_attendance"
+    create = _achievement_edit_modal("T1", "f3test", row)
+    create_range = next(b for b in create["blocks"] if b.get("block_id") == "range_mode")
+    assert create_range["element"]["initial_option"]["value"] == "from_created"

@@ -168,8 +168,10 @@ def _load_region_award_inputs(
         return {"skipped": "missing schema, channel, or token"}
 
     with conn.cursor() as cur:
-        cur.execute(RULES_SQL.format(schema=schema))
-        rules = cur.fetchall()
+        rules = []
+        if load_nation:
+            cur.execute(RULES_SQL.format(schema=schema))
+            rules = cur.fetchall()
         if window is not None:
             start, end = window
             cur.execute(
