@@ -979,6 +979,11 @@ def test_validate_schedule_form_frequency_fields():
     assert not validate_schedule_form(
         {**base, "frequency_type": "weekly", "day_of_week": 6}, "q_charts"
     )
+    assert "report_definition_id" in validate_schedule_form(
+        {**base, "frequency_type": "weekly", "day_of_week": 6},
+        "q_charts",
+        definition_exists=False,
+    )
 
 
 def test_draft_from_schedule_state_clears_stale_fields():
@@ -1986,3 +1991,64 @@ def test_list_due_schedules_skips_disabled_definitions():
     sql = cur.execute.call_args.args[0]
     assert "COALESCE(d.enabled, 1) = 1" in sql
     assert "region_report_definitions" in sql
+
+
+def test_schedule_submit_rejects_deleted_report_definition():
+    import json
+    from unittest.mock import MagicMock, patch
+
+    from config_schedule import SCHEDULE_EDIT_CALLBACK_ID
+
+    os.environ.setdefault("PM_SLACK_TOKEN", "xoxb-test-token")
+    os.environ.setdefault("PM_SLACK_SIGNING_SECRET", "test-signing-secret-16")
+
+    app = _schedule_handlers()
+    ack = MagicMock()
+    client = MagicMock()
+    logger = MagicMock()
+    region = {"region": "t", "schema_name": "f3test", "timezone": "America/Chicago"}
+    body = {
+        "user": {"id": "U1"},
+        "view": {
+            "id": "V1",
+            "private_metadata": json.dumps(
+                {
+                    "team_id": "T1",
+                    "regional_schema": "f3test",
+                    "schedule_id": 4,
+                    "draft": {
+                        "report_definition_id": "99",
+                        "destination_type": "all_ao_channels",
+                        "frequency_type": "monthly",
+                        "time_of_day": "07:00",
+                    },
+                }
+            ),
+            "state": {"values": {}},
+        },
+    }
+    with patch("slack_schedule.is_slack_admin", return_value=True):
+        with patch(
+            "slack_app._region_context_from_body",
+            return_value=("T1", "f3test", region),
+        ):
+            with patch("slack_schedule.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                with patch("slack_schedule.load_definition", return_value=None):
+                    app.views[SCHEDULE_EDIT_CALLBACK_ID](ack, body, client, logger)
+    ack.assert_called_once()
+    assert ack.call_args.kwargs["response_action"] == "errors"
+    assert "report_definition_id" in ack.call_args.kwargs["errors"]
+    writes = [
+        c
+        for c in mock_cur.execute.call_args_list
+        if c.args
+        and (
+            "INSERT INTO" in str(c.args[0])
+            or str(c.args[0]).lstrip().startswith("UPDATE")
+        )
+        and "region_schedules" in str(c.args[0])
+    ]
+    assert writes == []

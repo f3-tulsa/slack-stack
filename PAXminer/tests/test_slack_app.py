@@ -330,6 +330,7 @@ def test_modals_with_input_blocks_include_submit():
             "effective_from": None,
             "effective_to": None,
         },
+        prefill_from_source=True,
     )
     dup_code = next(b for b in dup["blocks"] if b.get("block_id") == "code")
     assert dup_code["type"] == "input"
@@ -349,6 +350,7 @@ def test_modals_with_input_blocks_include_submit():
             "effective_from": "2026-02-01",
             "effective_to": "2026-12-31",
         },
+        prefill_from_source=True,
     )
     dup_start = next(b for b in dup_custom["blocks"] if b.get("block_id") == "effective_from")[
         "element"
@@ -734,6 +736,69 @@ def test_overlapping_include_exclude_acks_form_error():
     ack.assert_called_once()
     assert ack.call_args.kwargs["response_action"] == "errors"
     assert "Rucking" in ack.call_args.kwargs["errors"]["activity_exclude"]
+
+
+def test_stored_overlap_without_pickers_saves():
+    from slack_app import handle_achievement_edit_submit
+
+    ack = MagicMock()
+    body = _achievement_edit_submit_body(include_activity=False, name="Priest")
+    existing = _qsource_existing_row()
+    existing["activity"] = {"include": ["Bootcamp"], "exclude": ["Bootcamp"]}
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch("slack_app._region_context_from_body", return_value=("T1", "f3test", {"region": "t"})):
+            with patch("slack_app.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                with patch("slack_app._load_achievement", return_value=existing):
+                    with patch("slack_app._load_achievements", return_value=[]):
+                        with patch("slack_app.earliest_beatdown_date", return_value="2025-01-01"):
+                            with patch("achievements.range.ensure_achievement_range_columns"):
+                                with patch("achievements.versions.update_current_range"):
+                                    with patch("achievements.versions.supersede_and_insert") as mint:
+                                        with patch("slack_schedule.queue_achievement_backfill"):
+                                            with patch("slack_app._refresh_achievements_list"):
+                                                handle_achievement_edit_submit(
+                                                    ack, body, MagicMock(), MagicMock()
+                                                )
+    mint.assert_not_called()
+    assert ack.call_args.kwargs.get("response_action") != "errors"
+
+
+def test_name_only_save_keeps_catalog_dropped_exclude():
+    from slack_app import handle_achievement_edit_submit
+
+    ack = MagicMock()
+    body = _achievement_edit_submit_body(
+        include_activity=True,
+        selected_options=[],
+        include_exclude=True,
+        exclude_options=[{"value": "RetiredRuck"}],
+        name="Renamed",
+    )
+    existing = _qsource_existing_row()
+    existing["activity"] = {"include": [], "exclude": ["RetiredRuck"]}
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch("slack_app._region_context_from_body", return_value=("T1", "f3test", {"region": "t"})):
+            with patch("slack_app.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                with patch("slack_app._load_achievement", return_value=existing):
+                    with patch("slack_app._load_achievements", return_value=[]):
+                        with patch("slack_app.earliest_beatdown_date", return_value="2025-01-01"):
+                            with patch("achievements.range.ensure_achievement_range_columns"):
+                                with patch("achievements.versions.update_current_range"):
+                                    with patch("achievements.versions.supersede_and_insert") as mint:
+                                        with patch("slack_schedule.queue_achievement_backfill") as queue:
+                                            with patch("slack_app._refresh_achievements_list"):
+                                                handle_achievement_edit_submit(
+                                                    ack, body, MagicMock(), MagicMock()
+                                                )
+    mint.assert_not_called()
+    queue.assert_not_called()
+    assert ack.call_args.kwargs.get("response_action") != "errors"
 
 
 def test_reenable_does_not_mint_version_or_force_today():
@@ -1323,6 +1388,93 @@ def test_backfill_button_clears_lock_when_queue_fails():
     unlock.assert_called_once()
     assert unlock.call_args.args[2] == 4
     assert "Could not queue" in refresh.call_args.args[4]
+
+
+def test_backfill_does_not_clear_lock_before_acquire():
+    from slack_app import handle_backfill_achievement
+
+    ack = MagicMock()
+    body = {
+        "user": {"id": "U1"},
+        "view": {
+            "id": "V1",
+            "private_metadata": '{"team_id":"T1","regional_schema":"f3test"}',
+            "state": {"values": {}},
+        },
+        "actions": [{"action_id": "paxminer_achievement_backfill", "value": "4"}],
+    }
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch(
+            "slack_app._region_context_from_body",
+            return_value=("T1", "f3test", {"region": "t"}),
+        ):
+            with patch("slack_app.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                with patch(
+                    "achievements.range.ensure_achievement_range_columns",
+                    side_effect=RuntimeError("cannot ALTER"),
+                ):
+                    with patch("achievements.range.clear_reeval_lock") as unlock:
+                        with patch("slack_app._refresh_achievements_list"):
+                            handle_backfill_achievement(
+                                ack, body, MagicMock(), MagicMock()
+                            )
+    unlock.assert_not_called()
+
+
+def test_duplicate_handler_prefills_from_source():
+    from slack_app import handle_duplicate_achievement
+
+    ack = MagicMock()
+    client = MagicMock()
+    body = {
+        "user": {"id": "U1"},
+        "view": {
+            "id": "V1",
+            "private_metadata": '{"team_id":"T1","regional_schema":"f3test"}',
+            "state": {"values": {}},
+        },
+        "actions": [{"action_id": "paxminer_achievement_duplicate", "value": "3"}],
+    }
+    row = {
+        "id": 3,
+        "name": "The Priest",
+        "code": "the_priest",
+        "metric": "posts",
+        "activity": ["QSource"],
+        "period": "year",
+        "threshold": 25,
+        "range_mode": None,
+        "effective_from": None,
+        "effective_to": None,
+    }
+    with patch("slack_app.is_slack_admin", return_value=True):
+        with patch(
+            "slack_app._region_context_from_body",
+            return_value=("T1", "f3test", {"region": "t"}),
+        ):
+            with patch("slack_app.connect_from_env") as mock_conn:
+                mock_cur = MagicMock()
+                mock_conn.return_value.cursor.return_value.__enter__.return_value = mock_cur
+                mock_conn.return_value.cursor.return_value.__exit__.return_value = False
+                with patch("slack_app._load_achievement", return_value=row):
+                    with patch("slack_app._load_activity_options", return_value=["QSource"]):
+                        with patch(
+                            "slack_app.uniquify_achievement_code",
+                            return_value="the_priest_copy",
+                        ):
+                            with patch(
+                                "slack_app._hydrate_range_row",
+                                side_effect=lambda _c, _s, r: r,
+                            ):
+                                handle_duplicate_achievement(
+                                    ack, body, client, MagicMock()
+                                )
+    view = client.views_update.call_args.kwargs["view"]
+    range_block = next(b for b in view["blocks"] if b.get("block_id") == "range_mode")
+    assert range_block["element"]["initial_option"]["value"] == "all_attendance"
 
 def test_delete_achievement_posts_admin_notice():
     from slack_app import handle_delete_achievement

@@ -589,6 +589,7 @@ def handle_backfill_achievement(ack, body, client, logger):
 
     conn = connect_from_env(_registry_db())
     handed_off = False
+    acquired = False
     try:
         with conn.cursor() as cur:
             ensure_achievement_range_columns(cur, regional_schema)
@@ -606,6 +607,7 @@ def handle_backfill_achievement(ack, body, client, logger):
                     reeval_to=end,
                 )
                 return
+            acquired = True
         try:
             queue_achievement_backfill(
                 schema=regional_schema,
@@ -638,7 +640,7 @@ def handle_backfill_achievement(ack, body, client, logger):
         )
     except Exception:
         logger.exception("queue achievement backfill failed")
-        if not handed_off:
+        if acquired and not handed_off:
             try:
                 with conn.cursor() as cur:
                     clear_reeval_lock(cur, regional_schema, int(selected_id))
@@ -692,7 +694,11 @@ def handle_duplicate_achievement(ack, body, client, logger):
         client.views_update(
             view_id=body["view"]["id"],
             view=_achievement_edit_modal(
-                team_id, regional_schema, draft, activity_options=options
+                team_id,
+                regional_schema,
+                draft,
+                activity_options=options,
+                prefill_from_source=True,
             ),
         )
     finally:
@@ -1147,6 +1153,13 @@ def handle_achievement_edit_submit(ack, body, client, logger):
             existing = _load_achievement(cur, regional_schema, achievement_id) if achievement_id else None
             from achievements.activity import resolve_activity_filter_for_save
 
+            submitted = (
+                values.get("activity_filter")
+                if isinstance(values.get("activity_filter"), dict)
+                else {}
+            )
+            if "activity_exclude_submitted" not in values:
+                values["activity_exclude_submitted"] = submitted.get("exclude") is not None
             values["activity_filter"] = resolve_activity_filter_for_save(values, existing)
             values["activity_list"] = values["activity_filter"]["include"]
             errors = _validate_achievement(
