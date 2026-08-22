@@ -54,50 +54,85 @@ AWARD_EMOJI_CANDIDATES = (
     "third_place_medal", "military_medal", "crown", "star", "star2", "stars",
     "sparkles", "dizzy", "100", "checkered_flag", "dart", "gem", "ribbon",
     "rosette", "tada", "confetti_ball", "balloon", "partying_face", "gift",
-    # Effort
-    "muscle", "mechanical_arm", "weight_lifter", "runner", "running", "walking",
-    "hiking_boot", "athletic_shoe", "bike", "bicyclist", "mountain_bicyclist",
-    "swimmer", "rowboat", "person_climbing", "skier", "snowboarder", "surfer",
-    "boxing_glove", "martial_arts_uniform", "wrestlers", "running_shirt_with_sash",
-    # Hands
-    "clap", "raised_hands", "thumbsup", "+1", "thumbsdown", "punch", "facepunch",
-    "fist", "raised_fist", "handshake", "ok_hand", "pray", "point_up", "v",
-    "metal", "call_me_hand", "wave", "saluting_face", "vulcan_salute",
+    "keycap_ten", "1234", "infinity",
+    # Effort and equipment. Slack's naming for the activity emoji is inconsistent
+    # across releases, so several spellings of the same thing are listed and the
+    # filter keeps whichever the workspace actually has.
+    "muscle", "mechanical_arm", "weight_lifter", "weight_lifting",
+    "person_lifting_weights", "kettlebell", "dumbbell", "runner", "running",
+    "person_running", "walking", "person_walking", "hiking_boot",
+    "athletic_shoe", "running_shoe", "bike", "biking", "bicyclist",
+    "mountain_bicyclist", "swimmer", "swimming", "person_swimming", "rowboat",
+    "person_rowing_boat", "climbing", "person_climbing", "skier", "skiing",
+    "snowboarder", "snowboarding", "surfer", "surfing", "sled", "ice_skate",
+    "roller_skate", "boxing_glove", "martial_arts_uniform", "wrestlers",
+    "wrestling", "running_shirt_with_sash", "person_doing_cartwheel",
+    "cartwheeling", "yoga", "person_in_lotus_position", "stopwatch",
+    # Hands, arms and camaraderie
+    "clap", "raised_hands", "open_hands", "palms_up_together", "thumbsup", "+1",
+    "thumbsdown", "punch", "facepunch", "fist", "raised_fist", "fist_oncoming",
+    "left_facing_fist", "right_facing_fist", "crossed_fingers", "handshake",
+    "ok_hand", "pray", "point_up", "v", "metal", "the_horns", "call_me_hand",
+    "wave", "saluting_face", "vulcan_salute", "raising_hand", "person_raising_hand",
+    "people_hugging", "people_holding_hands", "two_men_holding_hands", "dancers",
+    "dancer", "leg", "foot", "bone", "lungs", "tooth", "anatomical_heart",
+    "eye", "ear", "nose",
     # Faces
-    "grinning", "smile", "smiley", "laughing", "joy", "rofl", "sunglasses",
-    "star-struck", "flushed", "cold_face", "hot_face", "sweat_smile", "triumph",
-    "exploding_head", "nerd_face", "face_with_monocle", "hugging_face",
+    "grinning", "grin", "smile", "smiley", "laughing", "joy", "rofl",
+    "sweat_smile", "sunglasses", "star-struck", "flushed", "cold_face",
+    "hot_face", "triumph", "exploding_head", "nerd_face", "face_with_monocle",
+    "hugging_face", "wink", "blush", "relieved", "yum", "stuck_out_tongue",
+    "stuck_out_tongue_winking_eye", "zany_face", "upside_down_face",
+    "thinking_face", "shushing_face", "smirk", "weary", "tired_face",
+    "persevere", "sob", "cry", "dizzy_face", "face_with_head_bandage",
+    "melting_face", "pleading_face", "sleeping", "sleepy", "zzz", "sweat",
+    "scream", "fearful", "astonished", "open_mouth", "heart_eyes",
+    "smiling_imp", "face_exhaling", "yawning_face", "face_with_spiral_eyes",
     # Energy
     "fire", "boom", "zap", "comet", "rocket", "dash", "cyclone", "sparkler",
-    "firecracker", "high_brightness", "wind_blowing_face",
-    # Gloom and outdoors
-    "sunny", "sunrise", "sunrise_over_mountains", "city_sunrise", "partly_sunny",
-    "cloud", "rain_cloud", "snowflake", "snowman", "thermometer", "umbrella",
-    "umbrella_with_rain_drops", "mountain", "national_park", "camping",
-    "evergreen_tree", "deciduous_tree", "sunflower", "ocean", "droplet",
-    "sweat_drops", "milky_way", "night_with_stars", "first_quarter_moon",
+    "firecracker", "high_brightness", "wind_blowing_face", "collision",
+    # Sun, gloom and night
+    "sunny", "sun_with_face", "sunrise", "sunrise_over_mountains", "city_sunrise",
+    "partly_sunny", "cloud", "rain_cloud", "snow_cloud", "thermometer",
+    "umbrella", "umbrella_with_rain_drops", "closed_umbrella", "foggy", "fog",
+    "rainbow", "ocean", "droplet", "sweat_drops", "milky_way", "night_with_stars",
+    "first_quarter_moon", "crescent_moon", "full_moon", "star_and_crescent",
+    # Winter
+    "snowflake", "snowman", "snowman_without_snow", "ice_cube", "ice",
+    "mountain_snow", "gloves", "scarf", "coat", "christmas_tree", "santa",
+    "mrs_claus", "bell", "hotsprings",
+    # Spring, summer, fall
+    "cherry_blossom", "blossom", "tulip", "rose", "seedling", "herb",
+    "four_leaf_clover", "bouquet", "butterfly", "beach_with_umbrella", "desert",
+    "palm_tree", "cactus", "sunflower", "leaves", "fallen_leaf", "maple_leaf",
+    "jack_o_lantern", "mushroom", "chestnut", "ear_of_rice",
+    # Terrain
+    "mountain", "national_park", "camping", "evergreen_tree", "deciduous_tree",
+    "tent", "compass", "world_map", "map", "round_pushpin",
     # Mascots
     "goat", "gorilla", "bear", "eagle", "lion_face", "tiger", "wolf", "horse",
     "ox", "ram", "boar", "shark", "dolphin", "whale", "monkey", "dog", "cat",
-    "rooster", "snake", "turtle", "rabbit", "penguin", "bee", "ant",
-    # Objects
-    "alarm_clock", "stopwatch", "timer_clock", "watch", "hourglass", "calendar",
-    "chart_with_upwards_trend", "bar_chart", "clipboard", "memo", "pushpin",
-    "key", "lock", "hammer", "wrench", "toolbox", "shield", "crossed_swords",
-    "dagger", "axe", "anchor", "flashlight", "bulb", "moneybag", "package",
-    "bookmark", "trophy", "wastebasket", "mega", "loudspeaker", "bell",
+    "rooster", "snake", "turtle", "rabbit", "penguin", "bee", "ant", "beetle",
+    # Gear and objects
+    "alarm_clock", "timer_clock", "watch", "hourglass", "hourglass_flowing_sand",
+    "calendar", "spiral_calendar", "chart_with_upwards_trend", "bar_chart",
+    "clipboard", "memo", "pushpin", "key", "lock", "hammer", "wrench",
+    "hammer_and_wrench", "toolbox", "shield", "crossed_swords", "dagger", "axe",
+    "anchor", "flashlight", "bulb", "moneybag", "package", "bookmark",
+    "wastebasket", "mega", "loudspeaker", "school_satchel", "backpack",
+    "luggage", "ladder", "chains", "link", "nut_and_bolt", "magnet", "battery",
     # Fuel
     "beer", "beers", "coffee", "tea", "cup_with_straw", "potable_water",
-    "doughnut", "pizza", "hamburger", "taco", "bacon", "egg", "apple", "banana",
+    "milk_glass", "doughnut", "pizza", "hamburger", "taco", "burrito",
+    "sandwich", "salad", "avocado", "bacon", "egg", "apple", "banana",
     "watermelon", "cookie", "cake", "birthday", "icecream", "popcorn", "pretzel",
-    "meat_on_bone", "poultry_leg",
-    # Symbols
+    "meat_on_bone", "poultry_leg", "cut_of_meat", "honey_pot",
+    # Symbols. Three hearts is plenty; the rest were noise.
     "white_check_mark", "heavy_check_mark", "ballot_box_with_check", "x",
     "heavy_plus_sign", "arrow_up", "arrow_double_up", "warning", "exclamation",
-    "question", "heart", "orange_heart", "yellow_heart", "green_heart",
-    "blue_heart", "purple_heart", "black_heart", "sparkling_heart", "heartpulse",
-    "eyes", "brain", "skull", "ghost", "alien", "robot_face", "clown_face",
-    "japanese_ogre", "moyai", "tophat", "billed_cap", "school_satchel", "shoe",
+    "question", "heart", "sparkling_heart", "heartpulse", "eyes", "brain",
+    "skull", "ghost", "alien", "robot_face", "clown_face", "japanese_ogre",
+    "moyai", "tophat", "billed_cap", "shoe", "recycle",
 )
 
 # Kept for the case where emoji.list is unavailable and nothing can be filtered.
