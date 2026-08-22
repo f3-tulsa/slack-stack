@@ -1,4 +1,4 @@
-"""Encrypt Slack tokens and upsert into PAXminer / Weaselbot registry tables (Lambda cold start)."""
+"""Encrypt Slack tokens and upsert into PAXminer registry tables (Lambda cold start)."""
 
 from __future__ import annotations
 
@@ -75,48 +75,5 @@ def upsert_paxminer_slack_token(
             )
         conn.commit()
         LOG.info("PAXminer regions: upserted encrypted slack_token for region=%s schema=%s", region_key, regional_schema_name)
-    finally:
-        conn.close()
-
-
-def upsert_weaselbot_slack_token(
-    *,
-    weaselbot_schema: str,
-    team_id: str,
-    paxminer_regional_schema: str,
-    plaintext_token: str,
-) -> None:
-    """Insert or update ``weaselbot.<schema>.regions`` row for ``paxminer_schema`` with encrypted ``slack_token``."""
-    enc = encrypt_field(plaintext_token.strip())
-    if not enc:
-        return
-    conn = _connect_mysql(database=weaselbot_schema)
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT `id` FROM `{weaselbot_schema}`.`regions` WHERE `paxminer_schema` = %s LIMIT 1",
-                (paxminer_regional_schema,),
-            )
-            row = cur.fetchone()
-            if row:
-                rid = row.get("id") or row.get("ID")
-                cur.execute(
-                    f"UPDATE `{weaselbot_schema}`.`regions` SET `slack_token` = %s WHERE `id` = %s",
-                    (enc, rid),
-                )
-            else:
-                cur.execute(
-                    f"""
-                    INSERT INTO `{weaselbot_schema}`.`regions`
-                        (`team_id`, `slack_token`, `paxminer_schema`, `send_achievements`, `send_aoq_reports`)
-                    VALUES (%s, %s, %s, 1, 1)
-                    """,
-                    (team_id.strip(), enc, paxminer_regional_schema),
-                )
-        conn.commit()
-        LOG.info(
-            "Weaselbot regions: upserted encrypted slack_token for paxminer_schema=%s",
-            paxminer_regional_schema,
-        )
     finally:
         conn.close()

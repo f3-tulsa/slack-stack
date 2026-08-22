@@ -1,0 +1,4 @@
+# Local test extras. pytest.ini timeout=30 is inert unless pytest-timeout is installed.
+-r requirements-lambda.txt
+pytest>=8.0.0,<9
+pytest-timeout>=2.3.1,<3

@@ -22,6 +22,7 @@ wheels/
 venv/
 .venv/
 .ven*
+.pytest_plugins/
 env/
 .env/
 ENV/
@@ -57,6 +58,9 @@ node_modules/
 .idea/
 *.swp
 *.swo
+
+# Personal Cursor rule (local machine / account; do not commit)
+.cursor/rules/github-account.mdc
 
 # App artifacts
 data/*.csv
