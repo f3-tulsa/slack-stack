@@ -235,7 +235,61 @@ def test_emoji_search_ranks_matches_and_respects_the_option_cap():
     ]
 
 
-def test_emoji_options_handler_acks_within_the_options_contract():
+def _group_values(groups):
+    return [o["value"] for g in groups for o in g["options"]]
+
+
+def test_emoji_option_groups_expose_every_emoji_not_just_the_first_hundred():
+    """A flat options array caps at 100 and silently hides most of a workspace."""
+    from achievements.emoji import (
+        MAX_OPTION_GROUPS,
+        MAX_OPTIONS_PER_GROUP,
+        NONE_EMOJI_VALUE,
+        WORKSPACE_GROUP_LABEL,
+        search_emoji_option_groups,
+    )
+
+    custom = [f"f3_{i}" for i in range(15)]
+    categories = [
+        ("Smileys & Emotion", [f"smile_{i}" for i in range(250)]),
+        ("Activities", [f"sport_{i}" for i in range(120)]),
+    ]
+    groups = search_emoji_option_groups(None, custom=custom, categories=categories)
+    values = _group_values(groups)
+
+    # 15 + 250 + 120 all present, versus 99 under the old flat cap.
+    assert len(values) == 1 + 15 + 250 + 120
+    assert values[0] == NONE_EMOJI_VALUE
+    assert all(n in values for n in custom)
+    assert "smile_249" in values and "sport_119" in values
+
+    assert len(groups) <= MAX_OPTION_GROUPS
+    assert all(len(g["options"]) <= MAX_OPTIONS_PER_GROUP for g in groups)
+    labels = [g["label"]["text"] for g in groups]
+    assert labels[0] == "No reaction"
+    assert labels[1] == WORKSPACE_GROUP_LABEL
+    # A category larger than one group is split and numbered, not dropped.
+    assert "Smileys & Emotion (1/3)" in labels
+    assert "Smileys & Emotion (3/3)" in labels
+
+
+def test_emoji_option_groups_filter_and_rank_on_query():
+    from achievements.emoji import search_emoji_option_groups
+
+    custom = ["f3_ruck", "cadre"]
+    categories = [("Smileys", ["fire", "firecracker", "campfire"])]
+
+    groups = search_emoji_option_groups("fire", custom=custom, categories=categories)
+    assert _group_values(groups)[1:] == ["fire", "firecracker", "campfire"]
+
+    scoped = search_emoji_option_groups("cadre", custom=custom, categories=categories)
+    assert _group_values(scoped)[1:] == ["cadre"]
+
+    none_match = search_emoji_option_groups("zzzz", custom=custom, categories=categories)
+    assert _group_values(none_match) == ["_none"]
+
+
+def test_emoji_options_handler_acks_with_groups():
     from slack_app import handle_emoji_options
 
     from achievements.emoji import clear_emoji_cache
@@ -247,10 +301,9 @@ def test_emoji_options_handler_acks_within_the_options_contract():
         "emoji": {"f3_ruck": "https://x/1.png"},
         "categories": [{"name": "Smileys", "emoji_names": ["fire"]}],
     }
-    handle_emoji_options(
-        ack, {"team": {"id": "T1"}, "value": "f3"}, client, MagicMock()
-    )
-    assert [o["value"] for o in ack.call_args.kwargs["options"]][1:] == ["f3_ruck"]
+    handle_emoji_options(ack, {"team": {"id": "T1"}, "value": "f3"}, client, MagicMock())
+    assert "options" not in ack.call_args.kwargs
+    assert _group_values(ack.call_args.kwargs["option_groups"])[1:] == ["f3_ruck"]
 
     clear_emoji_cache()
     ack2 = MagicMock()
@@ -258,7 +311,7 @@ def test_emoji_options_handler_acks_within_the_options_contract():
     broken.emoji_list.side_effect = RuntimeError("missing_scope")
     handle_emoji_options(ack2, {"team": {"id": "T2"}, "value": "fir"}, broken, MagicMock())
     # emoji.list failed, so only the curated fallback is searchable.
-    assert [o["value"] for o in ack2.call_args.kwargs["options"]][1:] == [
+    assert _group_values(ack2.call_args.kwargs["option_groups"])[1:] == [
         "fire",
         "first_place_medal",
     ]

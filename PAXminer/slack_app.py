@@ -279,25 +279,25 @@ def handle_emoji_options(ack, body, client, logger):
     cannot be a lazy listener. ``emoji.list`` is cached per workspace and the
     match is done in memory.
     """
-    from achievements.emoji import load_emoji_names, search_emoji_options
+    from achievements.emoji import load_emoji_catalog, search_emoji_option_groups
 
     team_id = (body.get("team") or {}).get("id") or body.get("team_id") or ""
     query = body.get("value") or ""
     try:
-        custom, standard = load_emoji_names(client, team_id=team_id)
+        custom, categories = load_emoji_catalog(client, team_id=team_id)
     except Exception:
         logger.warning("emoji options load failed team=%s", team_id, exc_info=True)
-        custom, standard = [], []
-    options = search_emoji_options(query, custom=custom, standard=standard)
+        custom, categories = [], []
+    groups = search_emoji_option_groups(query, custom=custom, categories=categories)
     logger.info(
-        "emoji options team=%s query=%r custom=%s standard=%s returned=%s",
+        "emoji options team=%s query=%r custom=%s groups=%s options=%s",
         team_id,
         query,
         len(custom),
-        len(standard),
-        len(options),
+        len(groups),
+        sum(len(g["options"]) for g in groups),
     )
-    ack(options=options)
+    ack(option_groups=groups)
 
 
 app.options(EMOJI_OPTIONS_ACTION_ID)(handle_emoji_options)

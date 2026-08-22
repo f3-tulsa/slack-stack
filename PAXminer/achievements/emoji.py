@@ -20,9 +20,14 @@ from typing import Any
 LOG = logging.getLogger(__name__)
 
 NONE_EMOJI_VALUE = "_none"
+# Slack caps a flat options array at 100, but allows 100 option_groups of 100
+# each. Grouping is the only way to offer a whole workspace's emoji at once.
 MAX_EMOJI_OPTIONS = 100
+MAX_OPTIONS_PER_GROUP = 100
+MAX_OPTION_GROUPS = 100
+WORKSPACE_GROUP_LABEL = "Workspace emoji"
 _EMOJI_TTL_S = 300.0
-_EMOJI_CACHE: dict[str, tuple[float, list[str], list[str]]] = {}
+_EMOJI_CACHE: dict[str, tuple[float, list[str], list[tuple[str, list[str]]]]] = {}
 
 # Shown before the operator types anything, so the menu opens on something useful.
 CURATED_AWARD_EMOJI = (
@@ -84,50 +89,137 @@ def none_option() -> dict:
     return {"text": {"type": "plain_text", "text": "None"}, "value": NONE_EMOJI_VALUE}
 
 
-def load_emoji_names(client: Any, *, team_id: str = "") -> tuple[list[str], list[str]]:
-    """``(custom, standard)`` emoji names for the workspace. Empty on failure.
+def load_emoji_catalog(
+    client: Any, *, team_id: str = ""
+) -> tuple[list[str], list[tuple[str, list[str]]]]:
+    """``(custom, [(category, names), ...])`` for the workspace. Cached per team.
 
-    Cached per team: the modal reopens constantly via Edit and Duplicate, and
-    ``emoji.list`` is Tier 2.
+    Slack's own categories are kept rather than flattened, because they are what
+    makes ~1900 standard emoji browsable as option groups.
     """
     key = (team_id or "").strip() or "default"
     now = time.time()
     hit = _EMOJI_CACHE.get(key)
     if hit and now - hit[0] < _EMOJI_TTL_S:
-        return list(hit[1]), list(hit[2])
+        return list(hit[1]), [(label, list(names)) for label, names in hit[2]]
     custom: list[str] = []
-    standard: list[str] = []
+    categories: list[tuple[str, list[str]]] = []
     if client is not None:
         try:
             resp = client.emoji_list(include_categories=True) or {}
             custom = sorted(str(n) for n in (resp.get("emoji") or {}) if n)
             seen: set[str] = set()
             for category in resp.get("categories") or []:
+                label = str((category or {}).get("name") or "Emoji")
+                names: list[str] = []
                 for name in (category or {}).get("emoji_names") or []:
                     text = str(name)
                     if text and text not in seen:
                         seen.add(text)
-                        standard.append(text)
+                        names.append(text)
+                if names:
+                    categories.append((label, names))
             LOG.info(
-                "emoji.list team=%s custom=%s standard=%s", key, len(custom), len(standard)
+                "emoji.list team=%s custom=%s categories=%s standard=%s",
+                key,
+                len(custom),
+                len(categories),
+                sum(len(n) for _, n in categories),
             )
         except Exception as exc:
             # Warning, not debug: a silent fallback here looks identical to
             # "the workspace has no custom emoji", which is not a thing.
             err = getattr(getattr(exc, "response", None), "get", lambda _k: None)("error")
             LOG.warning("emoji.list failed team=%s error=%s", key, err or exc, exc_info=True)
-            custom, standard = [], []
+            custom, categories = [], []
     else:
         LOG.warning("emoji.list skipped team=%s: no Slack client", key)
-    if not standard:
-        standard = list(CURATED_AWARD_EMOJI)
-    _EMOJI_CACHE[key] = (now, custom, standard)
-    return list(custom), list(standard)
+    if not categories:
+        categories = [("Awards", list(CURATED_AWARD_EMOJI))]
+    _EMOJI_CACHE[key] = (now, custom, categories)
+    return list(custom), [(label, list(names)) for label, names in categories]
+
+
+def load_emoji_names(client: Any, *, team_id: str = "") -> tuple[list[str], list[str]]:
+    """``(custom, standard)`` flattened. For callers that do not need categories."""
+    custom, categories = load_emoji_catalog(client, team_id=team_id)
+    standard = [name for _, names in categories for name in names]
+    return custom, standard
 
 
 def list_custom_emoji(client: Any, *, team_id: str = "") -> list[str]:
     """Workspace Slackmojis only. Kept for callers that do not need the standard set."""
-    return load_emoji_names(client, team_id=team_id)[0]
+    return load_emoji_catalog(client, team_id=team_id)[0]
+
+
+def _chunk_group(label: str, names: list[str]) -> list[dict]:
+    """One option group per 100 names, numbered when a category needs more than one."""
+    groups: list[dict] = []
+    total = (len(names) + MAX_OPTIONS_PER_GROUP - 1) // MAX_OPTIONS_PER_GROUP
+    for index in range(total):
+        window = names[index * MAX_OPTIONS_PER_GROUP : (index + 1) * MAX_OPTIONS_PER_GROUP]
+        title = label if total == 1 else f"{label} ({index + 1}/{total})"
+        groups.append(
+            {
+                "label": {"type": "plain_text", "text": title[:75]},
+                "options": [emoji_option(n) for n in window],
+            }
+        )
+    return groups
+
+
+def search_emoji_option_groups(
+    query: str | None,
+    *,
+    custom: list[str] | None = None,
+    categories: list[tuple[str, list[str]]] | None = None,
+) -> list[dict]:
+    """Every emoji the workspace can use, as option groups.
+
+    A flat options array is capped at 100, which silently truncates a workspace
+    of ~1900 emoji. Groups raise the ceiling to 10,000, so nothing is hidden:
+    workspace emoji first, then Slack's own categories.
+    """
+    text = (query or "").strip().strip(":").lower()
+
+    def keep(name: str) -> bool:
+        return not text or text in name.lower()
+
+    def rank(names: list[str]) -> list[str]:
+        if not text:
+            return names
+        starts = [n for n in names if n.lower().startswith(text)]
+        rest = [n for n in names if not n.lower().startswith(text)]
+        return starts + rest
+
+    seen: set[str] = set()
+    groups: list[dict] = [
+        {
+            "label": {"type": "plain_text", "text": "No reaction"},
+            "options": [none_option()],
+        }
+    ]
+
+    workspace: list[str] = []
+    for name in custom or []:
+        clean = normalize_emoji_name(name)
+        if clean and clean not in seen and keep(clean):
+            seen.add(clean)
+            workspace.append(clean)
+    if workspace:
+        groups.extend(_chunk_group(WORKSPACE_GROUP_LABEL, rank(workspace)))
+
+    for label, names in categories or []:
+        kept: list[str] = []
+        for name in names:
+            clean = normalize_emoji_name(name)
+            if clean and clean not in seen and keep(clean):
+                seen.add(clean)
+                kept.append(clean)
+        if kept:
+            groups.extend(_chunk_group(label, rank(kept)))
+
+    return groups[:MAX_OPTION_GROUPS]
 
 
 def search_emoji_options(
