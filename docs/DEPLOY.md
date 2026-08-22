@@ -194,7 +194,7 @@ With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if nee
 7. **Uninstall** the legacy WeaselBot Slack app from the workspace.
 8. When stable, drop **`weaselbot_<stage>`** schema and delete any remaining **weaselbot** CloudFormation stack (optional `--drop-weaselbot-schema` on the weaselbot phase).
 
-**Free tier note:** Four container Lambdas (including the kept-warm Slack front door and the 15-minute schedule tick) plus Function URLs and EventBridge schedules fit typical light regional usage, but monitor Lambda invocations, log storage, and ECR if you run multiple stages.
+**This stack must cost $0/month on AWS — see [docs/COST.md](COST.md).** Lambda, Function URLs, EventBridge, and CloudWatch Logs all sit inside always-free allowances at this volume, and every log group sets `RetentionInDays: 30` to keep it that way. **ECR is the exception and the one thing that has actually cost money**: SAM never prunes superseded images, so run `./scripts/prune-ecr.sh` periodically.
 
 ### Manual Lambda invocation (qsignups)
 
