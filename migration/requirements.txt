@@ -1,5 +1,5 @@
 pymysql>=1.2.0,<2
 python-dotenv>=1.2.2,<2
 cryptography>=50.0.0,<51
-boto3>=1.43.72,<2
+boto3>=1.43.74,<2
 requests>=2.34.2,<3
