@@ -86,24 +86,30 @@ across images gives ~87 GB, which is misleading: **ECR bills unique layers**, an
 these images share base layers heavily. Trust the Cost Explorer quantity, not
 the image-size sum.
 
-**Why it grows.** `deploy.sh` and CI both pass `--resolve-image-repos`, so SAM
-creates the repositories in a `*-CompanionStack` and every deploy pushes a new
-image without deleting the old one. A day of iteration adds several images per
-function.
+**Why it grew.** `deploy.sh` and CI used to pass `--resolve-image-repos`, which
+let SAM create the repositories inside a `*-CompanionStack` it owns. Those repos
+have no lifecycle policy, so every deploy pushed a new image and nothing removed
+the old one.
 
-**The fix is a lifecycle policy per repository.** This is **set-once, not a
-recurring chore** — a policy stays on the repository, SAM reuses the same
-repositories across deploys, and ECR enforces it continuously. You only need to
-re-run it when a *new* image function is added:
+**The repositories are now declared in
+[infra/template.bootstrap.yaml](../infra/template.bootstrap.yaml)** with a
+lifecycle policy that keeps the `ImagesToKeep` most recent (default 5) and
+expires the rest. Retention is part of the stack, so there is no script to
+remember and no way to add a function that quietly skips the rule.
 
-```bash
-./scripts/prune-ecr.sh --preview   # show what would be expired
-./scripts/prune-ecr.sh             # apply the policy
-```
+One repository per function per stage, named
+`slack-stack/paxminer-{stage}-{function}`. That separation is deliberate: a
+shared repository would let a frequently-deployed function age out another
+function's live image. **Lambda needs the image its deployed version references
+to still exist**, which is also why `ImagesToKeep` has a `MinValue` of 2.
 
-Keeping several images matters: **Lambda needs the image its deployed version
-references to still exist in ECR**, so never trim below the live image plus
-rollback headroom.
+Both `deploy.sh` and `.github/workflows/deploy.yml` read the `EcrRepositoryBase`
+output from the bootstrap stack and pass `--image-repositories` per function.
+
+**Adding a new image-based function means adding its repository to the bootstrap
+template and a `--image-repositories` line to both deploy paths**, then
+redeploying bootstrap before the app. The deploy fails with a clear message if
+the output is missing.
 
 **Dead weight to delete outright:** the four `weaselbot*` repositories, the four
 `weaselbot-*` Lambda functions, and the `weaselbot-test` / `weaselbot-prod`

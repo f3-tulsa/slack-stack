@@ -460,15 +460,37 @@ PY
   log_receipt "Wrote stage manifest (URLs): $dst"
 }
 
+# ECR repositories are declared in infra/template.bootstrap.yaml so they carry a
+# lifecycle policy. --resolve-image-repos would instead create unmanaged repos in
+# a SAM-owned CompanionStack that never expires anything, which is how ~$2/month
+# of dead image layers accumulated. See docs/COST.md.
+paxminer_image_repo_args() {
+  local base
+  base="$(get_stack_output "$BOOTSTRAP_STACK_NAME" "EcrRepositoryBase" 2>/dev/null || true)"
+  if [[ -z "$base" ]]; then
+    echo "ERROR: could not read EcrRepositoryBase from stack '${BOOTSTRAP_STACK_NAME}'." >&2
+    echo "       Run ./deploy.sh --bootstrap first; PAXminer images need those repositories." >&2
+    return 1
+  fi
+  local fn
+  for fn in SyncFunction:sync AchievementsFunction:achievements \
+            ScheduleFunction:schedule SlackFunction:slack; do
+    printf '%s\n' "--image-repositories" "${fn%%:*}=${base}/paxminer-${STAGE}-${fn##*:}"
+  done
+}
+
 deploy_paxminer() {
   sam build -t PAXminer/template.yaml ${SAM_BUILD_EXTRA[@]+"${SAM_BUILD_EXTRA[@]}"} 2>&1 | tee -a "$RECEIPT_FILE"
   local brc="${PIPESTATUS[0]}"
   if [[ "$brc" -ne 0 ]]; then return "$brc"; fi
   [[ "$BUILD_ONLY" == true ]] && return 0
+  local image_repo_args=()
+  while IFS= read -r arg; do image_repo_args+=("$arg"); done < <(paxminer_image_repo_args) || return 1
+  [[ ${#image_repo_args[@]} -eq 0 ]] && return 1
   sam deploy \
     --stack-name "paxminer-${STAGE}" \
     "${SAM_DEPLOY_EXTRA[@]}" \
-    --resolve-image-repos \
+    "${image_repo_args[@]}" \
     "${SAM_S3_BUCKET_ARGS[@]}" \
     --parameter-overrides \
       "DatabaseHost=${DATABASE_HOST}" \

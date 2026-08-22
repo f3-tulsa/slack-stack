@@ -29,6 +29,18 @@ Parameters:
     Default: ""
     Description: >
       Globally unique S3 bucket name for slackblast images (same as IMAGE_S3_BUCKET). Empty skips image-bucket S3 statement (not recommended for production).
+  EcrRepositoryPrefix:
+    Type: String
+    Default: slack-stack
+    Description: >
+      Namespace for the Lambda container repositories: {Prefix}/paxminer-{stage}-{function}.
+  ImagesToKeep:
+    Type: Number
+    Default: 5
+    MinValue: 2
+    Description: >
+      Images retained per repository. Lambda needs the image its deployed version references to
+      still exist, so this must stay above 1 to leave rollback headroom.
 
 Conditions:
   CreateOIDC: !Equals [!Ref CreateOIDCProvider, "true"]
@@ -61,6 +73,76 @@ Resources:
             ExpirationInDays: 30
             NoncurrentVersionExpiration:
               NoncurrentDays: 7
+
+  # Lambda container repositories, owned here rather than by SAM.
+  #
+  # `sam deploy --resolve-image-repos` creates repositories in a SAM-owned
+  # *-CompanionStack that has no lifecycle policy, so every deploy pushed a new
+  # image and nothing ever removed the old one. That was about $2/month of ECR
+  # storage and growing. Declaring them here means the retention rule is part of
+  # the stack instead of something a human has to remember to apply.
+  #
+  # One repository per function per stage on purpose: a shared repository would
+  # let a busy function's deploys age out another function's live image.
+  #
+  # Names are deterministic (${EcrRepositoryPrefix}/paxminer-{stage}-{function}),
+  # so deploy.sh and CI build the URIs without reading stack outputs.
+
+  PaxminerTestSyncRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${EcrRepositoryPrefix}/paxminer-test-sync"
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub '{"rules":[{"rulePriority":1,"description":"Keep the ${ImagesToKeep} most recent images.","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":${ImagesToKeep}},"action":{"type":"expire"}}]}'
+
+  PaxminerTestAchievementsRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${EcrRepositoryPrefix}/paxminer-test-achievements"
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub '{"rules":[{"rulePriority":1,"description":"Keep the ${ImagesToKeep} most recent images.","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":${ImagesToKeep}},"action":{"type":"expire"}}]}'
+
+  PaxminerTestScheduleRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${EcrRepositoryPrefix}/paxminer-test-schedule"
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub '{"rules":[{"rulePriority":1,"description":"Keep the ${ImagesToKeep} most recent images.","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":${ImagesToKeep}},"action":{"type":"expire"}}]}'
+
+  PaxminerTestSlackRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${EcrRepositoryPrefix}/paxminer-test-slack"
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub '{"rules":[{"rulePriority":1,"description":"Keep the ${ImagesToKeep} most recent images.","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":${ImagesToKeep}},"action":{"type":"expire"}}]}'
+
+  PaxminerProdSyncRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${EcrRepositoryPrefix}/paxminer-prod-sync"
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub '{"rules":[{"rulePriority":1,"description":"Keep the ${ImagesToKeep} most recent images.","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":${ImagesToKeep}},"action":{"type":"expire"}}]}'
+
+  PaxminerProdAchievementsRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${EcrRepositoryPrefix}/paxminer-prod-achievements"
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub '{"rules":[{"rulePriority":1,"description":"Keep the ${ImagesToKeep} most recent images.","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":${ImagesToKeep}},"action":{"type":"expire"}}]}'
+
+  PaxminerProdScheduleRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${EcrRepositoryPrefix}/paxminer-prod-schedule"
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub '{"rules":[{"rulePriority":1,"description":"Keep the ${ImagesToKeep} most recent images.","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":${ImagesToKeep}},"action":{"type":"expire"}}]}'
+
+  PaxminerProdSlackRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${EcrRepositoryPrefix}/paxminer-prod-slack"
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub '{"rules":[{"rulePriority":1,"description":"Keep the ${ImagesToKeep} most recent images.","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":${ImagesToKeep}},"action":{"type":"expire"}}]}'
 
   GitHubDeployRole:
     Type: AWS::IAM::Role
@@ -306,3 +388,11 @@ Outputs:
     Value: !Ref AWS::Region
     Export:
       Name: !Sub "${AWS::StackName}-BootstrapRegion"
+  EcrRepositoryBase:
+    Description: >
+      Registry host plus namespace for the Lambda container repositories. A function's
+      repository is {base}/paxminer-{stage}-{function}. Passed to sam deploy via
+      --image-repositories so SAM does not create unmanaged repositories of its own.
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrRepositoryPrefix}"
+    Export:
+      Name: !Sub "${AWS::StackName}-EcrRepositoryBase"
