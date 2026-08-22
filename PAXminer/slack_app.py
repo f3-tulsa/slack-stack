@@ -59,7 +59,6 @@ from config_paxminer import (
     load_achievement_defaults,
     uniquify_achievement_code,
 )
-from achievements.emoji import load_valid_emoji_names
 from paxminer_db import connect_from_env, paxminer_schema_from_env
 from slack_blocks import (
     OVERFLOW_DELETE,
@@ -1189,7 +1188,6 @@ def handle_achievement_edit_submit(ack, body, client, logger):
                 first_created=(existing or {}).get("first_created"),
                 version_created=(existing or {}).get("version_created"),
                 earliest_beatdown=earliest,
-                valid_emoji_names=load_valid_emoji_names(client, team_id=team_id),
             )
             if errors:
                 ack(response_action="errors", errors=errors)
