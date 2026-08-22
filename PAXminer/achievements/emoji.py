@@ -1,67 +1,75 @@
-"""Per-achievement reaction emoji picker. Cosmetic and unversioned.
+"""Per-achievement reaction emoji. Cosmetic and unversioned.
 
-Block Kit has no emoji picker element, so the modal uses an ``external_select``
-whose option labels render the emoji (a ``plain_text`` object with ``emoji:
-true`` turns ``:fire:`` into the image). External select means Slack sends the
-operator's keystrokes to an options handler, so the whole workspace emoji set is
-searchable instead of being truncated to the 100 options a static select allows.
+The field is a plain text input: type a name (``fire``, ``:fire:``) or paste the
+character from your keyboard (🔥). Block Kit has no emoji picker, and the
+``external_select`` approximation we tried first needed a round trip per
+keystroke inside a 3-second budget and hung on mobile once the option payload
+grew. A text input also gets the native mobile emoji keyboard for free.
 
-``emoji.list`` with ``include_categories`` returns both halves of that set: the
-workspace Slackmojis and Slack's own standard Unicode emoji names. No bundled
-emoji dataset to drift out of date.
+Validation happens on save. ``emoji.list`` is the authority for what this
+workspace accepts — it covers the standard set and the custom Slackmojis — so a
+name is checked against it rather than against anything bundled here.
+
+Characters are harder. ``reactions.add`` wants a name like ``thumbsup``, and
+there is no API that maps 👍 to it. Slack's short names are their own vocabulary
+(``muscle`` not ``flexed_biceps``, ``tada`` not ``party_popper``, ``100`` not
+``hundred_points``), so they cannot be derived from Unicode names. The table
+below covers the characters people reach for on an award; anything outside it
+gets an error asking for the name instead.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
 LOG = logging.getLogger(__name__)
 
-NONE_EMOJI_VALUE = "_none"
-# Slack caps a flat options array at 100, but allows 100 option_groups of 100
-# each. Grouping is the only way to offer a whole workspace's emoji at once.
-MAX_EMOJI_OPTIONS = 100
-MAX_OPTIONS_PER_GROUP = 100
-MAX_OPTION_GROUPS = 100
-WORKSPACE_GROUP_LABEL = "Workspace emoji"
+MAX_EMOJI_NAME = 64
 _EMOJI_TTL_S = 300.0
-_EMOJI_CACHE: dict[str, tuple[float, list[str], list[tuple[str, list[str]]]]] = {}
+_EMOJI_CACHE: dict[str, tuple[float, set[str]]] = {}
 
-# Shown before the operator types anything, so the menu opens on something useful.
+# A Slack short name: letters, digits, underscore, dash, plus. No colons.
+_NAME_RE = re.compile(r"^[a-z0-9_+-]+$")
+
+# Unicode noise to drop before lookup: variation selectors, skin tones, ZWJ.
+_MODIFIERS = re.compile("[\ufe0e\ufe0f\U0001F3FB-\U0001F3FF]")
+
+# Fallback name set when emoji.list is unavailable, so the modal still saves.
 CURATED_AWARD_EMOJI = (
-    "fire",
-    "trophy",
-    "medal",
-    "sports_medal",
-    "first_place_medal",
-    "crown",
-    "star",
-    "star2",
-    "sparkles",
-    "100",
-    "clap",
-    "raised_hands",
-    "muscle",
-    "punch",
-    "thumbsup",
-    "tada",
-    "confetti_ball",
-    "bell",
-    "mega",
-    "eyes",
-    "boom",
-    "zap",
-    "rocket",
-    "dart",
-    "weight_lifter",
-    "running",
-    "sunny",
-    "gem",
-    "tophat",
-    "handshake",
+    "fire", "trophy", "medal", "first_place_medal", "crown", "star", "star2",
+    "sparkles", "100", "clap", "raised_hands", "muscle", "punch", "thumbsup",
+    "tada", "confetti_ball", "bell", "mega", "eyes", "boom", "zap", "rocket",
+    "dart", "weight_lifter", "runner", "sunny", "gem", "tophat", "handshake",
 )
+
+# Character -> Slack short name. Resolved names are still checked against
+# emoji.list, so a wrong entry here surfaces as "not supported" rather than a
+# reaction that silently fails at award time.
+EMOJI_CHAR_TO_NAME = {
+    "🔥": "fire", "💪": "muscle", "🏆": "trophy", "🏅": "medal",
+    "🥇": "first_place_medal", "🥈": "second_place_medal", "🥉": "third_place_medal",
+    "🎖": "military_medal", "👑": "crown", "⭐": "star", "🌟": "star2",
+    "✨": "sparkles", "💯": "100", "👏": "clap", "🙌": "raised_hands",
+    "👍": "thumbsup", "👎": "thumbsdown", "👊": "punch", "✊": "fist",
+    "🤝": "handshake", "👌": "ok_hand", "🤙": "call_me_hand", "🫡": "saluting_face",
+    "🙏": "pray", "🤘": "metal", "🎉": "tada", "🎊": "confetti_ball",
+    "🎈": "balloon", "🔔": "bell", "📣": "mega", "📢": "loudspeaker",
+    "👀": "eyes", "❤": "heart", "💥": "boom", "⚡": "zap", "🚀": "rocket",
+    "🎯": "dart", "🏁": "checkered_flag", "🏃": "runner", "🏋": "weight_lifter",
+    "🚴": "bicyclist", "🏊": "swimmer", "🧗": "person_climbing",
+    "☀": "sunny", "🌈": "rainbow", "🌅": "sunrise", "🌄": "sunrise_over_mountains",
+    "💎": "gem", "🎩": "tophat", "😀": "grinning", "😂": "joy", "😎": "sunglasses",
+    "🥳": "partying_face", "🥶": "cold_face", "🥵": "hot_face", "💦": "sweat_drops",
+    "🦾": "mechanical_arm", "🐐": "goat", "🦍": "gorilla", "🐻": "bear",
+    "🦅": "eagle", "🍺": "beer", "🍻": "beers", "☕": "coffee",
+    "⛰": "mountain", "🥾": "hiking_boot", "⏰": "alarm_clock",
+    "📈": "chart_with_upwards_trend", "✅": "white_check_mark", "🛡": "shield",
+    "⚔": "crossed_swords", "🗿": "moyai", "⚽": "soccer", "🏈": "football",
+    "🏀": "basketball", "⚾": "baseball",
+}
 
 
 def clear_emoji_cache() -> None:
@@ -69,231 +77,88 @@ def clear_emoji_cache() -> None:
 
 
 def normalize_emoji_name(raw: str | None) -> str | None:
+    """Bare stored name, or None. Accepts ``fire`` and ``:fire:`` alike."""
     if raw is None:
         return None
-    name = str(raw).strip().strip(":")
-    if not name or name == NONE_EMOJI_VALUE:
+    name = str(raw).strip().strip(":").strip()
+    if not name:
         return None
-    return name[:64]
+    return name[:MAX_EMOJI_NAME]
 
 
-def emoji_option(name: str) -> dict:
-    label = f":{name}: {name}"
-    return {
-        "text": {"type": "plain_text", "text": label[:75], "emoji": True},
-        "value": name[:75],
-    }
+def load_valid_emoji_names(client: Any, *, team_id: str = "") -> set[str]:
+    """Every emoji name this workspace accepts: custom plus Slack's standard set.
 
-
-def none_option() -> dict:
-    return {"text": {"type": "plain_text", "text": "None"}, "value": NONE_EMOJI_VALUE}
-
-
-def load_emoji_catalog(
-    client: Any, *, team_id: str = ""
-) -> tuple[list[str], list[tuple[str, list[str]]]]:
-    """``(custom, [(category, names), ...])`` for the workspace. Cached per team.
-
-    Slack's own categories are kept rather than flattened, because they are what
-    makes ~1900 standard emoji browsable as option groups.
+    Empty set means the lookup failed and the caller should not treat a name as
+    invalid just because it could not be checked.
     """
     key = (team_id or "").strip() or "default"
     now = time.time()
     hit = _EMOJI_CACHE.get(key)
     if hit and now - hit[0] < _EMOJI_TTL_S:
-        return list(hit[1]), [(label, list(names)) for label, names in hit[2]]
-    custom: list[str] = []
-    categories: list[tuple[str, list[str]]] = []
-    if client is not None:
-        try:
-            resp = client.emoji_list(include_categories=True) or {}
-            custom = sorted(str(n) for n in (resp.get("emoji") or {}) if n)
-            seen: set[str] = set()
-            for category in resp.get("categories") or []:
-                label = str((category or {}).get("name") or "Emoji")
-                names: list[str] = []
-                for name in (category or {}).get("emoji_names") or []:
-                    text = str(name)
-                    if text and text not in seen:
-                        seen.add(text)
-                        names.append(text)
-                if names:
-                    categories.append((label, names))
-            LOG.info(
-                "emoji.list team=%s custom=%s categories=%s standard=%s",
-                key,
-                len(custom),
-                len(categories),
-                sum(len(n) for _, n in categories),
-            )
-        except Exception as exc:
-            # Warning, not debug: a silent fallback here looks identical to
-            # "the workspace has no custom emoji", which is not a thing.
-            err = getattr(getattr(exc, "response", None), "get", lambda _k: None)("error")
-            LOG.warning("emoji.list failed team=%s error=%s", key, err or exc, exc_info=True)
-            custom, categories = [], []
-    else:
+        return set(hit[1])
+    names: set[str] = set()
+    if client is None:
         LOG.warning("emoji.list skipped team=%s: no Slack client", key)
-    if not categories:
-        categories = [("Awards", list(CURATED_AWARD_EMOJI))]
-    _EMOJI_CACHE[key] = (now, custom, categories)
-    return list(custom), [(label, list(names)) for label, names in categories]
+        return names
+    try:
+        resp = client.emoji_list(include_categories=True) or {}
+        names = {str(n) for n in (resp.get("emoji") or {}) if n}
+        for category in resp.get("categories") or []:
+            for name in (category or {}).get("emoji_names") or []:
+                if name:
+                    names.add(str(name))
+        LOG.info("emoji.list team=%s names=%s", key, len(names))
+    except Exception as exc:
+        err = getattr(getattr(exc, "response", None), "get", lambda _k: None)("error")
+        LOG.warning("emoji.list failed team=%s error=%s", key, err or exc, exc_info=True)
+        return set()
+    _EMOJI_CACHE[key] = (now, names)
+    return set(names)
 
 
-def load_emoji_names(client: Any, *, team_id: str = "") -> tuple[list[str], list[str]]:
-    """``(custom, standard)`` flattened. For callers that do not need categories."""
-    custom, categories = load_emoji_catalog(client, team_id=team_id)
-    standard = [name for _, names in categories for name in names]
-    return custom, standard
+def resolve_emoji_input(
+    raw: str | None, *, valid_names: set[str] | None = None
+) -> tuple[str | None, str | None]:
+    """Turn what the operator typed into a Slack name.
 
+    Returns ``(name, error)``. Both None means the field was left empty, which
+    is valid — the award just gets the default reaction.
 
-def list_custom_emoji(client: Any, *, team_id: str = "") -> list[str]:
-    """Workspace Slackmojis only. Kept for callers that do not need the standard set."""
-    return load_emoji_catalog(client, team_id=team_id)[0]
-
-
-def _chunk_group(label: str, names: list[str]) -> list[dict]:
-    """One option group per 100 names, numbered when a category needs more than one."""
-    groups: list[dict] = []
-    total = (len(names) + MAX_OPTIONS_PER_GROUP - 1) // MAX_OPTIONS_PER_GROUP
-    for index in range(total):
-        window = names[index * MAX_OPTIONS_PER_GROUP : (index + 1) * MAX_OPTIONS_PER_GROUP]
-        title = label if total == 1 else f"{label} ({index + 1}/{total})"
-        groups.append(
-            {
-                "label": {"type": "plain_text", "text": title[:75]},
-                "options": [emoji_option(n) for n in window],
-            }
-        )
-    return groups
-
-
-def search_emoji_option_groups(
-    query: str | None,
-    *,
-    custom: list[str] | None = None,
-    categories: list[tuple[str, list[str]]] | None = None,
-) -> list[dict]:
-    """Every emoji the workspace can use, as option groups.
-
-    A flat options array is capped at 100, which silently truncates a workspace
-    of ~1900 emoji. Groups raise the ceiling to 10,000, so nothing is hidden:
-    workspace emoji first, then Slack's own categories.
+    ``valid_names`` comes from :func:`load_valid_emoji_names`. When it is empty
+    the check degrades to "looks like a name" rather than blocking the save,
+    because a Slack API hiccup should not stop someone editing an achievement.
     """
-    text = (query or "").strip().strip(":").lower()
-
-    def keep(name: str) -> bool:
-        return not text or text in name.lower()
-
-    def rank(names: list[str]) -> list[str]:
-        if not text:
-            return names
-        starts = [n for n in names if n.lower().startswith(text)]
-        rest = [n for n in names if not n.lower().startswith(text)]
-        return starts + rest
-
-    seen: set[str] = set()
-    groups: list[dict] = [
-        {
-            "label": {"type": "plain_text", "text": "No reaction"},
-            "options": [none_option()],
-        }
-    ]
-
-    workspace: list[str] = []
-    for name in custom or []:
-        clean = normalize_emoji_name(name)
-        if clean and clean not in seen and keep(clean):
-            seen.add(clean)
-            workspace.append(clean)
-    if workspace:
-        groups.extend(_chunk_group(WORKSPACE_GROUP_LABEL, rank(workspace)))
-
-    for label, names in categories or []:
-        kept: list[str] = []
-        for name in names:
-            clean = normalize_emoji_name(name)
-            if clean and clean not in seen and keep(clean):
-                seen.add(clean)
-                kept.append(clean)
-        if kept:
-            groups.extend(_chunk_group(label, rank(kept)))
-
-    return groups[:MAX_OPTION_GROUPS]
-
-
-def search_emoji_options(
-    query: str | None,
-    *,
-    custom: list[str] | None = None,
-    standard: list[str] | None = None,
-    stored: str | None = None,
-) -> list[dict]:
-    """Options for the picker, filtered by what the operator typed.
-
-    Workspace emoji come first in both the unfiltered list and the search
-    results. Slack only shows the first handful without scrolling, so burying a
-    region's own Slackmojis under the curated standard set reads as "my custom
-    emoji are missing".
-    """
-    text = (query or "").strip().strip(":").lower()
-    stored_name = normalize_emoji_name(stored)
-    custom_clean: list[str] = []
-    pool: list[str] = []
-    seen: set[str] = set()
-    for name in [*(custom or []), *(standard or [])]:
-        clean = normalize_emoji_name(name)
-        if clean and clean not in seen:
-            seen.add(clean)
-            pool.append(clean)
-    custom_seen: set[str] = set()
-    for name in custom or []:
-        clean = normalize_emoji_name(name)
-        if clean and clean not in custom_seen:
-            custom_seen.add(clean)
-            custom_clean.append(clean)
-
+    text = str(raw or "").strip()
     if not text:
-        ordered = list(custom_clean)
-        taken = set(ordered)
-        ordered += [n for n in CURATED_AWARD_EMOJI if n in seen and n not in taken]
-        taken.update(ordered)
-        ordered += [n for n in pool if n not in taken]
-    else:
-        starts = [n for n in pool if n.lower().startswith(text)]
-        contains = [n for n in pool if text in n.lower() and not n.lower().startswith(text)]
-        ordered = starts + contains
+        return None, None
 
-    if stored_name and stored_name not in ordered:
-        ordered.insert(0, stored_name)
+    def _check(name: str) -> tuple[str | None, str | None]:
+        if len(name) > MAX_EMOJI_NAME:
+            return None, f"Emoji name is too long (max {MAX_EMOJI_NAME} characters)."
+        if valid_names and name not in valid_names:
+            return None, (
+                f"`:{name}:` is not an emoji in this workspace. "
+                "Check the spelling, or add it in Slack first."
+            )
+        return name, None
 
-    room = MAX_EMOJI_OPTIONS - 1  # None occupies one slot
-    return [none_option(), *[emoji_option(n) for n in ordered[:room]]]
+    # A name, with or without colons.
+    candidate = text.strip(":").strip().lower()
+    if _NAME_RE.match(candidate):
+        return _check(candidate)
 
+    # A character pasted from the keyboard.
+    stripped = _MODIFIERS.sub("", text)
+    if stripped in EMOJI_CHAR_TO_NAME:
+        return _check(EMOJI_CHAR_TO_NAME[stripped])
 
-def emoji_select_options(
-    custom_names: list[str] | None = None,
-    *,
-    stored: str | None = None,
-) -> list[dict]:
-    """Unfiltered option list. Used by the options handler's empty-query response."""
-    return search_emoji_options(None, custom=custom_names, stored=stored)
-
-
-def emoji_select_element(action_id: str, stored: str | None = None) -> dict:
-    """Searchable picker. Options come from the options handler, not the view.
-
-    ``initial_option`` is built from the stored name rather than looked up, so an
-    emoji that was deleted from the workspace still round-trips a save instead of
-    being silently cleared (the 5f f6 rule, applied here).
-    """
-    stored_name = normalize_emoji_name(stored)
-    element: dict = {
-        "type": "external_select",
-        "action_id": action_id,
-        "min_query_length": 0,
-        "placeholder": {"type": "plain_text", "text": "Search emoji", "emoji": True},
-    }
-    if stored_name:
-        element["initial_option"] = emoji_option(stored_name)
-    return element
+    if len(stripped) <= 2 and not stripped.isascii():
+        return None, (
+            f"{text} is not one I can look up. Type its name instead, "
+            "like `fire` — Slack's name is often not what the picture is called."
+        )
+    return None, (
+        "Enter a single emoji name like `fire` or `:fire:`, "
+        "or one emoji character."
+    )

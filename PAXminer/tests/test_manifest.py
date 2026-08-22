@@ -32,10 +32,9 @@ def test_manifest_includes_emoji_read_and_reactions_write():
     assert "reactions:write" in scopes
 
 
-def test_manifest_declares_an_options_load_url():
-    """The emoji picker is an external_select; without this it cannot load options."""
+def test_manifest_needs_no_options_load_url():
+    """The award emoji is a text input; nothing uses external_select any more."""
     data = json.loads(_MANIFEST.read_text(encoding="utf-8"))
     interactivity = data["settings"]["interactivity"]
     assert interactivity.get("is_enabled") is True
-    assert interactivity.get("message_menu_options_url")
-    assert interactivity["message_menu_options_url"] == interactivity["request_url"]
+    assert "message_menu_options_url" not in interactivity

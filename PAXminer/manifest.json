@@ -51,8 +51,7 @@
     },
     "interactivity": {
       "is_enabled": true,
-      "request_url": "__HOSTNAME__",
-      "message_menu_options_url": "__HOSTNAME__"
+      "request_url": "__HOSTNAME__"
     },
     "org_deploy_enabled": false,
     "socket_mode_enabled": false,

@@ -31,7 +31,6 @@ from config_paxminer import (
     DELETE_ALL_ACHIEVEMENTS_ACTION_ID,
     DUPLICATE_ACHIEVEMENT_ACTION_ID,
     EDIT_ACHIEVEMENT_ACTION_ID,
-    EMOJI_OPTIONS_ACTION_ID,
     MORE_ACHIEVEMENT_ACTION_ID,
     REEVAL_FROM_ACTION_ID,
     REEVAL_TO_ACTION_ID,
@@ -60,6 +59,7 @@ from config_paxminer import (
     load_achievement_defaults,
     uniquify_achievement_code,
 )
+from achievements.emoji import load_valid_emoji_names
 from paxminer_db import connect_from_env, paxminer_schema_from_env
 from slack_blocks import (
     OVERFLOW_DELETE,
@@ -270,37 +270,6 @@ def handle_add_achievement(ack, body, client, logger):
 
 
 app.action(ADD_ACHIEVEMENT_ACTION_ID)(handle_add_achievement)
-
-
-def handle_emoji_options(ack, body, client, logger):
-    """Typeahead for the award-reaction picker.
-
-    Slack requires the options back synchronously inside 3 seconds, so this
-    cannot be a lazy listener. ``emoji.list`` is cached per workspace and the
-    match is done in memory.
-    """
-    from achievements.emoji import load_emoji_catalog, search_emoji_option_groups
-
-    team_id = (body.get("team") or {}).get("id") or body.get("team_id") or ""
-    query = body.get("value") or ""
-    try:
-        custom, categories = load_emoji_catalog(client, team_id=team_id)
-    except Exception:
-        logger.warning("emoji options load failed team=%s", team_id, exc_info=True)
-        custom, categories = [], []
-    groups = search_emoji_option_groups(query, custom=custom, categories=categories)
-    logger.info(
-        "emoji options team=%s query=%r custom=%s groups=%s options=%s",
-        team_id,
-        query,
-        len(custom),
-        len(groups),
-        sum(len(g["options"]) for g in groups),
-    )
-    ack(option_groups=groups)
-
-
-app.options(EMOJI_OPTIONS_ACTION_ID)(handle_emoji_options)
 
 
 def _refresh_achievements_list(
@@ -1220,6 +1189,7 @@ def handle_achievement_edit_submit(ack, body, client, logger):
                 first_created=(existing or {}).get("first_created"),
                 version_created=(existing or {}).get("version_created"),
                 earliest_beatdown=earliest,
+                valid_emoji_names=load_valid_emoji_names(client, team_id=team_id),
             )
             if errors:
                 ack(response_action="errors", errors=errors)

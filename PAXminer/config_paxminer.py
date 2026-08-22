@@ -32,9 +32,6 @@ REEVAL_FROM_ACTION_ID = "paxminer_achievement_reeval_from"
 REEVAL_TO_ACTION_ID = "paxminer_achievement_reeval_to"
 ACHIEVEMENTS_PAGE_PREV_ACTION_ID = "paxminer_achievements_page_prev"
 ACHIEVEMENTS_PAGE_NEXT_ACTION_ID = "paxminer_achievements_page_next"
-# Distinct from the shared "val" action_id so the options handler matches only
-# the emoji picker.
-EMOJI_OPTIONS_ACTION_ID = "paxminer_achievement_emoji"
 
 METRICS = ("posts", "qs", "distinct_aos", "posts_at_single_ao")
 PERIODS = ("week", "month", "year")
@@ -459,7 +456,7 @@ def _achievement_edit_modal(
         version_created=src.get("version_created"),
         earliest_beatdown=src.get("earliest_beatdown"),
     )
-    from achievements.emoji import emoji_select_element, normalize_emoji_name
+    from achievements.emoji import normalize_emoji_name
 
     stored_emoji = normalize_emoji_name(src.get("emoji"))
     blocks: list[dict] = []
@@ -516,10 +513,16 @@ def _achievement_edit_modal(
                 "label": {"type": "plain_text", "text": "Award reaction (optional)"},
                 "hint": {
                     "type": "plain_text",
-                    "text": "Type to search every emoji in this workspace. "
-                    "Added next to :fire: on the public award message.",
+                    "text": "A name like fire or :fire:, or the emoji itself from your "
+                    "keyboard. Added next to :fire: on the public award message.",
                 },
-                "element": emoji_select_element(EMOJI_OPTIONS_ACTION_ID, stored_emoji),
+                "element": {
+                    "type": "plain_text_input",
+                    "action_id": "val",
+                    "max_length": 64,
+                    "placeholder": {"type": "plain_text", "text": "fire"},
+                    **({"initial_value": stored_emoji} if stored_emoji else {}),
+                },
             },
         ]
     )
@@ -771,11 +774,10 @@ def _parse_achievement_form(payload: dict) -> dict:
         "effective_to": _date("effective_to"),
         "activity_list": include,
         "activity_filter": {"include": include, "exclude": exclude},
-        "emoji": _select("emoji", EMOJI_OPTIONS_ACTION_ID) or _select("emoji"),
+        # Raw on purpose: _validate_achievement resolves a character or a name
+        # into the stored value, and needs the original text to explain a refusal.
+        "emoji": _text("emoji").strip(),
     }
-    from achievements.emoji import normalize_emoji_name
-
-    parsed["emoji"] = normalize_emoji_name(parsed["emoji"])
     return parsed
 
 
@@ -786,11 +788,22 @@ def _validate_achievement(
     first_created=None,
     version_created=None,
     earliest_beatdown=None,
+    valid_emoji_names: set[str] | None = None,
 ) -> dict[str, str]:
     from achievements.activity import activity_filter_conflicts
+    from achievements.emoji import resolve_emoji_input
     from achievements.range import range_validation_errors
 
     errors: dict[str, str] = {}
+    # Rewrites values["emoji"] in place to the resolved Slack name, so callers
+    # persist the name rather than whatever character was typed.
+    emoji_name, emoji_error = resolve_emoji_input(
+        values.get("emoji"), valid_names=valid_emoji_names
+    )
+    if emoji_error:
+        errors["emoji"] = emoji_error
+    else:
+        values["emoji"] = emoji_name
     if not values["name"]:
         errors["name"] = "Name is required"
     if require_code:
