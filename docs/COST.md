@@ -40,46 +40,81 @@ Two things to keep true:
 Log *volume* is not the risk here. The Slack front door writes a handful of
 lines per interaction.
 
-## What actually costs money: ECR
+## What actually costs money
 
-**This is the real exposure, and it is currently not free.**
+Measured from Cost Explorer 2026-08-21, usage records only (credits excluded):
 
-Measured 2026-08-21: **87 GB across 10 repositories, 317 images.**
+| Month | Total | Lambda SnapStart | ECR storage | S3 |
+| --- | --- | --- | --- | --- |
+| 2026-05 | $3.82 | $2.02 | $1.77 | $0.04 |
+| 2026-06 | $3.80 | $1.95 | $1.81 | $0.04 |
+| 2026-07 | $4.06 | $2.02 | $1.99 | $0.05 |
 
-- paxminer test — 225 images, ~57 GB
-- weaselbot test + prod — 78 images, ~27 GB (dead code, see cutover)
-- paxminer prod — 14 images, ~4 GB
+**Promotional credits are currently zeroing this out**, so the invoice reads $0
+while real usage is roughly **$3.85/month**. When the credits lapse, that is the
+bill. Two line items account for essentially all of it.
 
-Private ECR gives **500 MB-month free, and only for the first 12 months** — it
-is not an always-free allowance. Past that it is **$0.10/GB-month**, so 87 GB is
-roughly **$8.70/month**, growing with every deploy.
+### 1. An orphaned Lambda SnapStart snapshot (~$2.00/month)
+
+Usage type `Lambda-SnapStart-Cached-GB-S`, about 1.3 million GB-seconds a month.
+
+`slackblast-prod-SlackblastFunction` **version 1**, published 2026-04-01, has
+`SnapStart.ApplyOn=PublishedVersions` and `OptimizationStatus=On` at 512 MB —
+roughly half a gigabyte of snapshot cached continuously.
+
+SnapStart was added in commit `e9c4cd1` and later dropped from the template, but
+**removing SnapStart from a template does not delete already-published
+versions**, and a published version keeps its own configuration forever. `$LATEST`
+reports `ApplyOn=None` while version 1 quietly keeps billing.
+
+Nothing uses version 1: there are no aliases, and both the Function URL and the
+resource policy target the unqualified ARN, which resolves to `$LATEST`.
+Deleting that version stops the charge, and it cannot come back because no
+template enables SnapStart now.
+
+**Rule going forward:** if a function ever publishes versions, deleting the
+feature from the template is not enough — the old versions have to be deleted
+too.
+
+### 2. ECR image storage (~$1.80-2.00/month)
+
+Private ECR gives **500 MB-month free, and only for the first 12 months** — not
+an always-free allowance. Past that it is **$0.10/GB-month**.
+
+Billed storage is about **20 GB-months**. Note that summing `imageSizeInBytes`
+across images gives ~87 GB, which is misleading: **ECR bills unique layers**, and
+these images share base layers heavily. Trust the Cost Explorer quantity, not
+the image-size sum.
 
 **Why it grows.** `deploy.sh` and CI both pass `--resolve-image-repos`, so SAM
-creates and owns the ECR repositories. Every deploy pushes a new image and
-**nothing ever deletes the old one**. The heavy PAXMiner image is ~250-450 MB, so
-a day of iteration adds several GB.
+creates the repositories in a `*-CompanionStack` and every deploy pushes a new
+image without deleting the old one. A day of iteration adds several images per
+function.
 
-**The fix** is a lifecycle policy per repository. Apply with:
+**The fix is a lifecycle policy per repository.** This is **set-once, not a
+recurring chore** — a policy stays on the repository, SAM reuses the same
+repositories across deploys, and ECR enforces it continuously. You only need to
+re-run it when a *new* image function is added:
 
 ```bash
 ./scripts/prune-ecr.sh --preview   # show what would be expired
 ./scripts/prune-ecr.sh             # apply the policy
 ```
 
-It keeps the most recent images per repo and expires the rest. Keeping several
-matters: **Lambda needs the image its function version references to still exist
-in ECR**, so never prune down to fewer than the deployed image plus headroom for
-rollback.
+Keeping several images matters: **Lambda needs the image its deployed version
+references to still exist in ECR**, so never trim below the live image plus
+rollback headroom.
 
-**Also delete the four `weaselbot*` repositories at cutover.** That is ~27 GB of
-images for a retired app. It is already on the teardown list in the program plan
-alongside dropping the CloudFormation stacks.
+**Dead weight to delete outright:** the four `weaselbot*` repositories, the four
+`weaselbot-*` Lambda functions, and the `weaselbot-test` / `weaselbot-prod`
+stacks plus their companion stacks. That app no longer deploys. It is on the
+cutover teardown list in the program plan.
 
 ## Everything else
 
 | Service | Free allowance | How this stack uses it |
 | --- | --- | --- |
-| Lambda | 1M requests + 400,000 GB-seconds per month, always free | Four PAXMiner functions plus slackblast and qsignups. The keep-warm ping is every 5 minutes (~8,600/month) and the schedule tick every 15 minutes (~2,900/month). Nowhere near the cap. |
+| Lambda | 1M requests + 400,000 GB-seconds per month, always free | Four PAXMiner functions plus slackblast and qsignups. The keep-warm ping is every 5 minutes (~8,600/month) and the schedule tick every 15 minutes (~2,900/month). Invocation and duration have never appeared on the bill. **SnapStart cache is billed separately and is not covered by the free tier** — see above. |
 | Lambda Function URLs | Free | Used instead of API Gateway specifically to avoid per-request charges. Do not introduce API Gateway. |
 | EventBridge | Scheduled rules are free | Keep-warm and the schedule tick. |
 | CloudWatch Logs | 5 GB/month combined | See above. 30-day retention set. |
@@ -104,19 +139,42 @@ Ask which meter it starts. The pattern that has kept this free so far:
 
 ## Periodic check
 
+Start with the bill, not with resource inventories. Cost Explorer answers
+"what is charging" in one call; guessing from resource sizes led to a wrong
+conclusion once already. Note that CE itself charges $0.01 per request.
+
 ```bash
-# ECR storage by repository
-for r in $(aws ecr describe-repositories --region us-east-1 \
-    --query 'repositories[].repositoryName' --output text); do
-  printf '%-60s %s MB\n' "$r" \
-    "$(( $(aws ecr describe-images --region us-east-1 --repository-name "$r" \
-        --query 'sum(imageDetails[].imageSizeInBytes)' --output text | cut -d. -f1) / 1048576 ))"
+# What is actually charging, by service and usage type. Usage records only,
+# so promotional credits do not hide the real number.
+aws ce get-cost-and-usage --region us-east-1 \
+  --time-period Start=$(date -u -v-2m +%Y-%m-01),End=$(date -u +%Y-%m-%d) \
+  --granularity MONTHLY --metrics UnblendedCost \
+  --filter '{"Dimensions":{"Key":"RECORD_TYPE","Values":["Usage"]}}' \
+  --group-by Type=DIMENSION,Key=SERVICE --output table
+
+# Swap the group-by for USAGE_TYPE once you know the service.
+```
+
+```bash
+# Any Lambda version with SnapStart still enabled anywhere.
+for r in us-east-1 us-east-2; do
+  aws lambda list-functions --region $r --query 'Functions[].FunctionName' --output text |
+  tr '\t' '\n' | while read -r f; do
+    aws lambda list-versions-by-function --region "$r" --function-name "$f" \
+      --query "Versions[?SnapStart.ApplyOn!='None'].[?Version!='\$LATEST'] | []" --output text
+  done
 done
 
-# Confirm retention is still set on every log group
+# Confirm retention is still set on every log group.
 aws logs describe-log-groups --region us-east-1 \
   --query 'logGroups[].{name:logGroupName,retention:retentionInDays}' --output table
 ```
 
 A log group showing `None` for retention is a regression — fix the template
 rather than setting it by hand, or the next deploy loses it.
+
+## Other stacks in this account
+
+The account also carries `syncbot-test` / `syncbot-prod` in **us-east-2**, which
+are not part of slack-stack. They contribute the small `USE2-*` S3 lines. Free
+tier does not pool across regions, so a second region starts its own meters.
