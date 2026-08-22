@@ -166,9 +166,10 @@ def test_award_log_line_grant_and_revoke_share_suffix():
     assert "https://f3ttown-test.slack.com/archives/C_AO/p1750000000000001" in scoped
 
 
-def test_emoji_option_groups_carry_every_emoji_client_side():
-    """A static_select filters in the client, so the whole set ships in the view."""
+def test_emoji_options_keep_every_workspace_emoji_but_shortlist_the_standard_set():
+    """The full ~1900 renders on desktop and freezes mobile, so standard is trimmed."""
     from achievements.emoji import (
+        AWARD_EMOJI_CANDIDATES,
         MAX_OPTION_GROUPS,
         MAX_OPTIONS_PER_GROUP,
         NONE_EMOJI_VALUE,
@@ -176,26 +177,40 @@ def test_emoji_option_groups_carry_every_emoji_client_side():
         emoji_option_groups,
     )
 
-    custom = ["f3_ruck", "cadre"]
+    custom = [f"f3_{i}" for i in range(40)]
     categories = [
-        ("Smileys & People", [f"smile_{i}" for i in range(503)]),
+        ("Smileys & People", ["fire", "muscle", *[f"smile_{i}" for i in range(500)]]),
         ("Flags", [f"flag_{i}" for i in range(270)]),
-        ("Activities", [f"sport_{i}" for i in range(85)]),
     ]
     groups = emoji_option_groups(custom, categories)
     values = [o["value"] for g in groups for o in g["options"]]
 
-    assert len(values) == 1 + 2 + 503 + 270 + 85
     assert values[0] == NONE_EMOJI_VALUE
-    assert "f3_ruck" in values and "smile_502" in values and "flag_269" in values
+    # Every workspace emoji survives; those are the ones a region cares about.
+    assert all(n in values for n in custom)
+    # Standard names come from the shortlist, not the whole catalog.
+    assert "fire" in values and "muscle" in values
+    assert "smile_499" not in values
+    assert "flag_269" not in values
+    # Comfortably smaller than the ~1900 that broke the mobile client.
+    assert len(values) < 400
+
     assert len(groups) <= MAX_OPTION_GROUPS
     assert all(len(g["options"]) <= MAX_OPTIONS_PER_GROUP for g in groups)
+    assert groups[1]["label"]["text"] == WORKSPACE_GROUP_LABEL
+    # A candidate the workspace does not actually have is dropped, not offered.
+    assert "sports_medal" in AWARD_EMOJI_CANDIDATES
+    assert "sports_medal" not in values
 
-    labels = [g["label"]["text"] for g in groups]
-    assert labels[1] == WORKSPACE_GROUP_LABEL
-    # Activities leads the standard categories; Flags is pushed to the end.
-    assert labels.index("Activities") < labels.index("Smileys & People 1/6")
-    assert labels.index("Flags 1/3") > labels.index("Smileys & People 6/6")
+
+def test_emoji_options_fall_back_when_there_is_no_category_data():
+    from achievements.emoji import CURATED_AWARD_EMOJI, emoji_option_groups
+
+    groups = emoji_option_groups(["f3_ruck"], [])
+    values = [o["value"] for g in groups for o in g["options"]]
+    assert "f3_ruck" in values
+    # Nothing to filter against, so offer the small hardcoded set rather than none.
+    assert all(n in values for n in CURATED_AWARD_EMOJI)
 
 
 def test_stored_emoji_survives_even_if_deleted_from_the_workspace():
