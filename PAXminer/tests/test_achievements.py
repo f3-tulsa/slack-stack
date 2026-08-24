@@ -1693,6 +1693,31 @@ def _posts(user, dates, *, ao="C_AO", q=0, activity="beatdown"):
     )
 
 
+def test_evaluate_rule_posts_at_single_ao_does_not_suffix_qualifying_count():
+    from achievements.engine import evaluate_rule
+
+    dates = [f"2026-08-{d:02d}" for d in range(1, 6)]
+    nation = pd.concat(
+        [
+            _posts("U1", dates, ao="C_HOME"),
+            _posts("U1", dates[:2], ao="C_AWAY"),
+        ],
+        ignore_index=True,
+    )
+    rule = {
+        "id": 14,
+        "metric": "posts_at_single_ao",
+        "activity": [],
+        "period": "year",
+        "threshold": 5,
+    }
+    out = evaluate_rule(nation, rule, schema="f3test")
+    assert len(out) == 1
+    assert int(out.iloc[0]["qualifying_count"]) == 5
+    assert out.iloc[0]["ao_id"] == "C_HOME"
+    assert out.iloc[0]["date_awarded"] == date(2026, 8, 5)
+
+
 def test_evaluate_rule_year_qualified_week_and_crossing_date():
     from achievements.engine import evaluate_rule
 
