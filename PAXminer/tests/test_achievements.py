@@ -2314,6 +2314,50 @@ def test_reconcile_rule_awards_skips_channel_when_noop():
     assert "was corrected" not in logs[0]
 
 
+def test_reconcile_rule_awards_dry_run_does_not_post():
+    from achievements.runner import reconcile_rule_awards
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchone.return_value = {
+        "name": "Centurion",
+        "effective_from": date(2026, 1, 1),
+        "effective_to": date(2026, 12, 31),
+    }
+    posts = []
+    logs = []
+    with patch(
+        "achievements.runner.run_achievements_for_region",
+        return_value={"grants": 89, "revokes": 141, "held": 73},
+    ) as mock_run:
+        with patch("achievements.runner.resolve_achievement_channel", return_value="C_ACH"):
+            with patch("achievements.runner.decrypt_field", return_value="x"):
+                with patch("achievements.runner.slack_client"):
+                    with patch(
+                        "achievements.runner.post_message",
+                        side_effect=lambda *_a, **_k: posts.append(1),
+                    ):
+                        with patch(
+                            "achievements.runner.post_log",
+                            side_effect=lambda *_a, **_k: logs.append(1),
+                        ):
+                            result = reconcile_rule_awards(
+                                mock_conn,
+                                pm_schema="pm",
+                                regional_schema="f3test",
+                                region_row={"slack_token": "enc"},
+                                achievement_id=4,
+                                dry_run=True,
+                            )
+    assert result["dry_run"] is True
+    assert mock_run.call_args.kwargs["dry_run"] is True
+    assert mock_run.call_args.kwargs["announce"] is False
+    assert posts == []
+    assert logs == []
+
+
 def test_scheduled_noop_logs_summary_webhook_silent():
     from achievements.runner import run_achievements_for_region
 

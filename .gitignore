@@ -82,6 +82,7 @@ db.sqlite3
 # Migration run artifacts (hosts, SQL error text — do not commit)
 migration_*.json
 migration/receipts/
+migration/rehearsal/sittings/
 
 # Deploy receipts and generated Slack manifests (contain API URLs)
 receipts/

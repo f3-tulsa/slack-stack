@@ -701,6 +701,7 @@ def reconcile_rule_awards(
     end: date | None = None,
     automatic: bool = False,
     action: str = "re-evaluated",
+    dry_run: bool = False,
 ) -> dict:
     """Re-evaluate one family across its range; silent on T-claps/DMs, one channel summary."""
     from achievements.range import clear_reeval_lock
@@ -750,7 +751,7 @@ def reconcile_rule_awards(
                 regional_schema=regional_schema,
                 region_row=region_row,
                 pax_user_ids=None,
-                dry_run=False,
+                dry_run=dry_run,
                 announce=False,
                 start=chunk_start,
                 end=chunk_end,
@@ -788,7 +789,7 @@ def reconcile_rule_awards(
         channel = resolve_achievement_channel(conn, pm_schema, regional_schema, region_row)
         name = meta.get("name") or "achievement"
         duration_s = time.monotonic() - started
-        if token_enc and channel:
+        if token_enc and channel and not dry_run:
             try:
                 client = slack_client(decrypt_field(token_enc))
                 admin_tag = mention(actor, resolve_display_name(client, actor))
@@ -843,6 +844,7 @@ def reconcile_rule_awards(
             "skipped": last_result.get("skipped"),
             "action": action,
             "affected_pax": len(affected),
+            "dry_run": dry_run,
         }
 
     finally:

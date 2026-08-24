@@ -9,6 +9,7 @@ from pathlib import Path
 
 LOG = logging.getLogger(__name__)
 _RECEIPTS_DIR = Path(__file__).resolve().parent.parent / "receipts"
+ENV_STAGES = ("test", "prod", "rehearsal")
 
 
 class _ListHandler(logging.Handler):
@@ -29,11 +30,40 @@ def _load_env(stage: str) -> None:
     from dotenv import load_dotenv
 
     env_file = Path(__file__).resolve().parent.parent / f".env.migration.{stage}"
-    if env_file.exists():
-        load_dotenv(env_file)
+    if not env_file.is_file():
+        raise FileNotFoundError(
+            f"Missing {env_file}; refusing to fall through to ambient environment"
+        )
+    # override=True so a leftover exported TARGET_* (possibly prod) cannot win.
+    load_dotenv(env_file, override=True)
 
 
-def _connect():
+def stage_suffix(schema: str) -> str:
+    """Stage portion of a schema name, split on the *first* underscore.
+
+    ``paxminer_rehearsal`` → ``rehearsal``. ``paxminer_migrate_test`` →
+    ``migrate_test``. Splitting on the last underscore would make
+    ``paxminer_migrate_test`` and ``f3ttown_test`` both look like ``test``.
+    """
+    name = (schema or "").strip()
+    if "_" not in name:
+        raise ValueError(f"schema {schema!r} has no stage suffix")
+    return name.split("_", 1)[1]
+
+
+def assert_regional_stage(regional_schema: str, pm_schema: str) -> None:
+    """Refuse a regional schema whose suffix does not match the registry schema."""
+    regional_stage = stage_suffix(regional_schema)
+    pm_stage = stage_suffix(pm_schema)
+    if regional_stage != pm_stage:
+        raise RuntimeError(
+            f"cross-stage guard: regional schema {regional_schema!r} "
+            f"(suffix {regional_stage!r}) does not match {pm_schema!r} "
+            f"(suffix {pm_stage!r})"
+        )
+
+
+def _connect(*, read_timeout: int = 120, write_timeout: int = 120):
     import pymysql
 
     return pymysql.connect(
@@ -44,6 +74,8 @@ def _connect():
         charset="utf8mb4",
         cursorclass=pymysql.cursors.DictCursor,
         ssl={"ssl": {}} if os.environ.get("TARGET_TLS_ENABLED", "true").lower() in ("1", "true", "yes") else None,
+        read_timeout=read_timeout,
+        write_timeout=write_timeout,
     )
 
 

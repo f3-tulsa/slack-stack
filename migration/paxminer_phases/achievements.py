@@ -32,6 +32,7 @@ from paxminer_phases.db import (  # noqa: E402
     _index_exists,
     _pm_schema,
     _table_exists,
+    assert_regional_stage,
 )
 
 LOG = logging.getLogger(__name__)
@@ -434,6 +435,7 @@ def run_achievements(cur, stage: str) -> dict:
     LOG.info("Achievements phase: %s regional schema(s)", len(schemas))
     results = []
     for schema in schemas:
+        assert_regional_stage(schema, pm_schema)
         LOG.info("Migrating achievements for %s", schema)
         results.append(migrate_regional_schema(cur, schema))
     return {

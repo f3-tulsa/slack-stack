@@ -22,6 +22,8 @@ Run **`python migration/paxminer_migrate.py --env <stage> --all`** to orchestrat
 
 Deploy updated Slackblast + PAXMiner application code **before** `--all` (or before `drop-legacy-columns` alone). Re-runs are idempotent; pass **`--force`** on the weaselbot phase to re-upsert achievement seeds. When ready, **`--drop-weaselbot-schema`** drops the old schema. A receipt under `migration/receipts/` includes the full console log. See **[DEPLOY.md](DEPLOY.md)** cutover checklist.
 
+To rehearse against a replica first, see **[migration/rehearsal/README.md](../migration/rehearsal/README.md)**. Sitting notes and audit snapshots belong in `migration/rehearsal/sittings/` (gitignored).
+
 Individual phases: `--phase weaselbot`, `--phase scheduler`, or `--phase drop-legacy-columns`. Legacy scripts `migrate_weaselbot_to_paxminer.py` and `add_report_scheduler.py` are deprecated wrappers around these phases.
 
 ## Setup

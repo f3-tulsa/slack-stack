@@ -28,6 +28,7 @@ from paxminer_phases.db import (  # noqa: E402
     _sb_schema,
     _table_exists,
     _wb_schema,
+    assert_regional_stage,
 )
 
 LOG = logging.getLogger(__name__)
@@ -311,6 +312,8 @@ def run_weaselbot(
     for row in region_rows:
         schema = row.get("schema_name")
         if schema:
+            # Before any information_schema or ALTER against the regional schema.
+            assert_regional_stage(schema, pm_schema)
             rule_cols_missing = any(
                 not _column_exists(cur, schema, "achievements_list", col) for col in RULE_COLUMNS
             )
