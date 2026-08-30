@@ -4,11 +4,10 @@
 
 | Path | Purpose |
 |------|---------|
-| `PAXminer/` | Docker-packaged Lambdas; schedules; backblast scraping; charts |
-| `weaselbot/` | Docker-packaged Lambdas; achievements; Kotter |
+| `PAXminer/` | Docker-packaged Lambdas: lightweight Slack Bolt front door, sync, charts, achievements, Kotter (slash/modals on SlackFunction; charts via `files_upload_v2`) |
 | `slackblast/` | Zip Lambda + Function URL; Bolt app |
 | `qsignups/` | Zip Lambda + Function URL; Bolt app; schedule extension |
-| `common/` | Shared `encryption.py`, `token_bootstrap.py` (Weaselbot image copies this; PAXminer uses `PAXminer/common/` in parallel) |
+| `common/` | Shared `encryption.py`, `token_bootstrap.py` (PAXminer image uses `PAXminer/common/`) |
 | `migration/` | One-off migration scripts and env templates |
 | `infra/` | Bootstrap CloudFormation (OIDC, SAM artifact bucket) |
 
@@ -16,12 +15,14 @@ Apps do **not** import each other’s Python packages; integration is via **shar
 
 ## Runtime shapes
 
-- **PAXminer / Weaselbot:** Container images, EventBridge schedules, no HTTP API in SAM (Slack posts only).
+- **PAXminer:** Container images, EventBridge schedules, Function URLs for Kotter/interactive and achievements webhook.
 - **slackblast / qsignups:** Zip Lambdas, **Lambda Function URLs**, Bolt with `process_before_response` and **lazy listeners** (self `lambda:InvokeFunction`).
+
+- **Future (brother-region Nation attendance):** A shared `external_attendance` table per regional schema could union attendance from partner regions once a Nation API sync exists; Kotter and achievements would read through the same helper as `achievements/attendance.py`.
 
 ## Database and schemas
 
-- **Per-app schemas** (suffix `_test` / `_prod`): `paxminer_*`, `weaselbot_*`, `slackblast_*`, `qsignups_*`.
+- **Per-app schemas** (suffix `_test` / `_prod`): `paxminer_*`, `slackblast_*`, `qsignups_*`. Legacy `weaselbot_*` is retired after migration.
 - **Per-region schemas** (PAXminer “regional” data): e.g. `f3ttown_prod` — tables such as `aos`, `beatdowns`, `bd_attendance`, `users`.
 - **Registry:** `paxminer_<stage>.regions` lists regions and points at regional schema names and encrypted Slack tokens.
 
@@ -31,7 +32,6 @@ Apps do **not** import each other’s Python packages; integration is via **shar
 flowchart LR
   subgraph app_schemas [App schemas]
     PM[paxminer_stage]
-    WB[weaselbot_stage]
     SB[slackblast_stage]
     QS[qsignups_stage]
   end
@@ -41,9 +41,9 @@ flowchart LR
     ATT[bd_attendance]
   end
   PM -->|regions.schema_name| regional
-  WB -->|regions.paxminer_schema| regional
+  SB -->|regions.paxminer_schema + achievements webhook URL| PM
   SB -->|Slack config| regional
-  QS -->|PAXMINER_REGIONAL_SCHEMA optional| AOS
+  QS -->|PM_REGIONAL_SCHEMA optional| AOS
   QS -->|schedule data| QSMASTER[qsignups_master weekly aos regions]
 ```
 
@@ -66,7 +66,7 @@ flowchart LR
 Resolved in code via [`qsignups/qsignups/permissions.py`](../qsignups/qsignups/permissions.py) using:
 
 - Slack **`users.info`**: `is_admin`, `is_owner`, `is_primary_owner` → **ADMIN**
-- Regional **`aos.site_q_user_id`** (requires **`PAXMINER_REGIONAL_SCHEMA`**) → **AOQ** (Site Q / AOQ)
+- Regional **`aos.site_q_user_id`** (requires **`PM_REGIONAL_SCHEMA`**) → **AOQ** (Site Q / AOQ)
 - Regional **`beatdowns.q_user_id`** (any row) → **Q** (has Q’d a beatdown as primary Q)
 - Else → **USER**
 
@@ -77,7 +77,7 @@ Resolved in code via [`qsignups/qsignups/permissions.py`](../qsignups/qsignups/p
 | Q | Refresh only | No | No | No | No | Yes |
 | USER | Refresh only | No | No | No | No | Own slot only |
 
-If **`PAXMINER_REGIONAL_SCHEMA`** is unset, AOQ and **Q** cannot be detected; behavior falls back to **ADMIN vs USER** (Slack role only) for calendar access.
+If **`PM_REGIONAL_SCHEMA`** is unset, AOQ and **Q** cannot be detected; behavior falls back to **ADMIN vs USER** (Slack role only) for calendar access.
 
 ## Cross-links
 

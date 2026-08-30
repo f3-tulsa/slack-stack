@@ -4,30 +4,146 @@ Part of the **[slack-stack](../README.md)** monorepo. Deploy with SAM (`PAXminer
 
 ## What it does
 
-PAXminer pulls workout (“backblast”) data from regional Slack workspaces, normalizes it, and stores it in a shared MySQL/TiDB database. It also generates charts and stats (per user, AO, and region) and can post them to Slack on a schedule.
+PAXminer pulls workout (“backblast”) data from regional Slack workspaces, normalizes it, and stores it in a shared MySQL/TiDB database. It also generates charts and stats, runs **data-driven achievements** (grant, revoke, leaderboard, almost-there), and sends **Kotter** reports.
 
-Typical data captured per beatdown:
+Each region has its own **schema** in the same database; registry rows in `paxminer.regions` point Lambdas at the right schema, timezone, achievement toggles, and encrypted Slack token. Deploy passes **`PM_SLACK_TOKEN`**, **`PM_SLACK_SIGNING_SECRET`**, **`PM_ACHIEVEMENTS_WEBHOOK_SECRET`**, **`F3_REGION_NAME`**, and **`STAGE`** via SAM; the Lambda **encrypts** the bot token with **`DB_ENCRYPTION_KEY`** and **upserts** it into `paxminer.regions` on cold start.
 
-- AO, date, Q / Co-Q, attendance, FNGs, and related metadata
+**Achievements, Kotter, and the achievement leaderboard are single-region:** they only read attendance from the region's own schema (e.g. `f3ttown_test` / `f3ttown`). Cross-region / “down range” attendance requires the F3 Nation API and is out of scope for now.
 
-Each region usually has its own **schema** in the same database; registry rows in `paxminer.regions` point Lambdas at the right schema and Slack token. Deploy passes **`PM_SLACK_TOKEN`**, **`F3_REGION_NAME`**, and **`STAGE`** via SAM; the Lambda **encrypts** the token with **`DB_ENCRYPTION_KEY`** and **upserts** it into `paxminer.regions` on cold start.
+## Scheduling (unified)
+
+Posting cadence and destinations come from PAXMiner-owned schedule tables (always-on; no feature flag):
+
+| Table | Role |
+|-------|------|
+| `paxminer.region_report_definitions` | What a report is (builtin code-rendered producers + custom builder reports). Builtins are editable/deletable; `is_builtin` is provenance, `is_customized` marks admin edits. |
+| `paxminer.region_schedules` | When/where (destination, frequency, `time_of_day`, enabled) |
+| `paxminer.regions.timezone` | Region TZ (default `America/Chicago`) for due-now evaluation |
+
+`ScheduleFunction` ticks every **15 minutes**, evaluates region-local now, and runs due items (idempotent via `last_run_on` / `last_run_at` / `last_run_status`). Frequencies: **hourly**, daily, weekly, monthly, or custom interval. Configure via `/config-paxminer` → **Schedule** / **PAX Reports**.
+
+**Builtin reports** (from `report_defaults.json`) render from dedicated Python (charts, Kotter, award achievements, achievement leaderboard). You can **rename**, set a **time window** (honored by the SQL), **duplicate**, **delete**, and **schedule** them. Kotter and Award Achievements have no time window — they use their own engines. **Custom reports** use the full builder (source, fields, metric, chart vs table).
+
+**Defaults load on demand only** — migration creates tables/columns but does **not** seed `report_defaults.json`. Use **Add Missing Defaults** on an empty Reports/Schedule/Achievements list. That action merges missing builtins only; existing rows (including edited builtins with `is_customized=1`) stay as they are. A true reset is Delete All, then Add Missing Defaults. **Delete** removes the definition and any schedules that reference it (FK stays `RESTRICT` with app-level cascade). **Duplicate** copies a definition with a uniquified `*_copy` code and no schedules.
+
+Builtin defaults seed **`specific_channels`** destinations with an **empty** channel list — those items stay **skipped** until an admin picks a channel under Schedule. `dm_all_pax` and `all_ao_channels` destinations fan out immediately once due.
+
+Migration: `python migration/paxminer_migrate.py --env test|prod --all` (phases: weaselbot → scheduler DDL → drop-legacy-columns). Deploy updated Slackblast + PAXMiner code **before** `--all`. Legacy scripts `migrate_weaselbot_to_paxminer.py` and `add_report_scheduler.py` are deprecated wrappers.
+
+**Production cutover order:** (1) deploy updated Slackblast + PAXMiner code, (2) run `paxminer_migrate.py --all`, (3) **Add Missing Defaults** in Slack if the region has no reports yet, (4) set Schedule channels and disable any unwanted fan-out.
+
+## What PAXMiner posts
+
+### Text messages (channels + DMs)
+
+| Message | When | Enabled by | Destination(s) |
+|---------|------|------------|----------------|
+| Achievement **granted** (+ emoji reaction) | Schedule (**Award Achievements**, default: daily) | Schedule row `enabled` | Schedule channel **and** a DM to the PAX (+ the AO channel if `post_to_ao`) |
+| Achievement **revoked** | Same Award Achievements run | Schedule row `enabled` | Schedule channel (+ AO channel if `post_to_ao`) |
+| **Achievement leaderboard (YTD)** | Schedule (default: monthly) | Schedule row `enabled` | Schedule destinations |
+| **"Almost there"** progress list | With leaderboard | Schedule row `enabled` | Same as leaderboard |
+| **Kotter / AOQ report** | Schedule + **Run Now** | Schedule row `enabled` | Schedule destinations |
+
+Award grant/revoke, leaderboards, Kotter, and charts are all schedule-driven. Award rules still live under **PAX Achievements**; the schedule only controls when/where awards post.
+
+### Chart images (`files_upload_v2`)
+
+| Chart | When | Destination(s) |
+|-------|------|----------------|
+| **PAX attendance** charts | Schedule (default: monthly) | **DM to each PAX** (or specific PAX) |
+| **Q charts per AO** | Schedule | **Each AO channel** or specific channels |
+| **Q region summary** | Schedule | Region / specific channels |
+| **Region leaderboard** | Schedule | Specific / AO channels |
+| **AO leaderboard** | Schedule | **Each AO channel** or specific |
+| **Custom reports** | Schedule | Chart PNG or Block Kit table |
+
+### Interactive / ephemeral
+
+| Surface | Trigger | Notes |
+|---------|---------|-------|
+| `/config-paxminer` hub | slash | admin-only; timezone on Save; hub buttons for Achievements rules / Reports / Kotter thresholds / Schedule |
+| Schedule / Reports modals | hub buttons | editable builtins + custom builder; Duplicate; Add Missing Defaults; Delete All; Run Now (logs outcome) |
+| App Home | `app_home_opened` | published for everyone; admin-only **PAXMiner Settings** opens the same hub as `/config-paxminer` |
+
+## Lambdas (four functions)
+
+| Function | Trigger | Role |
+|----------|---------|------|
+| **slack** | Function URL + keep-warm every 5 min | Bolt front door; async-invokes ScheduleFunction for Run Now |
+| **sync** | Daily | User/channel sync |
+| **achievements** | Webhook (+ smoke) | Grant/revoke (also via ScheduleFunction for Award Achievements) |
+| **schedule** | `rate(15 minutes)` + async fan-out / Run Now | Unified dispatcher for awards, charts, leaderboards, Kotter, and custom reports |
+
+Function URL outputs: **`SlackFunctionUrl`**, **`AchievementsFunctionUrl`**.
+
+**Run Now:** Schedule list → select item → **Run Now** async-invokes ScheduleFunction immediately (`force=True`). The worker posts the same outcome line to the PAXMiner log channel as a scheduled tick (it does **not** DM the requesting admin). The list shows `last_run_status` / `last_run_on`. The Slack app **Messages** tab stays enabled (`messages_tab_enabled: true`) so PAX still see award and chart DMs.
+
+### Operational log
+
+Best-effort lines in the region's PAXMiner log channel (defaults to `#paxminer_logs` by name until an admin picks one in Settings; same channel used by beatdown/user sync). Labels use **`schema_name`** (e.g. `f3ttown_test`), not the display region name:
+
+| Event | Example line |
+|-------|----------------|
+| Achievement granted / revoked | `- Achievement (f3ttown_test): granted 'Ironman' to <@U…>` |
+| Achievement region failure | `- Achievement (f3ttown_test): FAILED - …` |
+| Automatic schedule run | `- Schedule (f3ttown_test) #3 (kotter): success - posted to 1 channel(s) \| posted: kotter (C…)` |
+
+Scheduled ticks and Run Now share one PAXMiner log-channel outcome (report name, status + duration, optional Results/Period, message count, destination phrase). Chart producers report real upload successes — a resolved AO count is no longer treated as “posted.”
+
+Empty attendance for Achievements/Kotter returns a clear skip/error (and Achievements will **not** mass-revoke awards when attendance data is missing).
+
+### Seed test-region data (dev only)
+
+**Test-only** seeder. Always loads [`.env.deploy.test`](../.env.deploy.example) (no `--env` switch) and hard-fails unless the regional/registry schemas end in `_test` and Slack `auth.test` matches `F3_REGION_SLACK_TEAM_ID`.
+
+**Default (one-shot):** purges any leftover legacy synthetic users (`USEEDPAX*` / `USEEDFILLER*`) and off-roster humans, clears prior `[SEED]` / `json.seed` rows, then rebuilds a realistic ~180-day calendar — weekly multi-PAX (2–4) beatdowns at QSignups AOs using **real Slack users only** (no synthetic PAX). Use `--purge-synthetic` alone to clean without reseeding. `--verify` / `--verify-only` report any remaining synthetic or off-roster users.
+
+```bash
+# From repo root, with .env.deploy.test filled in
+python PAXminer/scripts/seed_test_region.py --yes --verify
+python PAXminer/scripts/seed_test_region.py --yes --days 180 --kotter mia,lowq,noq
+python PAXminer/scripts/seed_test_region.py --purge-synthetic --yes
+# Interactive overlays on top of whatever is already in the DB
+python PAXminer/scripts/seed_test_region.py --interactive
+# Destination / row-count preflight only (no writes)
+python PAXminer/scripts/seed_test_region.py --verify-only
+```
+
+AO list comes from QSignups (`qsignups_test.qsignups_aos`), falling back to regional `aos` then all Slack channels. Interactive mode walks each user (Kotter / one Achievement / clear / skip); overlays **join** existing beatdowns when possible (bump `pax_count`) instead of inventing one-man events, and spread multi-AO goals across distinct dates. Seeded rows are tagged `[SEED]` in backblast and `{"seed": true}` in `json` so clear only removes seed-tagged data. After seeding, run the achievements job (or Schedule → Run Now) to grant awards from attendance — the seeder shapes data rather than inserting fake awards. Not wired into CI or deploy.
+
+To wipe prod-derived attendance first (same test-only guards, typed confirmation):
+
+```bash
+python PAXminer/scripts/reset_test_region.py --dry-run   # report only
+python PAXminer/scripts/reset_test_region.py
+```
+
+Reset clears **all** `bd_attendance` / `beatdowns` / `achievements_awarded`, and prunes `users` / `aos` rows whose Slack IDs are not in the test workspace (`--keep-roster` skips the prune). `achievements_list` rules and views are preserved. Migrated prod attendance is not useful in test because the Slack user IDs differ — reset, then seed.
+
+Manual **Run Now** posts the same outcome line here as a scheduled tick; it does not DM the admin.
 
 ## Slack app manifest
 
-Use **[manifest.json](manifest.json)** (JSON) when creating the Slack app. PAXminer Lambdas are schedule-driven only (no HTTP API); there are no request URLs in the manifest. After `./deploy.sh`, a copy is written as **`manifest-{test|prod}.json`** for consistency (gitignored).
+Use **[manifest.json](manifest.json)**. After deploy, **`manifest-{test|prod}.json`** substitutes **`SlackFunctionUrl`**. Includes **App Home** (Home + Messages tabs) + `app_home_opened`. Do **not** add `incoming-webhook`.
 
 ## Layout (high level)
 
 | Area | Role |
 |------|------|
-| `handlers.py` | Lambda entrypoints (daily sync, monthly charts) |
-| `backblast_scraping/` | Backblast mining from Slack history |
-| `monthly_charts/` | Chart generation and posting |
-| `database_management/` | User/channel sync helpers |
-| `common/encryption.py` | Same Fernet-style helpers as repo root `common/encryption.py` (copied into the Docker image) |
+| `slack_app.py` / `slack_schedule.py` | Bolt listeners |
+| `config_paxminer.py` / `config_schedule.py` | Modal builders |
+| `scheduling.py` | Pure due-now / time-window helpers |
+| `schedule_schema.py` | DDL + seed / Add Missing Defaults |
+| `schedule_runner.py` / `schedule_reports.py` | Dispatcher + custom report runner |
+| `handlers.py` | Lambda entrypoints (incl. `schedule_handler`) |
+| `Dockerfile` / `Dockerfile.slack` | Heavy vs light images |
 
-Legacy **manual / cron** scripts under this tree may still read `slack_token` from the DB without decrypting; the **deployed Lambda path** uses `decrypt_field` and requires `DB_ENCRYPTION_KEY` (min 16 characters). Prefer running through SAM for production.
+## Tests
 
-## License
+Install local test extras so `pytest.ini`'s `timeout = 30` guard actually applies:
 
-See [LICENSE](LICENSE) in this directory (GNU GPL v3 where applicable).
+```bash
+python -m pip install -r PAXminer/requirements-dev.txt
+cd PAXminer && python -m pytest tests/ -q
+pytest -q migration/tests   # from repo root (orchestrator unit tests)
+```

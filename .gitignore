@@ -22,6 +22,7 @@ wheels/
 venv/
 .venv/
 .ven*
+.pytest_plugins/
 env/
 .env/
 ENV/
@@ -58,6 +59,9 @@ node_modules/
 *.swp
 *.swo
 
+# Personal Cursor rule (local machine / account; do not commit)
+.cursor/rules/github-account.mdc
+
 # App artifacts
 data/*.csv
 cache/
@@ -78,6 +82,7 @@ db.sqlite3
 # Migration run artifacts (hosts, SQL error text — do not commit)
 migration_*.json
 migration/receipts/
+migration/rehearsal/sittings/
 
 # Deploy receipts and generated Slack manifests (contain API URLs)
 receipts/

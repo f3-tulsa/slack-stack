@@ -160,9 +160,35 @@ def ensure_users_in_db(
                             "UPDATE beatdowns SET coq_user_id = :new WHERE coq_user_id = :old",
                             "UPDATE bd_attendance SET user_id = :new WHERE user_id = :old",
                             "UPDATE bd_attendance SET q_user_id = :new WHERE q_user_id = :old",
-                            "UPDATE achievements_awarded SET pax_id = :new WHERE pax_id = :old",
                         ):
                             conn.execute(text(stmt), {"new": uid, "old": old_uid})
+                        # Drop the old account's awards that the surviving account
+                        # already holds for the same period, then move the rest.
+                        # UPDATE IGNORE would hide other errors and orphan skipped rows.
+                        # The derived-table wrapper is required: MySQL will not
+                        # SELECT the table being deleted from directly.
+                        conn.execute(
+                            text(
+                                """
+                                DELETE FROM achievements_awarded
+                                 WHERE pax_id = :old
+                                   AND (achievement_id, period_key) IN (
+                                     SELECT achievement_id, period_key FROM (
+                                       SELECT achievement_id, period_key
+                                         FROM achievements_awarded
+                                        WHERE pax_id = :new
+                                     ) AS held
+                                   )
+                                """
+                            ),
+                            {"new": uid, "old": old_uid},
+                        )
+                        conn.execute(
+                            text(
+                                "UPDATE achievements_awarded SET pax_id = :new WHERE pax_id = :old"
+                            ),
+                            {"new": uid, "old": old_uid},
+                        )
                         conn.execute(text("DELETE FROM users WHERE user_id = :old"), {"old": old_uid})
                         logger.info(
                             "ensure_users_in_db: merged user %s into %s (same email %s)",
@@ -177,7 +203,8 @@ def ensure_users_in_db(
                         "VALUES (:uid, :uname, :rname, :phone, :email, NULL, :app, :js) "
                         "ON DUPLICATE KEY UPDATE "
                         "user_name = VALUES(user_name), real_name = VALUES(real_name), "
-                        "phone = VALUES(phone), email = VALUES(email)"
+                        "phone = COALESCE(NULLIF(VALUES(phone), ''), phone), "
+                        "email = COALESCE(VALUES(email), email)"
                     ),
                     {
                         "uid": uid,
@@ -289,6 +316,136 @@ def get_channel_id(name, logger, client):
         if channel["name"] == name:
             return channel["id"]
     return None
+
+
+def resolve_paxminer_log_channel(region_record, logger, client):
+    """Prefer PaxminerRegion.log_channel; fall back to looking up #paxminer_logs by name."""
+    schema = getattr(region_record, "paxminer_schema", None)
+    if schema:
+        try:
+            rows = DbManager.find_records(
+                PaxminerRegion,
+                [PaxminerRegion.schema_name == schema],
+                schema=paxminer_schema_name(),
+            )
+            if rows:
+                stored = (getattr(rows[0], "log_channel", None) or "").strip()
+                if stored:
+                    return stored
+        except Exception:
+            logger.debug("PaxminerRegion log_channel lookup failed", exc_info=True)
+    return get_channel_id("paxminer_logs", logger, client)
+
+
+def backblast_date_label(value) -> str:
+    """The one date format for anything an operator or PAX reads: August 21, 2026.
+
+    Mirrors ``achievements.period.format_date_label`` in PAXMiner; the two apps
+    deploy separately and cannot share a module, so keep them in step by hand.
+    """
+    if hasattr(value, "strftime"):
+        return f"{value.strftime('%B')} {int(value.strftime('%d'))}, {value.strftime('%Y')}"
+    text = str(value or "").strip()
+    try:
+        parsed = datetime.strptime(text[:10], "%Y-%m-%d")
+        return f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
+    except ValueError:
+        return text or "this event"
+
+
+def _log_person_name(user_id, names: dict) -> str:
+    uid = str(user_id or "").strip()
+    if not uid:
+        return "none"
+    return names.get(uid) or uid
+
+
+def _norm_log_value(value) -> str:
+    if value is None:
+        return ""
+    if hasattr(value, "isoformat"):
+        return str(value.isoformat())[:10]
+    return str(value).strip()
+
+
+BACKBLAST_EDIT_SUMMARY_CAP = 10
+
+
+def build_backblast_edit_summary(
+    *,
+    prior,
+    q_user_id,
+    coq_user_id,
+    current_pax_ids: set,
+    prior_pax_ids: set,
+    pax_count,
+    fng_count,
+    bd_date,
+    ao_id,
+    body_changed: bool,
+    names: dict | None = None,
+) -> list[str]:
+    """Scalar edit lines for paxminer_logs. Never diffs the moleskin body."""
+    names = names or {}
+    lines: list[str] = []
+    old_q = getattr(prior, "q_user_id", None)
+    if _norm_log_value(old_q) != _norm_log_value(q_user_id):
+        lines.append(
+            f"Q: {_log_person_name(old_q, names)} → {_log_person_name(q_user_id, names)}"
+        )
+    old_coq = getattr(prior, "coq_user_id", None)
+    if _norm_log_value(old_coq) != _norm_log_value(coq_user_id):
+        lines.append(
+            f"CoQ: {_log_person_name(old_coq, names)} → {_log_person_name(coq_user_id, names)}"
+        )
+    added = sorted(current_pax_ids - prior_pax_ids)
+    removed = sorted(prior_pax_ids - current_pax_ids)
+    if added:
+        shown, extra = added[:8], len(added) - 8
+        label = ", ".join(_log_person_name(u, names) for u in shown)
+        if extra > 0:
+            label = f"{label} +{extra} more"
+        lines.append("PAX added: " + label)
+    if removed:
+        shown, extra = removed[:8], len(removed) - 8
+        label = ", ".join(_log_person_name(u, names) for u in shown)
+        if extra > 0:
+            label = f"{label} +{extra} more"
+        lines.append("PAX removed: " + label)
+    old_count = getattr(prior, "pax_count", None)
+    if _norm_log_value(old_count) != _norm_log_value(pax_count):
+        lines.append(f"Count: {old_count} → {pax_count}")
+    old_fng = getattr(prior, "fng_count", None)
+    if _norm_log_value(old_fng) != _norm_log_value(fng_count):
+        lines.append(f"FNGs: {old_fng} → {fng_count}")
+    old_date = getattr(prior, "bd_date", None)
+    if _norm_log_value(old_date) != _norm_log_value(bd_date):
+        lines.append(f"Date: {old_date} → {bd_date}")
+    old_ao = getattr(prior, "ao_id", None)
+    if _norm_log_value(old_ao) != _norm_log_value(ao_id):
+        lines.append(f"AO: {old_ao} → {ao_id}")
+    if body_changed:
+        lines.append("Backblast body was edited")
+    extra = len(lines) - BACKBLAST_EDIT_SUMMARY_CAP
+    if extra > 0:
+        lines = lines[:BACKBLAST_EDIT_SUMMARY_CAP] + [f"+{extra} more changes"]
+    return lines
+
+
+def format_backblast_paxminer_log(
+    *,
+    edited: bool,
+    ao_id: str,
+    date_label: str,
+    permalink: str | None,
+    summary_lines: list[str] | None = None,
+) -> str:
+    verb = "edited" if edited else "imported"
+    date_part = f"<{permalink}|{date_label}>" if permalink else date_label
+    header = f"Backblast successfully {verb} for <#{ao_id}> on {date_part}."
+    if not edited or not summary_lines:
+        return header
+    return header + "\n```\n" + "\n".join(summary_lines) + "\n```"
 
 
 def get_user_names(
