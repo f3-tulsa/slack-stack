@@ -204,31 +204,6 @@ def _revoke_backblast_link(
     return date_link(d, ao_id, ts, label=label, archive_base=archive_base)
 
 
-def channel_revoke_message(
-    row: dict,
-    *,
-    names: dict[str, str],
-    known_ids: set[str] | None,
-    webhook: bool,
-    archive_base: str | None = None,
-) -> tuple[str, list[dict]]:
-    tag = mention(row["pax_id"], names.get(row["pax_id"]), known_ids=known_ids)
-    name = (row.get("rule") or {}).get("name") or "achievement"
-    period = _revoke_period_label(row)
-    link = _revoke_backblast_link(row, webhook=webhook, archive_base=archive_base)
-    if link:
-        text = (
-            f"Correction: {tag}'s award for *{name}* during period {period} "
-            f"was revoked after attendance was updated on {link}."
-        )
-    else:
-        text = (
-            f"Correction: {tag}'s award for *{name}* during period {period} "
-            f"was revoked after attendance was updated."
-        )
-    return text, [section(text)]
-
-
 def dm_revoke_messages(
     revokes: list[dict],
     *,

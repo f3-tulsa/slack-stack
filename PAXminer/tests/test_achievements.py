@@ -2167,6 +2167,91 @@ def test_iter_year_windows_overlap_attributes_iso_week_once():
     assert keys.count("2026-W01") == 1
 
 
+def _scheduled_revoke_run(**kwargs):
+    """A scheduled run whose only current-year award no longer qualifies."""
+    from achievements.runner import run_achievements_for_region
+
+    pax = "U01REVOKE99"
+    rule = {
+        "id": 1,
+        "name": "Leader of Men",
+        "verb": "Qing",
+        "period": "month",
+        "version_id": 7,
+        "enabled": 1,
+        "metric": "qs",
+        "threshold": 4,
+    }
+    awarded_row = {
+        "id": 99,
+        "achievement_id": 1,
+        "pax_id": pax,
+        "date_awarded": date(2026, 8, 16),
+        "period": "month",
+        "achievement_version_id": 7,
+        "period_key": "2026-08",
+        "period_start": date(2026, 8, 1),
+        "period_end": date(2026, 8, 31),
+        "ao_id": "C_AO",
+        "timestamp": "1750000000.000001",
+    }
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[rule], [awarded_row]]
+    posts = []
+    with patch("achievements.runner.decrypt_field", return_value="x"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.workspace_user_ids", return_value={pax}):
+                with patch(
+                    "achievements.runner.load_nation_attendance",
+                    return_value=_posts(pax, ["2026-08-01"]),
+                ):
+                    with patch(
+                        "achievements.runner.attach_home_regions",
+                        side_effect=lambda c, n, s: n,
+                    ):
+                        with patch(
+                            "achievements.runner.evaluate_rule", return_value=pd.DataFrame()
+                        ):
+                            with patch(
+                                "achievements.runner.post_message",
+                                side_effect=lambda _c, ch, text, **_k: posts.append((ch, text)),
+                            ):
+                                with patch("achievements.runner.post_log"):
+                                    with patch(
+                                        "achievements.runner.open_dm_channel",
+                                        return_value="D1",
+                                    ):
+                                        result = run_achievements_for_region(
+                                            mock_conn,
+                                            pm_schema="pm",
+                                            regional_schema="f3test",
+                                            region_row={
+                                                "send_achievements": 1,
+                                                "achievement_channel": "C1",
+                                                "slack_token": "enc",
+                                            },
+                                            start=date(2026, 1, 1),
+                                            end=date(2026, 12, 31),
+                                            allow_revoke=True,
+                                            period_year=2026,
+                                            log_mode="scheduled",
+                                            **kwargs,
+                                        )
+    return result, posts, pax
+
+
+def test_scheduled_run_revokes_current_year_dm_only():
+    """A revoke reaches the PAX by DM; no per-PAX correction ever lands in a channel."""
+    result, posts, _pax = _scheduled_revoke_run()
+
+    assert result["revokes"] == 1
+    assert not [t for ch, t in posts if ch == "C1"]
+    assert len([t for ch, t in posts if ch == "D1"]) == 1
+
+
 def test_scheduled_run_holds_iso_w01_boundary_week():
     """2026-W01 begins Dec 29, 2025: a bare Jan 1 start truncates it and wrongly revokes."""
     from achievements.runner import run_achievements_for_region

@@ -14,7 +14,6 @@ from achievements.activity import classify_null_activity_types
 from achievements.range import hold_prior_version_awards
 from achievements.announcements import (
     channel_grant_messages,
-    channel_revoke_message,
     dm_grant_messages,
     dm_revoke_messages,
     grant_log_line,
@@ -557,18 +556,6 @@ def run_achievements_for_region(
             post_messages(client, cid, packed)
         if post_to_ao and ao_channel_id:
             post_messages(client, ao_channel_id, packed)
-        for g in revokes:
-            text, blocks = channel_revoke_message(
-                g,
-                names=names,
-                known_ids=known_ids,
-                webhook=webhook,
-                archive_base=archive_base,
-            )
-            for cid in channels:
-                post_message(client, cid, text, blocks=blocks)
-            if post_to_ao and ao_channel_id:
-                post_message(client, ao_channel_id, text, blocks=blocks)
         dm_map = dm_grant_messages(
             grants,
             year=year,
