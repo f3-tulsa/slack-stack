@@ -68,14 +68,6 @@ jobs:
           git push
           echo "::notice::Requirements exports were out of sync and have been auto-fixed (app-token push retriggers CI)."
 
-  # Keep the legacy check name so branch rulesets that still require
-  # weaselbot-requirements-sync stay green without a ruleset edit.
-  weaselbot-requirements-sync:
-    runs-on: ubuntu-latest
-    needs: [requirements-sync]
-    steps:
-      - run: echo "Weaselbot retired; covered by requirements-sync (slackblast only)."
-
   pre-commit:
     runs-on: ubuntu-latest
     steps:
