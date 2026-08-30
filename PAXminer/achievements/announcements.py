@@ -146,6 +146,42 @@ def channel_grant_messages(
     return out
 
 
+def ao_thread_grant_message(
+    grants: list[dict],
+    *,
+    achievement_channel_id: str | None,
+    names: dict[str, str],
+    known_ids: set[str] | None,
+) -> tuple[str, list[dict]] | None:
+    """One short reply for the AO channel: who earned something, and where to read it.
+
+    The full T-claps already run in the achievements channel; repeating them on
+    the Backblast is the same news twice.
+    """
+    if not grants:
+        return None
+    tags: list[str] = []
+    seen: set[str] = set()
+    for g in grants:
+        pax_id = str(g["pax_id"])
+        if pax_id in seen:
+            continue
+        seen.add(pax_id)
+        tags.append(mention(pax_id, names.get(pax_id), known_ids=known_ids))
+    if not tags:
+        return None
+    if len(tags) == 1:
+        who = tags[0]
+    elif len(tags) == 2:
+        who = f"{tags[0]} and {tags[1]}"
+    else:
+        who = f"{', '.join(tags[:-1])}, and {tags[-1]}"
+    where = f" See <#{achievement_channel_id}> for the details." if achievement_channel_id else ""
+    noun = "an achievement" if len(tags) == 1 else "achievements"
+    text = f"T-Claps :clap: to {who} for unlocking {noun}!{where}"
+    return text, [section(text)]
+
+
 def dm_grant_messages(
     grants: list[dict],
     *,
@@ -192,85 +228,38 @@ def _revoke_period_label(row: dict) -> str:
     return spoken_period(row.get("period_start"), row.get("period_end"), row.get("period") or "year")
 
 
-def _revoke_backblast_link(
-    row: dict, *, webhook: bool, archive_base: str | None = None
-) -> str | None:
-    ao_id = row.get("trigger_ao_id") or row.get("ao_id")
-    ts = row.get("trigger_timestamp") or row.get("timestamp")
-    d = row.get("trigger_date") or row.get("date_awarded")
-    if not (ao_id and ts and d):
-        return None
-    label = format_date_label(_as_date(d))
-    return date_link(d, ao_id, ts, label=label, archive_base=archive_base)
-
-
-def channel_revoke_message(
-    row: dict,
-    *,
-    names: dict[str, str],
-    known_ids: set[str] | None,
-    webhook: bool,
-    archive_base: str | None = None,
-) -> tuple[str, list[dict]]:
-    tag = mention(row["pax_id"], names.get(row["pax_id"]), known_ids=known_ids)
-    name = (row.get("rule") or {}).get("name") or "achievement"
-    period = _revoke_period_label(row)
-    link = _revoke_backblast_link(row, webhook=webhook, archive_base=archive_base)
-    if link:
-        text = (
-            f"Correction: {tag}'s award for *{name}* during period {period} "
-            f"was revoked after attendance was updated on {link}."
-        )
-    else:
-        text = (
-            f"Correction: {tag}'s award for *{name}* during period {period} "
-            f"was revoked after attendance was updated."
-        )
-    return text, [section(text)]
-
-
 def dm_revoke_messages(
     revokes: list[dict],
     *,
     names: dict[str, str],
     known_ids: set[str] | None,
-    webhook: bool,
     archive_base: str | None = None,
 ) -> dict[str, tuple[str, list[dict]]]:
+    """One DM per PAX. The revoke is private, names the period, and points at the ITQ."""
+    del archive_base
     by_pax: dict[str, list[dict]] = {}
     for row in revokes:
         by_pax.setdefault(str(row["pax_id"]), []).append(row)
     out: dict[str, tuple[str, list[dict]]] = {}
     for pax_id, group in by_pax.items():
         tag = mention(pax_id, names.get(pax_id), known_ids=known_ids)
-        lines = []
-        for row in group:
+        contact = "If you believe this is an error, please contact your ITQ."
+        if len(group) == 1:
+            row = group[0]
             name = (row.get("rule") or {}).get("name") or "achievement"
-            period = _revoke_period_label(row)
-            link = _revoke_backblast_link(
-                row, webhook=webhook, archive_base=archive_base
-            )
-            if link:
-                lines.append(
-                    f"your award for *{name}* during period {period} was revoked "
-                    f"after attendance was updated for {link}"
-                )
-            else:
-                lines.append(
-                    f"your award for *{name}* during period {period} was revoked "
-                    f"after attendance was updated"
-                )
-        if len(lines) == 1:
             text = (
-                f"Correction: Hey {tag}, just letting you know that {lines[0]}. "
-                f"Keep showing up and you'll get it back!"
+                f"Correction: {tag}, your award for *{name}* ({_revoke_period_label(row)}) "
+                f"was revoked during a re-evaluation. {contact}"
             )
         else:
-            bullets = "\n".join(lines)
+            bullets = "\n".join(
+                f"• *{(row.get('rule') or {}).get('name') or 'achievement'}* "
+                f"({_revoke_period_label(row)})"
+                for row in group
+            )
             text = (
-                f"Correction: Hey {tag}, just letting you know that {len(lines)} awards "
-                f"were revoked after attendance was updated. Keep showing up and you'll get them back!\n"
-                f"{bullets}"
+                f"Correction: {tag}, {len(group)} of your awards were revoked during a "
+                f"re-evaluation. {contact}\n{bullets}"
             )
         out[pax_id] = (text, [section(text)])
     return out
@@ -312,10 +301,8 @@ def revoke_log_line(
     row: dict,
     display_name: str | None,
     *,
-    webhook: bool = False,
     archive_base: str | None = None,
 ) -> str:
-    del webhook
     return award_log_line(row, display_name, granted=False, archive_base=archive_base)
 
 

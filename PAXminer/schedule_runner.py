@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -963,6 +963,11 @@ def _dispatch_report(
                     "channel_count": 0,
                     "user_count": 0,
                 }
+            today = date.today()
+            # The first ISO week of a year can begin in the prior December
+            # (2026-W01 starts Mon Dec 29, 2025). Starting at Jan 1 would
+            # truncate it, under-count the week, and wrongly revoke a valid
+            # award; period_year still clamps what this run may act on.
             result = run_achievements_for_region(
                 registry_conn,
                 pm_schema=pm_schema,
@@ -970,6 +975,10 @@ def _dispatch_report(
                 region_row=region,
                 channel_override=channel_ids[0],
                 post_channels=channel_ids,
+                start=date(today.year, 1, 1) - timedelta(days=7),
+                end=today,
+                allow_revoke=True,
+                period_year=today.year,
             )
             if isinstance(result, dict):
                 result = dict(result)
