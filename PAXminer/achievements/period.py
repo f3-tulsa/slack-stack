@@ -64,7 +64,13 @@ def spoken_period(period_start, period_end, period: str) -> str:
     if start is None:
         return str(period or "")
     if period == "week":
-        return f"week of {format_date_label(start)}"
+        # ISO weeks are keyed by the year holding their Thursday, so 2026-W01
+        # begins Dec 29, 2025. Naming only the Monday reads like a 2025 award;
+        # spelling out both ends leaves no doubt which week is meant.
+        end = _as_date(period_end)
+        if end is None:
+            return f"week of {format_date_label(start)}"
+        return f"week of {format_date_label(start)} - {format_date_label(end)}"
     if period == "month":
         return start.strftime("%B %Y")
     return str(start.year)

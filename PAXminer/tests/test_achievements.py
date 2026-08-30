@@ -2252,6 +2252,19 @@ def test_scheduled_run_revokes_current_year_dm_only():
     assert len([t for ch, t in posts if ch == "D1"]) == 1
 
 
+def test_spoken_period_week_spells_out_both_ends():
+    """2026-W01 starts in December 2025 — the label must not read as a 2025 award."""
+    from achievements.period import spoken_period
+
+    assert (
+        spoken_period(date(2025, 12, 29), date(2026, 1, 4), "week")
+        == "week of December 29, 2025 - January 4, 2026"
+    )
+    assert spoken_period(date(2026, 3, 2), None, "week") == "week of March 2, 2026"
+    assert spoken_period(date(2026, 8, 1), date(2026, 8, 31), "month") == "August 2026"
+    assert spoken_period(date(2026, 1, 1), date(2026, 12, 31), "year") == "2026"
+
+
 def test_revoke_dm_names_the_period_and_points_at_the_itq():
     from achievements.announcements import dm_revoke_messages
 
@@ -2270,6 +2283,7 @@ def test_revoke_dm_names_the_period_and_points_at_the_itq():
     assert text.startswith(f"Correction: <@{pax}>,")
     assert "*6 pack*" in text
     assert "December 29, 2025" in text
+    assert "January 4, 2026" in text
     assert "was revoked during a re-evaluation" in text
     assert "please contact your ITQ." in text
     assert "http" not in text
