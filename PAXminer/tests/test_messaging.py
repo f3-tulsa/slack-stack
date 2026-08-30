@@ -147,7 +147,7 @@ def test_award_log_line_grant_and_revoke_share_suffix():
         "rule": {"name": "Leader of Men"},
     }
     grant = grant_log_line(row, "Nacho")
-    revoke = revoke_log_line(row, "Nacho", webhook=True)
+    revoke = revoke_log_line(row, "Nacho")
     assert grant == award_log_line(row, "Nacho", granted=True)
     assert revoke == award_log_line(row, "Nacho", granted=False)
     assert "granted to `Nacho`" in grant
@@ -437,6 +437,19 @@ def test_emoji_only_edit_does_not_mint_or_queue():
     )
 
 
+def test_post_message_threads_only_when_given_a_parent_ts():
+    from slack_util import post_message
+
+    client = MagicMock()
+    client.chat_postMessage.return_value = {"ok": True, "ts": "1.0"}
+
+    post_message(client, "C1", "hi", thread_ts="1750000000.000001")
+    assert client.chat_postMessage.call_args.kwargs["thread_ts"] == "1750000000.000001"
+
+    post_message(client, "C1", "hi")
+    assert "thread_ts" not in client.chat_postMessage.call_args.kwargs
+
+
 def test_post_message_reaction_failures_never_repost_or_raise():
     from slack_util import post_message
 
@@ -471,6 +484,36 @@ def test_post_message_reaction_failures_never_repost_or_raise():
     client4.reactions_add.side_effect = _slack_err("already_reacted")
     post_message(client4, "C1", "hi", add_reaction=True)
     assert client4.chat_postMessage.call_count == 1
+
+
+def test_reaction_joins_channel_on_not_in_channel_then_retries():
+    """chat:write.public posts don't join, but reactions.add needs membership.
+
+    Regression: T-clap fire silently disappeared because the bot wasn't a
+    member of the achievement channel, reactions.add failed not_in_channel, and
+    the error was swallowed. We now join once and retry so the fire lands.
+    """
+    from slack_util import post_message
+
+    client = MagicMock()
+    client.chat_postMessage.return_value = {"ok": True, "ts": "1.0"}
+    client.reactions_add.side_effect = [_slack_err("not_in_channel"), None]
+    post_message(client, "C1", "T-clap!", add_reaction=True, reaction="fire")
+    client.conversations_join.assert_called_once_with(channel="C1")
+    assert client.reactions_add.call_count == 2
+    assert [c.kwargs["name"] for c in client.reactions_add.call_args_list] == ["fire", "fire"]
+
+
+def test_reaction_not_in_channel_join_failure_is_swallowed():
+    from slack_util import post_message
+
+    client = MagicMock()
+    client.chat_postMessage.return_value = {"ok": True, "ts": "2.0"}
+    client.reactions_add.side_effect = _slack_err("not_in_channel")
+    client.conversations_join.side_effect = _slack_err("channel_not_found")
+    # Private channel we can't join: never raises, never reposts.
+    post_message(client, "C1", "T-clap!", add_reaction=True, reaction="fire")
+    assert client.chat_postMessage.call_count == 1
 
 
 def test_reconcile_created_posts_zero_grant_line_changed_does_not():

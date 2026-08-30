@@ -144,6 +144,7 @@ def achievements_handler(event, context):
                     post_to_ao=post_to_ao,
                     ao_channel_id=ao_channel_id,
                     log_mode="webhook",
+                    allow_revoke=False,
                     trigger_ao_id=ao_channel_id,
                     trigger_timestamp=trigger_ts,
                     trigger_date=trigger_date,

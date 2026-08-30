@@ -339,6 +339,7 @@ def _reaction_names(reaction: str | Sequence[str] | None) -> list[str]:
 
 def _apply_reactions(client: WebClient, channel: str, ts: str, names: list[str]) -> None:
     """Best-effort reactions. Isolated per emoji; never raises; never retries the post."""
+    joined = False
     for name in names:
         try:
             client.reactions_add(channel=channel, name=name, timestamp=ts)
@@ -348,6 +349,20 @@ def _apply_reactions(client: WebClient, channel: str, ts: str, names: list[str])
                 err = e.response.get("error") if e.response is not None else None
             except Exception:
                 err = None
+            # Grants post via chat:write.public, so the bot may not be a channel
+            # member — but reactions.add requires membership and fails
+            # not_in_channel. Join once and retry so the T-clap keeps its fire.
+            if err == "not_in_channel" and not joined:
+                try:
+                    client.conversations_join(channel=channel)
+                    joined = True
+                    client.reactions_add(channel=channel, name=name, timestamp=ts)
+                    continue
+                except Exception:
+                    logging.info("reaction %s skipped after join channel=%s", name, channel)
+                    continue
+            if err == "already_reacted":
+                continue
             logging.info(
                 "reaction %s skipped channel=%s error=%s",
                 name,
@@ -368,6 +383,7 @@ def post_message(
     reaction: str | Sequence[str] | None = "fire",
     unfurl_links: bool = False,
     unfurl_media: bool = False,
+    thread_ts: str | None = None,
     max_retries: int = 5,
 ) -> None:
     kwargs: dict = {
@@ -379,6 +395,8 @@ def post_message(
     }
     if blocks:
         kwargs["blocks"] = blocks
+    if thread_ts:
+        kwargs["thread_ts"] = thread_ts
     last_error: Exception | None = None
     response = None
     for attempt in range(max_retries):

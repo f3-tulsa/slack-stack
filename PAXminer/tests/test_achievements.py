@@ -1,5 +1,5 @@
 import os
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -2167,7 +2167,600 @@ def test_iter_year_windows_overlap_attributes_iso_week_once():
     assert keys.count("2026-W01") == 1
 
 
-def test_genuine_revoke_posts_channel_dm_and_log():
+def _scheduled_revoke_run(**kwargs):
+    """A scheduled run whose only current-year award no longer qualifies."""
+    from achievements.runner import run_achievements_for_region
+
+    pax = "U01REVOKE99"
+    rule = {
+        "id": 1,
+        "name": "Leader of Men",
+        "verb": "Qing",
+        "period": "month",
+        "version_id": 7,
+        "enabled": 1,
+        "metric": "qs",
+        "threshold": 4,
+    }
+    awarded_row = {
+        "id": 99,
+        "achievement_id": 1,
+        "pax_id": pax,
+        "date_awarded": date(2026, 8, 16),
+        "period": "month",
+        "achievement_version_id": 7,
+        "period_key": "2026-08",
+        "period_start": date(2026, 8, 1),
+        "period_end": date(2026, 8, 31),
+        "ao_id": "C_AO",
+        "timestamp": "1750000000.000001",
+    }
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[rule], [awarded_row]]
+    posts = []
+    with patch("achievements.runner.decrypt_field", return_value="x"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.workspace_user_ids", return_value={pax}):
+                with patch(
+                    "achievements.runner.load_nation_attendance",
+                    return_value=_posts(pax, ["2026-08-01"]),
+                ):
+                    with patch(
+                        "achievements.runner.attach_home_regions",
+                        side_effect=lambda c, n, s: n,
+                    ):
+                        with patch(
+                            "achievements.runner.evaluate_rule", return_value=pd.DataFrame()
+                        ):
+                            with patch(
+                                "achievements.runner.post_message",
+                                side_effect=lambda _c, ch, text, **_k: posts.append((ch, text)),
+                            ):
+                                with patch("achievements.runner.post_log"):
+                                    with patch(
+                                        "achievements.runner.open_dm_channel",
+                                        return_value="D1",
+                                    ):
+                                        result = run_achievements_for_region(
+                                            mock_conn,
+                                            pm_schema="pm",
+                                            regional_schema="f3test",
+                                            region_row={
+                                                "send_achievements": 1,
+                                                "achievement_channel": "C1",
+                                                "slack_token": "enc",
+                                            },
+                                            start=date(2026, 1, 1),
+                                            end=date(2026, 12, 31),
+                                            allow_revoke=True,
+                                            period_year=2026,
+                                            log_mode="scheduled",
+                                            **kwargs,
+                                        )
+    return result, posts, pax
+
+
+def test_scheduled_run_revokes_current_year_dm_only():
+    """A revoke reaches the PAX by DM; no per-PAX correction ever lands in a channel."""
+    result, posts, _pax = _scheduled_revoke_run()
+
+    assert result["revokes"] == 1
+    assert not [t for ch, t in posts if ch == "C1"]
+    assert len([t for ch, t in posts if ch == "D1"]) == 1
+
+
+def test_ao_thread_grant_message_mentions_pax_without_detail():
+    from achievements.announcements import ao_thread_grant_message
+
+    a, b = "U01AAAAAAA1", "U01AAAAAAA2"
+    grant = {
+        "pax_id": a,
+        "achievement_id": 1,
+        "date_awarded": date(2026, 8, 16),
+        "rule": {"name": "Leader of Men", "verb": "Qing at 4 beatdowns"},
+    }
+    names = {a: "A", b: "B"}
+    known = {a, b}
+
+    single = ao_thread_grant_message(
+        [grant], achievement_channel_id="C_ACH", names=names, known_ids=known
+    )[0]
+    assert f"<@{a}>" in single
+    assert "<#C_ACH>" in single
+    assert "an achievement" in single
+    # A pointer, not a second copy of the T-clap.
+    assert "Leader of Men" not in single
+    assert "August 16" not in single
+
+    # One combined reply, and a PAX earning twice is only mentioned once.
+    many = ao_thread_grant_message(
+        [grant, dict(grant, pax_id=b), dict(grant, achievement_id=2)],
+        achievement_channel_id="C_ACH",
+        names=names,
+        known_ids=known,
+    )[0]
+    assert many.count(f"<@{a}>") == 1
+    assert f"<@{b}>" in many
+    assert "achievements" in many
+
+    assert (
+        ao_thread_grant_message(
+            [], achievement_channel_id="C_ACH", names=names, known_ids=known
+        )
+        is None
+    )
+    no_link = ao_thread_grant_message(
+        [grant], achievement_channel_id=None, names=names, known_ids=known
+    )[0]
+    assert "<#" not in no_link
+
+
+def _ao_grant_run(trigger_timestamp):
+    """A webhook grant with an AO channel to reply in."""
+    from achievements.runner import run_achievements_for_region
+
+    pax = "U01AOTHREAD"
+    rule = {
+        "id": 1,
+        "name": "6 pack",
+        "verb": "posting",
+        "period": "week",
+        "version_id": 7,
+        "enabled": 1,
+        "metric": "posts",
+        "threshold": 6,
+    }
+    qualified = pd.DataFrame(
+        {
+            "pax_id": [pax],
+            "period_key": ["2026-W11"],
+            "period_bucket": ["2026-W11"],
+            "date_awarded": [date(2026, 3, 9)],
+            "period_start": [date(2026, 3, 9)],
+            "period_end": [date(2026, 3, 15)],
+            "qualifying_count": [6],
+            "ao_id": ["C_AO"],
+            "timestamp": ["1750000000.000001"],
+        }
+    )
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[rule], []]
+    mock_cur.rowcount = 1
+    single_posts = []
+    batch_posts = []
+
+    with patch("achievements.runner.decrypt_field", return_value="x"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.workspace_user_ids", return_value={pax}):
+                with patch(
+                    "achievements.runner.load_nation_attendance",
+                    return_value=_posts(pax, ["2026-03-09"]),
+                ):
+                    with patch(
+                        "achievements.runner.attach_home_regions",
+                        side_effect=lambda c, n, s: n,
+                    ):
+                        with patch("achievements.runner.evaluate_rule", return_value=qualified):
+                            with patch(
+                                "achievements.runner.post_messages",
+                                side_effect=lambda _c, ch, items, **_k: batch_posts.append(
+                                    (ch, items)
+                                ),
+                            ):
+                                with patch(
+                                    "achievements.runner.post_message",
+                                    side_effect=lambda _c, ch, text, **kw: single_posts.append(
+                                        (ch, text, kw.get("thread_ts"))
+                                    ),
+                                ):
+                                    with patch("achievements.runner.post_log"):
+                                        with patch(
+                                            "achievements.runner.open_dm_channel",
+                                            return_value="D1",
+                                        ):
+                                            run_achievements_for_region(
+                                                mock_conn,
+                                                pm_schema="pm",
+                                                regional_schema="f3test",
+                                                region_row={
+                                                    "send_achievements": 1,
+                                                    "achievement_channel": "C1",
+                                                    "slack_token": "enc",
+                                                },
+                                                pax_user_ids={pax},
+                                                post_to_ao=True,
+                                                ao_channel_id="C_AO",
+                                                log_mode="webhook",
+                                                trigger_ao_id="C_AO",
+                                                trigger_timestamp=trigger_timestamp,
+                                                trigger_date=date(2026, 3, 9),
+                                            )
+    return single_posts, batch_posts, pax
+
+
+def test_ao_thread_reply_mentions_pax_and_links_channel():
+    single_posts, batch_posts, pax = _ao_grant_run("1750000000.000001")
+
+    # Full T-claps go to the achievements channel only.
+    assert [ch for ch, _items in batch_posts] == ["C1"]
+
+    ao_replies = [(t, ts) for ch, t, ts in single_posts if ch == "C_AO"]
+    assert len(ao_replies) == 1
+    text, thread_ts = ao_replies[0]
+    assert thread_ts == "1750000000.000001"
+    assert f"<@{pax}>" in text
+    assert "<#C1>" in text
+    assert "6 pack" not in text
+
+
+def test_ao_reply_falls_back_to_top_level_without_a_backblast_ts():
+    single_posts, _batch, _pax = _ao_grant_run(None)
+
+    ao_replies = [(t, ts) for ch, t, ts in single_posts if ch == "C_AO"]
+    assert len(ao_replies) == 1
+    assert ao_replies[0][1] is None
+
+
+def test_spoken_period_week_spells_out_both_ends():
+    """2026-W01 starts in December 2025 — the label must not read as a 2025 award."""
+    from achievements.period import spoken_period
+
+    assert (
+        spoken_period(date(2025, 12, 29), date(2026, 1, 4), "week")
+        == "week of December 29, 2025 - January 4, 2026"
+    )
+    assert spoken_period(date(2026, 3, 2), None, "week") == "week of March 2, 2026"
+    assert spoken_period(date(2026, 8, 1), date(2026, 8, 31), "month") == "August 2026"
+    assert spoken_period(date(2026, 1, 1), date(2026, 12, 31), "year") == "2026"
+
+
+def test_revoke_dm_names_the_period_and_points_at_the_itq():
+    from achievements.announcements import dm_revoke_messages
+
+    pax = "U01AAAAAAA1"
+    row = {
+        "pax_id": pax,
+        "period": "week",
+        "period_start": date(2025, 12, 29),
+        "period_end": date(2026, 1, 4),
+        "rule": {"name": "6 pack"},
+        "ao_id": "C_AO",
+        "timestamp": "1750000000.000001",
+    }
+    text = dm_revoke_messages([row], names={pax: "A"}, known_ids={pax})[pax][0]
+
+    assert text.startswith(f"Correction: <@{pax}>,")
+    assert "*6 pack*" in text
+    assert "December 29, 2025" in text
+    assert "January 4, 2026" in text
+    assert "was revoked during a re-evaluation" in text
+    assert "please contact your ITQ." in text
+    assert "http" not in text
+    assert "Keep showing up" not in text
+
+    multi = dm_revoke_messages(
+        [row, dict(row, rule={"name": "Leader of Men"})],
+        names={pax: "A"},
+        known_ids={pax},
+    )[pax][0]
+    assert "2 of your awards were revoked" in multi
+    assert "*Leader of Men*" in multi
+    assert "please contact your ITQ." in multi
+
+
+def test_net_neutral_move_suppresses_both_dms():
+    """Revoking and re-granting the same achievement is a move, not news."""
+    from achievements.runner import run_achievements_for_region
+
+    pax = "U01MOVER001"
+    rule = {
+        "id": 1,
+        "name": "6 pack",
+        "verb": "posting",
+        "period": "week",
+        "version_id": 7,
+        "enabled": 1,
+        "metric": "posts",
+        "threshold": 6,
+    }
+    other = dict(rule, id=2, name="Leader of Men")
+    awarded_rows = [
+        {
+            "id": 99,
+            "achievement_id": 1,
+            "pax_id": pax,
+            "date_awarded": date(2026, 3, 2),
+            "period": "week",
+            "achievement_version_id": 7,
+            "period_key": "2026-W10",
+            "period_start": date(2026, 3, 2),
+            "period_end": date(2026, 3, 8),
+        },
+        {
+            "id": 100,
+            "achievement_id": 2,
+            "pax_id": pax,
+            "date_awarded": date(2026, 3, 2),
+            "period": "week",
+            "achievement_version_id": 7,
+            "period_key": "2026-W10",
+            "period_start": date(2026, 3, 2),
+            "period_end": date(2026, 3, 8),
+        },
+    ]
+    # Achievement 1 moves W10 -> W11 (balanced). Achievement 2 is only revoked.
+    qualified = pd.DataFrame(
+        {
+            "pax_id": [pax],
+            "period_key": ["2026-W11"],
+            "period_bucket": ["2026-W11"],
+            "date_awarded": [date(2026, 3, 9)],
+            "period_start": [date(2026, 3, 9)],
+            "period_end": [date(2026, 3, 15)],
+            "qualifying_count": [6],
+            "ao_id": ["C_AO"],
+            "timestamp": ["1750000000.000001"],
+        }
+    )
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[rule, other], awarded_rows]
+    mock_cur.rowcount = 1
+    dms = []
+
+    def _evaluate(_nation, r, **_kw):
+        return qualified if int(r["id"]) == 1 else pd.DataFrame()
+
+    with patch("achievements.runner.decrypt_field", return_value="x"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.workspace_user_ids", return_value={pax}):
+                with patch(
+                    "achievements.runner.load_nation_attendance",
+                    return_value=_posts(pax, ["2026-03-09"]),
+                ):
+                    with patch(
+                        "achievements.runner.attach_home_regions",
+                        side_effect=lambda c, n, s: n,
+                    ):
+                        with patch("achievements.runner.evaluate_rule", side_effect=_evaluate):
+                            with patch("achievements.runner.post_messages"):
+                                with patch(
+                                    "achievements.runner.post_message",
+                                    side_effect=lambda _c, ch, text, **_k: dms.append((ch, text)),
+                                ):
+                                    with patch("achievements.runner.post_log"):
+                                        with patch(
+                                            "achievements.runner.open_dm_channel",
+                                            return_value="D1",
+                                        ):
+                                            result = run_achievements_for_region(
+                                                mock_conn,
+                                                pm_schema="pm",
+                                                regional_schema="f3test",
+                                                region_row={
+                                                    "send_achievements": 1,
+                                                    "achievement_channel": "C1",
+                                                    "slack_token": "enc",
+                                                },
+                                                start=date(2026, 1, 1),
+                                                end=date(2026, 12, 31),
+                                                allow_revoke=True,
+                                                period_year=2026,
+                                                log_mode="scheduled",
+                                            )
+
+    # Writes and counts are untouched; only the paired DMs are silenced.
+    assert result["grants"] == 1
+    assert result["revokes"] == 2
+    texts = [t for ch, t in dms if ch == "D1"]
+    assert len(texts) == 1
+    assert "Leader of Men" in texts[0]
+    assert "6 pack" not in texts[0]
+
+
+def test_standalone_revoke_and_grant_still_dm():
+    """Only a balanced move is silent; standalone or unbalanced changes still DM."""
+    from achievements.runner import run_achievements_for_region
+
+    pax = "U01MIXER001"
+    six = {
+        "id": 1,
+        "name": "6 pack",
+        "verb": "posting",
+        "period": "week",
+        "version_id": 7,
+        "enabled": 1,
+        "metric": "posts",
+        "threshold": 6,
+    }
+    leader = dict(six, id=2, name="Leader of Men")
+    centurion = dict(six, id=3, name="Centurion")
+
+    def _award(aid, key, day):
+        return {
+            "id": aid * 100 + day,
+            "achievement_id": aid,
+            "pax_id": pax,
+            "date_awarded": date(2026, 3, day),
+            "period": "week",
+            "achievement_version_id": 7,
+            "period_key": key,
+            "period_start": date(2026, 3, day),
+            "period_end": date(2026, 3, day + 6),
+        }
+
+    # 6 pack: 2 old weeks disqualified, 1 new week earned -> unbalanced (not a move).
+    # Leader of Men: standalone revoke. Centurion: standalone grant.
+    awarded_rows = [
+        _award(1, "2026-W10", 2),
+        _award(1, "2026-W11", 9),
+        _award(2, "2026-W10", 2),
+    ]
+    won = pd.DataFrame(
+        {
+            "pax_id": [pax],
+            "period_key": ["2026-W12"],
+            "period_bucket": ["2026-W12"],
+            "date_awarded": [date(2026, 3, 16)],
+            "period_start": [date(2026, 3, 16)],
+            "period_end": [date(2026, 3, 22)],
+            "qualifying_count": [6],
+            "ao_id": ["C_AO"],
+            "timestamp": ["1750000000.000001"],
+        }
+    )
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[six, leader, centurion], awarded_rows]
+    mock_cur.rowcount = 1
+    dms = []
+
+    def _evaluate(_nation, r, **_kw):
+        return won if int(r["id"]) in (1, 3) else pd.DataFrame()
+
+    with patch("achievements.runner.decrypt_field", return_value="x"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.workspace_user_ids", return_value={pax}):
+                with patch(
+                    "achievements.runner.load_nation_attendance",
+                    return_value=_posts(pax, ["2026-03-16"]),
+                ):
+                    with patch(
+                        "achievements.runner.attach_home_regions",
+                        side_effect=lambda c, n, s: n,
+                    ):
+                        with patch("achievements.runner.evaluate_rule", side_effect=_evaluate):
+                            with patch("achievements.runner.post_messages"):
+                                with patch(
+                                    "achievements.runner.post_message",
+                                    side_effect=lambda _c, ch, text, **_k: dms.append((ch, text)),
+                                ):
+                                    with patch("achievements.runner.post_log"):
+                                        with patch(
+                                            "achievements.runner.open_dm_channel",
+                                            return_value="D1",
+                                        ):
+                                            result = run_achievements_for_region(
+                                                mock_conn,
+                                                pm_schema="pm",
+                                                regional_schema="f3test",
+                                                region_row={
+                                                    "send_achievements": 1,
+                                                    "achievement_channel": "C1",
+                                                    "slack_token": "enc",
+                                                },
+                                                start=date(2026, 1, 1),
+                                                end=date(2026, 12, 31),
+                                                allow_revoke=True,
+                                                period_year=2026,
+                                                log_mode="scheduled",
+                                            )
+
+    assert result["grants"] == 2  # 6 pack W12, Centurion W12
+    assert result["revokes"] == 3  # 6 pack W10 + W11, Leader of Men W10
+    texts = [t for ch, t in dms if ch == "D1"]
+    grant_dm = next(t for t in texts if "just earned" in t or "just unlocked" in t)
+    revoke_dm = next(t for t in texts if "was revoked" in t or "were revoked" in t)
+    # Standalone grant and standalone revoke each reach the PAX.
+    assert "Centurion" in grant_dm
+    assert "Leader of Men" in revoke_dm
+    # Unbalanced same-achievement (2 revoked, 1 granted) is NOT treated as a move.
+    assert "6 pack" in grant_dm
+    assert "6 pack" in revoke_dm
+
+
+def test_scheduled_run_holds_iso_w01_boundary_week():
+    """2026-W01 begins Dec 29, 2025: a bare Jan 1 start truncates it and wrongly revokes."""
+    from achievements.runner import run_achievements_for_region
+
+    pax = "U01BOUNDARY"
+    rule = {
+        "id": 1,
+        "name": "6 pack",
+        "verb": "posting 6 times in a week",
+        "metric": "posts",
+        "activity": [],
+        "period": "week",
+        "threshold": 6,
+        "version_id": 7,
+        "enabled": 1,
+    }
+    awarded_row = {
+        "id": 42,
+        "achievement_id": 1,
+        "pax_id": pax,
+        "date_awarded": date(2026, 1, 3),
+        "period": "week",
+        "achievement_version_id": 7,
+        "period_key": "2026-W01",
+        "period_start": date(2025, 12, 29),
+        "period_end": date(2026, 1, 4),
+    }
+    all_posts = _posts(
+        pax,
+        ["2025-12-29", "2025-12-30", "2025-12-31", "2026-01-01", "2026-01-02", "2026-01-03"],
+    )
+
+    def _run(start):
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_conn.cursor.return_value.__exit__.return_value = False
+        mock_cur.fetchall.side_effect = [[rule], [awarded_row]]
+
+        def _window(_conn, _schemas, start=None, end=None):
+            return all_posts[
+                (all_posts["date"] >= pd.Timestamp(start))
+                & (all_posts["date"] <= pd.Timestamp(end))
+            ]
+
+        with patch("achievements.runner.decrypt_field", return_value="x"):
+            with patch("achievements.runner.slack_client"):
+                with patch("achievements.runner.load_nation_attendance", side_effect=_window):
+                    with patch(
+                        "achievements.runner.attach_home_regions",
+                        side_effect=lambda c, n, s: n,
+                    ):
+                        return run_achievements_for_region(
+                            mock_conn,
+                            pm_schema="pm",
+                            regional_schema="f3test",
+                            region_row={
+                                "send_achievements": 1,
+                                "achievement_channel": "C1",
+                                "slack_token": "enc",
+                            },
+                            start=start,
+                            end=date(2026, 6, 1),
+                            allow_revoke=True,
+                            period_year=2026,
+                            announce=False,
+                            emit_logs=False,
+                            dry_run=True,
+                        )
+
+    padded = _run(date(2026, 1, 1) - timedelta(days=7))
+    assert padded["revokes"] == 0
+    assert padded["grants"] == 0
+
+    # Regression guard: without the pad the week loses Dec 29-31 and is revoked.
+    assert _run(date(2026, 1, 1))["revokes"] == 1
+
+
+def test_webhook_never_revokes():
+    """A Backblast webhook grants only — it never retracts an existing award."""
     from achievements.runner import run_achievements_for_region
 
     pax = "U01REVOKE01"
@@ -2240,21 +2833,15 @@ def test_genuine_revoke_posts_channel_dm_and_log():
                                             trigger_timestamp="1750000000.000001",
                                             trigger_date=date(2026, 8, 16),
                                         )
-    assert result["revokes"] == 1
+    assert result["revokes"] == 0
     assert result["grants"] == 0
-    channel_msgs = [t for ch, t in posts if ch == "C1"]
-    dm_msgs = [t for ch, t in posts if ch == "D1"]
-    assert len(channel_msgs) == 1
-    assert "Correction:" in channel_msgs[0]
-    assert "T-Claps" not in channel_msgs[0]
-    assert "this Backblast" not in channel_msgs[0]
-    assert "August 16" in channel_msgs[0]
-    assert len(dm_msgs) == 1
-    assert "Keep showing up and you'll get it back!" in dm_msgs[0]
-    assert len(logs) == 1
-    assert "was revoked from" in logs[0]
-    assert "after evaluating" in logs[0]
-    assert "<@" not in logs[0]
+    assert not [t for ch, t in posts if ch == "C1"]
+    assert not [t for ch, t in posts if ch == "D1"]
+    assert not [t for t in logs if "revoked" in t]
+    deletes = [
+        c for c in mock_cur.execute.call_args_list if "DELETE" in str(c.args[0]).upper()
+    ]
+    assert not deletes
 
 
 def test_ytd_run_does_not_revoke_prior_year():
@@ -2367,6 +2954,47 @@ def test_reconcile_rule_awards_silent_channel_summary():
     assert "Action: re-evaluated" in logs[0]
     assert "Awards: 89 granted, 141 revoked, 73 unchanged" in logs[0]
     assert "`UADMIN1234`" not in logs[0]
+
+
+def test_reconcile_no_dm_by_default_and_send_dms_opt_in():
+    """A manual re-eval is DM-silent unless the operator opts in."""
+    from achievements.runner import reconcile_rule_awards
+
+    def _reconcile(**kwargs):
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_conn.cursor.return_value.__exit__.return_value = False
+        mock_cur.fetchone.return_value = {
+            "name": "Centurion",
+            "effective_from": date(2026, 1, 1),
+            "effective_to": date(2026, 12, 31),
+        }
+        with patch(
+            "achievements.runner.run_achievements_for_region",
+            return_value={"grants": 1, "revokes": 1, "held": 0},
+        ) as mock_run:
+            with patch("achievements.runner.resolve_achievement_channel", return_value="C_ACH"):
+                with patch("achievements.runner.decrypt_field", return_value="x"):
+                    with patch("achievements.runner.slack_client"):
+                        with patch("achievements.runner.post_message"):
+                            with patch("achievements.runner.post_log"):
+                                reconcile_rule_awards(
+                                    mock_conn,
+                                    pm_schema="pm",
+                                    regional_schema="f3test",
+                                    region_row={"slack_token": "enc"},
+                                    achievement_id=4,
+                                    actor="UADMIN1234",
+                                    **kwargs,
+                                )
+        return mock_run.call_args.kwargs
+
+    assert _reconcile()["notify_dms"] is False
+    opted_in = _reconcile(send_dms=True)
+    assert opted_in["notify_dms"] is True
+    # Opting into DMs must not turn the per-PAX channel T-claps back on.
+    assert opted_in["announce"] is False
 
 
 def test_reconcile_rule_awards_skips_channel_when_noop():
