@@ -1,25 +1,14 @@
 name: Promote major dependency to main
 
-# Paused while test is a long-lived Weaselbot fork (#169). After a successful
-# test deploy of a PR labeled dependency-major, this cherry-picked that commit
-# onto main (then promote-main-to-prod shipped it to prod). That path assumes
-# the squash diff applies cleanly onto main; it does not after Phase 2, and it
-# would also promote Weaselbot-era majors. Dependabot majors may still retarget
-# and auto-merge to test; they must not cherry-pick to main until cutover.
-# Phase 3b takes wanted majors to main explicitly.
-#
-# After Weaselbot cutover, restore:
-#   on:
-#     workflow_run:
-#       workflows: ["Deploy Slack Stack"]
-#       types: [completed]
-#   and the job if:
-#     github.event.workflow_run.conclusion == 'success' &&
-#     github.event.workflow_run.head_branch == 'test'
-#
-# workflow_dispatch keeps the file visible in Actions. The job is if: false so
-# a manual run is a no-op (the steps still expect a workflow_run payload).
+# After a successful test deploy of a PR labeled dependency-major, cherry-pick
+# that commit onto main (promote-main-to-prod then ships it to prod). Dependabot
+# majors retarget and auto-merge to test first; this promotes the wanted ones to
+# main. workflow_dispatch keeps the file visible in Actions; a manual run is a
+# no-op because the job's `if` requires a workflow_run payload from test.
 on:
+  workflow_run:
+    workflows: ["Deploy Slack Stack"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -29,7 +18,9 @@ permissions:
 jobs:
   promote:
     runs-on: ubuntu-latest
-    if: false
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'test'
     steps:
       # App token so the branch push + merge to main trigger promote-main-to-prod.
       - uses: actions/create-github-app-token@v3
