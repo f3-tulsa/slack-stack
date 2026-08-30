@@ -22,10 +22,6 @@ updates:
       minor-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
-  # Weaselbot image is frozen until cutover (#169). Do not open Docker/pip PRs
-  # that cannot ship to the running Lambda.
-  # - package-ecosystem: docker
-  #   directory: /weaselbot
   - package-ecosystem: pip
     directory: /PAXminer
     schedule:
@@ -48,9 +44,6 @@ updates:
       minor-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
-  # Weaselbot image is frozen until cutover (#169).
-  # - package-ecosystem: pip
-  #   directory: /weaselbot
   - package-ecosystem: pip
     directory: /slackblast/slackblast
     schedule:

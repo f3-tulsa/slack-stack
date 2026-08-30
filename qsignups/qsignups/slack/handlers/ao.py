@@ -17,12 +17,12 @@ _SCHEMA_TOKEN = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 def _resolved_paxminer_regional_schema() -> Optional[str]:
-    raw = (os.environ.get("PAXMINER_REGIONAL_SCHEMA") or "").strip()
+    raw = (os.environ.get("PM_REGIONAL_SCHEMA") or "").strip()
     if not raw:
         return None
     first = raw.split(",")[0].strip()
     if not first or not _SCHEMA_TOKEN.match(first):
-        _LOG.warning("PAXMINER_REGIONAL_SCHEMA invalid or empty after parse; got %r", raw)
+        _LOG.warning("PM_REGIONAL_SCHEMA invalid or empty after parse; got %r", raw)
         return None
     return first
 

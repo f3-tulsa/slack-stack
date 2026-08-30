@@ -2,18 +2,18 @@
 
 For deploy, env vars, and OAuth setup see **[DEPLOY.md](DEPLOY.md)**.
 
-**Packaging on AWS:** **PAXminer** and **Weaselbot** deploy as **container images** (Docker builds pushed to ECR). **slackblast** and **qsignups** use SAM **zip** packaging (CI uses `--use-container` on `sam build` for Linux-compatible native wheels).
+**Packaging on AWS:** **PAXminer** deploys as **container images** (Docker builds pushed to ECR). **slackblast** and **qsignups** use SAM **zip** packaging (CI uses `--use-container` on `sam build` for Linux-compatible native wheels).
 
 Use a **virtual environment per app** (dependencies differ):
 
 ```bash
-cd PAXminer && python3.12 -m venv .venv && source .venv/bin/activate && pip install -r requirements-lambda.txt
-# repeat for weaselbot (requirements-lambda.txt), slackblast (slackblast/slackblast/requirements.txt), qsignups (qsignups/qsignups/requirements.txt) as needed
+cd PAXminer && python3.12 -m venv .venv && source .venv/bin/activate && pip install -r requirements-lambda.txt pytest
+# slackblast: poetry under slackblast/slackblast/; qsignups: qsignups/qsignups/requirements.txt
 ```
 
 **slackblast** runtime deps are maintained with **Poetry** under [`slackblast/slackblast/`](../slackblast/slackblast/) (`pyproject.toml`, `poetry.lock`). The committed [`requirements.txt`](../slackblast/slackblast/requirements.txt) is generated for SAM (`poetry export`). Use **Python 3.12** with Poetry locally (`poetry env use python3.12`) so builds match Lambda. After editing `pyproject.toml`, run `poetry update` then `poetry export -f requirements.txt --without-hashes -o requirements.txt`.
 
-CI’s **`requirements-sync`** job re-exports slackblast (and weaselbot) lockfiles when they drift and pushes with the **automation GitHub App** token so Dependabot PRs get a fresh CI run on the new HEAD (a `GITHUB_TOKEN` push would not re-trigger checks and would stall auto-merge).
+CI’s **`requirements-sync`** job re-exports the slackblast lockfile export when it drifts and pushes with the **automation GitHub App** token so Dependabot PRs get a fresh CI run on the new HEAD (a `GITHUB_TOKEN` push would not re-trigger checks and would stall auto-merge).
 
 ## Dependabot automation (overview)
 
@@ -21,11 +21,10 @@ Minor/patch Dependabot PRs auto-merge to **`main`**, then **`main` → `prod`**.
 
 See [`.github/workflows/dependabot-automerge.yml`](../.github/workflows/dependabot-automerge.yml), [`promote-main-to-prod.yml`](../.github/workflows/promote-main-to-prod.yml), [`sync-prod-to-test.yml`](../.github/workflows/sync-prod-to-test.yml), and [`promote-major-to-main.yml`](../.github/workflows/promote-major-to-main.yml).
 
-**Tests (mirrors `ci.yml`):** use a separate venv per app to avoid conflicting pins (e.g. `pymysql`). From the repo root, with `DB_ENCRYPTION_KEY` set to any string ≥16 chars for the qsignups handler import test:
+**Tests (mirrors `ci.yml`):** use a separate venv per app to avoid conflicting pins. Set `DB_ENCRYPTION_KEY` to any string ≥16 chars where handlers import encryption:
 
 ```bash
-python3.12 -m venv .venv-wb && . .venv-wb/bin/activate && pip install pytest -r weaselbot/requirements-lambda.txt
-(cd weaselbot && pytest -q tests/)
+cd PAXminer && pytest -q tests/
 
 python3.12 -m venv .venv-sb && . .venv-sb/bin/activate && pip install pytest -r slackblast/slackblast/requirements.txt
 pytest -q slackblast/test/
@@ -34,4 +33,29 @@ python3.12 -m venv .venv-qs && . .venv-qs/bin/activate && pip install pytest bot
 DB_ENCRYPTION_KEY='your-test-key-at-least-16' pytest -q qsignups/testing/
 ```
 
-`PAXminer/tests/test_BD_Comparer.py` requires `config/credentials_test.ini` and a live database; it is **skipped** when `CI=true` (e.g. in GitHub Actions). Run it only locally with a configured test DB.
+All PAXminer tests run without a database. The miner's re-import decision logic
+(`determine_db_action` / `find_match`) is covered by
+`PAXminer/tests/test_BD_Update_Utils.py`, which replaced a live-DB
+`test_BD_Comparer.py` that opened a connection in its class body and therefore
+could never run in CI.
+
+### Seed synthetic attendance (PAXMiner test schemas)
+
+**Test-only** seeder — always loads `.env.deploy.test` and refuses prod schemas / workspaces. **Default is one-shot baseline** (clear `[SEED]` rows, rebuild ~180 days of multi-PAX weekly beatdowns at QSignups AOs). Use `--interactive` to overlay Kotter / one Achievement per user on top of that calendar; `--verify` / `--verify-only` print which schedules would post vs skip (destinations + row counts).
+
+```bash
+python PAXminer/scripts/seed_test_region.py --yes --verify
+python PAXminer/scripts/seed_test_region.py --interactive
+# optional: python PAXminer/scripts/seed_test_region.py --schema f3ttown_test --days 180 --synthetic-pax 12
+```
+
+Pulls real test-workspace users via `PM_SLACK_TOKEN` and the AO list from QSignups (`qsignups_aos`, falling back to the regional `aos` table then all channels). Synthetic PAX (`--synthetic-pax`) fill leaderboards but are not in Slack — prefer `dm_specific_pax` when testing PAX chart DMs. Requires `F3_REGION_SLACK_TEAM_ID` to match Slack `auth.test`. Dev-only — not part of CI or deploy.
+
+Prod-derived attendance is not useful in test (different Slack user IDs), so start from a clean slate:
+
+```bash
+python PAXminer/scripts/reset_test_region.py --dry-run
+python PAXminer/scripts/reset_test_region.py
+```
+
+Reset shares the seeder's test-only guards, deletes all `bd_attendance` / `beatdowns` / `achievements_awarded`, prunes `users` / `aos` missing from the test workspace (`--keep-roster` to skip), and keeps `achievements_list` + views.

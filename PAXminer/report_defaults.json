@@ -1,0 +1,129 @@
+{
+  "definitions": [
+    {
+      "code": "pax_charts",
+      "name": "PAX charts (DM)",
+      "report_type": "pax_charts",
+      "is_builtin": 1,
+      "time_window_type": "last_month"
+    },
+    {
+      "code": "q_charts",
+      "name": "Q charts",
+      "report_type": "q_charts",
+      "is_builtin": 1,
+      "time_window_type": "last_month"
+    },
+    {
+      "code": "region_leaderboard",
+      "name": "Region leaderboard",
+      "report_type": "region_leaderboard",
+      "is_builtin": 1,
+      "time_window_type": "last_month",
+      "top_n": 20
+    },
+    {
+      "code": "ao_leaderboard",
+      "name": "AO leaderboard",
+      "report_type": "ao_leaderboard",
+      "is_builtin": 1,
+      "time_window_type": "last_month",
+      "top_n": 20
+    },
+    {
+      "code": "achievement_leaderboard",
+      "name": "Achievement leaderboard",
+      "report_type": "achievement_leaderboard",
+      "is_builtin": 1,
+      "time_window_type": "ytd",
+      "top_n": 10
+    },
+    {
+      "code": "achievement_almost_there",
+      "name": "Almost there",
+      "report_type": "achievement_almost_there",
+      "is_builtin": 1,
+      "time_window_type": null,
+      "top_n": 10
+    },
+    {
+      "code": "award_achievements",
+      "name": "Award Achievements",
+      "report_type": "award_achievements",
+      "is_builtin": 1,
+      "time_window_type": null
+    },
+    {
+      "code": "kotter",
+      "name": "Kotter",
+      "report_type": "kotter",
+      "is_builtin": 1,
+      "time_window_type": null
+    }
+  ],
+  "default_schedules": [
+    {
+      "code": "pax_charts",
+      "destination_type": "dm_all_pax",
+      "frequency_type": "monthly",
+      "month_day_mode": "first",
+      "time_of_day": "07:00:00",
+      "enabled": true
+    },
+    {
+      "code": "q_charts",
+      "destination_type": "all_ao_channels",
+      "frequency_type": "monthly",
+      "month_day_mode": "first",
+      "time_of_day": "07:00:00",
+      "enabled": true
+    },
+    {
+      "code": "region_leaderboard",
+      "destination_type": "specific_channels",
+      "frequency_type": "monthly",
+      "month_day_mode": "first",
+      "time_of_day": "07:00:00",
+      "enabled": true
+    },
+    {
+      "code": "ao_leaderboard",
+      "destination_type": "all_ao_channels",
+      "frequency_type": "monthly",
+      "month_day_mode": "first",
+      "time_of_day": "07:00:00",
+      "enabled": true
+    },
+    {
+      "code": "achievement_leaderboard",
+      "destination_type": "specific_channels",
+      "frequency_type": "monthly",
+      "month_day_mode": "first",
+      "time_of_day": "07:00:00",
+      "enabled": true
+    },
+    {
+      "code": "achievement_almost_there",
+      "destination_type": "specific_channels",
+      "frequency_type": "monthly",
+      "month_day_mode": "first",
+      "time_of_day": "07:00:00",
+      "enabled": true
+    },
+    {
+      "code": "award_achievements",
+      "destination_type": "specific_channels",
+      "frequency_type": "daily",
+      "time_of_day": "07:00:00",
+      "enabled": true
+    },
+    {
+      "code": "kotter",
+      "destination_type": "specific_channels",
+      "frequency_type": "monthly",
+      "month_day_mode": "first",
+      "time_of_day": "07:00:00",
+      "enabled": true
+    }
+  ]
+}

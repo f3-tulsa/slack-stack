@@ -54,6 +54,78 @@ def _mock_engine_with_execute(side_effect_fn):
     return mock_engine, mock_conn
 
 
+class _AwardTable:
+    """In-memory achievements_awarded rows for merge-collapse tests."""
+
+    def __init__(self, rows):
+        self.rows = [dict(r) for r in rows]
+
+    def apply(self, sql, params):
+        if "DELETE FROM achievements_awarded" in sql:
+            held = {
+                (r["achievement_id"], r["period_key"])
+                for r in self.rows
+                if r["pax_id"] == params["new"]
+            }
+            self.rows = [
+                r
+                for r in self.rows
+                if not (
+                    r["pax_id"] == params["old"]
+                    and (r["achievement_id"], r["period_key"]) in held
+                )
+            ]
+            return True
+        if "UPDATE achievements_awarded SET pax_id" in sql:
+            for r in self.rows:
+                if r["pax_id"] == params["old"]:
+                    r["pax_id"] = params["new"]
+            return True
+        return False
+
+
+def _merge_canonical_execute(calls, old_row, awards: _AwardTable):
+    def execute(stmt, params=None):
+        calls.append((str(stmt), params))
+        sql = str(stmt)
+        if "FROM users WHERE email" in sql and "user_id !=" in sql:
+            return _ExecResult([old_row])
+        if "UPDATE beatdowns SET q_user_id" in sql:
+            return _ExecResult()
+        if "UPDATE beatdowns SET coq_user_id" in sql:
+            return _ExecResult()
+        if "UPDATE bd_attendance SET user_id" in sql:
+            return _ExecResult()
+        if "UPDATE bd_attendance SET q_user_id" in sql:
+            return _ExecResult()
+        if awards.apply(sql, params):
+            return _ExecResult()
+        if "DELETE FROM users WHERE user_id" in sql:
+            assert params["old"] == "U_OLD"
+            return _ExecResult()
+        if "INSERT INTO users" in sql:
+            return _ExecResult()
+        if sql.strip().startswith("SELECT json FROM users"):
+            return _ExecResult(one=('{"from_canonical": 1}',))
+        if "start_date = COALESCE" in sql:
+            return _ExecResult()
+        raise AssertionError(f"Unexpected SQL in award-merge test: {sql[:160]}")
+
+    return execute
+
+
+def _assert_award_merge_in_one_transaction(calls, mock_engine):
+    sqls = [c[0] for c in calls]
+    award_del = next(i for i, s in enumerate(sqls) if "DELETE FROM achievements_awarded" in s)
+    award_upd = next(i for i, s in enumerate(sqls) if "UPDATE achievements_awarded SET pax_id" in s)
+    user_del = next(i for i, s in enumerate(sqls) if "DELETE FROM users" in s)
+    assert award_del < award_upd < user_del
+    assert "AS held" in sqls[award_del]
+    mock_engine.begin.assert_called_once()
+    # One begin() context: collapse + move + delete-user share that transaction.
+    assert mock_engine.begin.return_value.__enter__.call_count == 1
+
+
 def test_safe_get():
     assert safe_get({"a": {"b": {"c": 1}}}, "a", "b", "c") == 1
     assert safe_get({"a": {"b": {"c": 1}}}, "a", "b", "d") == None
@@ -214,7 +286,9 @@ def test_ensure_users_in_db_no_merge_needed(mock_ge):
 
     assert len(calls) == 2
     assert "INSERT INTO users" in calls[1][0]
+    assert "COALESCE(VALUES(email), email)" in calls[1][0]
     assert calls[1][1]["uid"] == "U_NEW"
+    assert calls[1][1]["email"] == "a@b.com"
     logger.warning.assert_not_called()
 
 
@@ -275,6 +349,8 @@ def test_ensure_users_in_db_merge_old_row_only(mock_ge):
             return _ExecResult()
         if "UPDATE bd_attendance SET q_user_id" in sql:
             return _ExecResult()
+        if "DELETE FROM achievements_awarded" in sql:
+            return _ExecResult()
         if "UPDATE achievements_awarded SET pax_id" in sql:
             return _ExecResult()
         if "DELETE FROM users WHERE user_id" in sql:
@@ -332,6 +408,8 @@ def test_ensure_users_in_db_merge_when_canonical_row_exists(mock_ge):
             return _ExecResult()
         if "UPDATE bd_attendance SET q_user_id" in sql:
             return _ExecResult()
+        if "DELETE FROM achievements_awarded" in sql:
+            return _ExecResult()
         if "UPDATE achievements_awarded SET pax_id" in sql:
             return _ExecResult()
         if "DELETE FROM users WHERE user_id" in sql:
@@ -363,7 +441,71 @@ def test_ensure_users_in_db_merge_when_canonical_row_exists(mock_ge):
 
 
 @patch("utilities.helper_functions.get_engine")
-def test_ensure_users_in_db_no_email_logs_warning(mock_ge):
+def test_ensure_users_in_db_merge_colliding_awards_keeps_one_row(mock_ge):
+    """Both accounts hold the same period award: drop the old copy, move the rest."""
+    calls = []
+    old_row = (
+        "U_OLD",
+        date(2020, 1, 1),
+        0,
+        "000-OLD",
+        json.dumps({"is_admin": True}),
+    )
+    awards = _AwardTable(
+        [
+            {"id": 1, "achievement_id": 10, "pax_id": "U_OLD", "period_key": "2026"},
+            {"id": 2, "achievement_id": 10, "pax_id": "U_NEW", "period_key": "2026"},
+            {"id": 3, "achievement_id": 11, "pax_id": "U_OLD", "period_key": "2026"},
+        ]
+    )
+    mock_engine, _ = _mock_engine_with_execute(
+        _merge_canonical_execute(calls, old_row, awards)
+    )
+    mock_ge.return_value = mock_engine
+
+    client = MagicMock()
+    client.users_info.return_value = _slack_user(email="dup@x.com")
+    ensure_users_in_db(["U_NEW"], client, MagicMock(), "region_schema")
+
+    _assert_award_merge_in_one_transaction(calls, mock_engine)
+    by_id = {r["id"]: r for r in awards.rows}
+    assert set(by_id) == {2, 3}
+    assert by_id[2]["pax_id"] == "U_NEW"
+    assert by_id[3]["pax_id"] == "U_NEW"
+    assert by_id[3]["achievement_id"] == 11
+
+
+@patch("utilities.helper_functions.get_engine")
+def test_ensure_users_in_db_merge_moves_awards_when_no_overlap(mock_ge):
+    """No shared (achievement, period): every old-account row moves; none are deleted."""
+    calls = []
+    old_row = (
+        "U_OLD",
+        date(2020, 1, 1),
+        0,
+        "000-OLD",
+        json.dumps({}),
+    )
+    awards = _AwardTable(
+        [
+            {"id": 1, "achievement_id": 10, "pax_id": "U_OLD", "period_key": "2026"},
+            {"id": 2, "achievement_id": 11, "pax_id": "U_NEW", "period_key": "2026"},
+        ]
+    )
+    mock_engine, _ = _mock_engine_with_execute(
+        _merge_canonical_execute(calls, old_row, awards)
+    )
+    mock_ge.return_value = mock_engine
+
+    client = MagicMock()
+    client.users_info.return_value = _slack_user(email="dup@x.com")
+    ensure_users_in_db(["U_NEW"], client, MagicMock(), "region_schema")
+
+    _assert_award_merge_in_one_transaction(calls, mock_engine)
+    by_id = {r["id"]: r for r in awards.rows}
+    assert set(by_id) == {1, 2}
+    assert by_id[1]["pax_id"] == "U_NEW"
+    assert by_id[2]["pax_id"] == "U_NEW"
     calls = []
 
     def execute(stmt, params=None):
@@ -384,8 +526,38 @@ def test_ensure_users_in_db_no_email_logs_warning(mock_ge):
     ensure_users_in_db(["U1"], client, logger, "region_schema")
 
     assert len(calls) == 1
+    insert_sql, params = calls[0]
+    assert "COALESCE(VALUES(email), email)" in insert_sql
+    assert "COALESCE(NULLIF(VALUES(phone), ''), phone)" in insert_sql
+    assert params["email"] is None
     logger.warning.assert_called_once()
     assert "users:read.email" in logger.warning.call_args[0][0]
+
+
+@patch("utilities.helper_functions.get_engine")
+def test_ensure_users_in_db_empty_phone_does_not_overwrite(mock_ge):
+    calls = []
+
+    def execute(stmt, params=None):
+        calls.append((str(stmt), params))
+        sql = str(stmt)
+        if "FROM users WHERE email" in sql and "user_id !=" in sql:
+            return _ExecResult([])
+        if "INSERT INTO users" in sql:
+            return _ExecResult()
+        raise AssertionError(f"Unexpected SQL in empty-phone test: {sql[:120]}")
+
+    mock_ge.return_value, _ = _mock_engine_with_execute(execute)
+
+    client = MagicMock()
+    client.users_info.return_value = _slack_user(phone="")
+    logger = MagicMock()
+
+    ensure_users_in_db(["U_PHONE"], client, logger, "region_schema")
+
+    insert_sql, params = [c for c in calls if "INSERT INTO users" in c[0]][0]
+    assert "COALESCE(NULLIF(VALUES(phone), ''), phone)" in insert_sql
+    assert params["phone"] == ""
 
 
 def _region_with_schema(schema="f3testregion"):
@@ -537,3 +709,155 @@ def test_check_for_duplicate_returns_false_when_no_dups(mock_db):
     )
 
     assert result is False
+
+
+
+def test_resolve_paxminer_log_channel_prefers_stored_id():
+    region = MagicMock(paxminer_schema="f3test")
+    stored = MagicMock(log_channel="CLOG99")
+    with patch("utilities.helper_functions.DbManager.find_records", return_value=[stored]):
+        with patch("utilities.helper_functions.get_channel_id") as by_name:
+            got = helper_functions.resolve_paxminer_log_channel(region, MagicMock(), MagicMock())
+    assert got == "CLOG99"
+    by_name.assert_not_called()
+
+
+def test_resolve_paxminer_log_channel_falls_back_to_name():
+    region = MagicMock(paxminer_schema="f3test")
+    with patch("utilities.helper_functions.DbManager.find_records", return_value=[]):
+        with patch("utilities.helper_functions.get_channel_id", return_value="CNAME") as by_name:
+            got = helper_functions.resolve_paxminer_log_channel(region, MagicMock(), MagicMock())
+    assert got == "CNAME"
+    by_name.assert_called_once()
+
+
+def test_build_backblast_edit_summary_scalars_body_and_cap():
+    from types import SimpleNamespace
+
+    prior = SimpleNamespace(
+        q_user_id="UQ_OLD",
+        coq_user_id="UC_OLD",
+        pax_count=10,
+        fng_count=0,
+        bd_date="2026-08-20",
+        ao_id="C1",
+        backblast="old",
+    )
+    names = {"UQ_OLD": "OldQ", "UQ_NEW": "NewQ", "UC_OLD": "OldCoQ", "U1": "One", "U2": "Two"}
+    lines = helper_functions.build_backblast_edit_summary(
+        prior=prior,
+        q_user_id="UQ_NEW",
+        coq_user_id=None,
+        current_pax_ids={"UQ_NEW", "U1"},
+        prior_pax_ids={"UQ_OLD", "UC_OLD", "U2"},
+        pax_count=12,
+        fng_count=1,
+        bd_date="2026-08-21",
+        ao_id="C2",
+        body_changed=True,
+        names=names,
+    )
+    assert "Q: OldQ → NewQ" in lines
+    assert "CoQ: OldCoQ → none" in lines
+    assert any(ln.startswith("PAX added:") for ln in lines)
+    assert any(ln.startswith("PAX removed:") for ln in lines)
+    assert "Count: 10 → 12" in lines
+    assert "FNGs: 0 → 1" in lines
+    assert "Date: 2026-08-20 → 2026-08-21" in lines
+    assert "AO: C1 → C2" in lines
+    assert "Backblast body was edited" in lines
+    unchanged = helper_functions.build_backblast_edit_summary(
+        prior=prior,
+        q_user_id="UQ_OLD",
+        coq_user_id="UC_OLD",
+        current_pax_ids={"UQ_OLD", "UC_OLD", "U2"},
+        prior_pax_ids={"UQ_OLD", "UC_OLD", "U2"},
+        pax_count=10,
+        fng_count=0,
+        bd_date="2026-08-20",
+        ao_id="C1",
+        body_changed=False,
+        names=names,
+    )
+    assert unchanged == []
+    mass_prior = SimpleNamespace(
+        q_user_id="Q",
+        coq_user_id=None,
+        pax_count=1,
+        fng_count=0,
+        bd_date="2026-08-20",
+        ao_id="C1",
+        backblast="x",
+    )
+    many_added = {f"U{i}" for i in range(20)}
+    mass = helper_functions.build_backblast_edit_summary(
+        prior=mass_prior,
+        q_user_id="Q2",
+        coq_user_id="C2",
+        current_pax_ids=many_added,
+        prior_pax_ids=set(),
+        pax_count=20,
+        fng_count=3,
+        bd_date="2026-08-21",
+        ao_id="C9",
+        body_changed=True,
+        names={},
+    )
+    added_line = next(ln for ln in mass if ln.startswith("PAX added:"))
+    assert "+12 more" in added_line
+    padded = helper_functions.build_backblast_edit_summary(
+        prior=mass_prior,
+        q_user_id="Q2",
+        coq_user_id="C2",
+        current_pax_ids=many_added,
+        prior_pax_ids={"Z1", "Z2", "Z3", "Z4", "Z5", "Z6", "Z7", "Z8", "Z9"},
+        pax_count=20,
+        fng_count=3,
+        bd_date="2026-08-21",
+        ao_id="C9",
+        body_changed=True,
+        names={},
+    )
+    assert any(ln.startswith("+") and ln.endswith("more changes") for ln in padded) or len(padded) <= helper_functions.BACKBLAST_EDIT_SUMMARY_CAP + 1
+
+
+def test_backblast_date_label_is_the_full_locale_date():
+    assert helper_functions.backblast_date_label(date(2026, 8, 21)) == "August 21, 2026"
+    assert helper_functions.backblast_date_label("2026-08-05") == "August 5, 2026"
+    assert helper_functions.backblast_date_label("2026-12-31") == "December 31, 2026"
+    assert helper_functions.backblast_date_label(None) == "this event"
+    assert helper_functions.backblast_date_label("not a date") == "not a date"
+
+
+def test_format_backblast_paxminer_log_shapes():
+    label = helper_functions.backblast_date_label(date(2026, 8, 21))
+    imported = helper_functions.format_backblast_paxminer_log(
+        edited=False,
+        ao_id="C123",
+        date_label=label,
+        permalink="https://f3ttown-test.slack.com/archives/C123/p1787335245777559",
+    )
+    assert imported == (
+        "Backblast successfully imported for <#C123> on "
+        "<https://f3ttown-test.slack.com/archives/C123/p1787335245777559|August 21, 2026>."
+    )
+    edited = helper_functions.format_backblast_paxminer_log(
+        edited=True,
+        ao_id="C123",
+        date_label=label,
+        permalink="https://example.com/p",
+        summary_lines=["Q: A → B", "Backblast body was edited"],
+    )
+    assert edited.startswith(
+        "Backblast successfully edited for <#C123> on <https://example.com/p|August 21, 2026>."
+    )
+    assert "```" in edited
+    assert "Q: A → B" in edited
+    no_block = helper_functions.format_backblast_paxminer_log(
+        edited=True,
+        ao_id="C123",
+        date_label=label,
+        permalink="https://example.com/p",
+        summary_lines=[],
+    )
+    assert "```" not in no_block

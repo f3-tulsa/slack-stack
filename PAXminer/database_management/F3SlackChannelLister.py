@@ -14,22 +14,32 @@ from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 import logging
 
 
-def database_slack_channel_update(region_db, key, mydb):
+def database_slack_channel_update(region_db, key, mydb, log_channel=None):
     logging.info("Database_slack_user_update")
 
     slack = WebClient(token=key)
     slack.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=5))
 
+    try:
+        from slack_util import MAX_SLACK_PAGES, format_log_message, log_header, next_slack_cursor
+    except ImportError:
+        import sys
+        from pathlib import Path
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from slack_util import MAX_SLACK_PAGES, format_log_message, log_header, next_slack_cursor
+
     cursor_slack = ""
+    seen_cursors: set[str] = set()
     all_channels = []
-    while True:
+    for _ in range(MAX_SLACK_PAGES):
         kwargs = {"limit": 999, "types": "public_channel,private_channel"}
         if cursor_slack:
             kwargs["cursor"] = cursor_slack
         channels_response = slack.conversations_list(**kwargs)
         batch = channels_response.data.get("channels") or []
         all_channels.extend(batch)
-        cursor_slack = (channels_response.get("response_metadata") or {}).get("next_cursor") or ""
+        cursor_slack = next_slack_cursor(channels_response, seen_cursors)
         if not cursor_slack:
             break
 
@@ -87,8 +97,18 @@ def database_slack_channel_update(region_db, key, mydb):
     if inserted or updated:
         try:
             slack.chat_postMessage(
-                channel="paxminer_logs",
-                text=f" - Channel sync ({region_db}): {inserted} created, {updated} updated",
+                channel=(log_channel or "").strip() or "paxminer_logs",
+                text=format_log_message(
+                    log_header("Channel sync"),
+                    status="success",
+                    fields=[
+                        ("Mode", "scheduled"),
+                        (
+                            "Results",
+                            f"{region_db}: {inserted} created, {updated} updated",
+                        ),
+                    ],
+                ),
             )
         except Exception as log_exc:
             logging.debug("paxminer_logs channel summary failed: %s", log_exc, exc_info=True)

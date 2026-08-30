@@ -1,0 +1,142 @@
+[
+  {
+    "name": "The Priest",
+    "description": "Post at 25 QSource events in a year",
+    "verb": "Posting at 25 QSource events in a year",
+    "code": "the_priest",
+    "metric": "posts",
+    "activity": { "include": ["QSource"], "exclude": [] },
+    "period": "year",
+    "threshold": 25
+  },
+  {
+    "name": "The Monk",
+    "description": "Post at 4 QSource events in a month",
+    "verb": "Posting at 4 QSource events in a month",
+    "code": "the_monk",
+    "metric": "posts",
+    "activity": { "include": ["QSource"], "exclude": [] },
+    "period": "month",
+    "threshold": 4
+  },
+  {
+    "name": "Leader of Men",
+    "description": "Q 4 times in a month",
+    "verb": "Qing 4 times in a month",
+    "code": "leader_of_men",
+    "metric": "qs",
+    "activity": { "include": [], "exclude": [] },
+    "period": "month",
+    "threshold": 4
+  },
+  {
+    "name": "The Boss",
+    "description": "Q 6 times in a month",
+    "verb": "Qing 6 times in a month",
+    "code": "the_boss",
+    "metric": "qs",
+    "activity": { "include": [], "exclude": [] },
+    "period": "month",
+    "threshold": 6
+  },
+  {
+    "name": "Be the Hammer, Not the Nail",
+    "description": "Q 6 times in a week",
+    "verb": "Qing 6 times in a week",
+    "code": "be_the_hammer_not_the_nail",
+    "metric": "qs",
+    "activity": { "include": [], "exclude": [] },
+    "period": "week",
+    "threshold": 6
+  },
+  {
+    "name": "Cadre",
+    "description": "Q at 7 different AOs in a month",
+    "verb": "Qing at 7 different AOs in a month",
+    "code": "cadre",
+    "metric": "distinct_aos",
+    "activity": { "include": [], "exclude": [] },
+    "period": "month",
+    "threshold": 7
+  },
+  {
+    "name": "El Presidente",
+    "description": "Q 20 times in a year",
+    "verb": "Qing 20 times in a year",
+    "code": "el_presidente",
+    "metric": "qs",
+    "activity": { "include": [], "exclude": [] },
+    "period": "year",
+    "threshold": 20
+  },
+  {
+    "name": "El Quatro",
+    "description": "Post 25 times in a year",
+    "verb": "Posting 25 times in a year",
+    "code": "el_quatro",
+    "metric": "posts",
+    "activity": { "include": [], "exclude": [] },
+    "period": "year",
+    "threshold": 25
+  },
+  {
+    "name": "Golden Boy",
+    "description": "Post 50 times in a year",
+    "verb": "Posting 50 times in a year",
+    "code": "golden_boy",
+    "metric": "posts",
+    "activity": { "include": [], "exclude": [] },
+    "period": "year",
+    "threshold": 50
+  },
+  {
+    "name": "Centurion",
+    "description": "Post 100 times in a year",
+    "verb": "Posting 100 times in a year",
+    "code": "centurion",
+    "metric": "posts",
+    "activity": { "include": [], "exclude": [] },
+    "period": "year",
+    "threshold": 100
+  },
+  {
+    "name": "Karate Kid",
+    "description": "Post 150 times in a year",
+    "verb": "Posting 150 times in a year",
+    "code": "karate_kid",
+    "metric": "posts",
+    "activity": { "include": [], "exclude": [] },
+    "period": "year",
+    "threshold": 150
+  },
+  {
+    "name": "Crazy Person",
+    "description": "Post 200 times in a year",
+    "verb": "Posting 200 times in a year",
+    "code": "crazy_person",
+    "metric": "posts",
+    "activity": { "include": [], "exclude": [] },
+    "period": "year",
+    "threshold": 200
+  },
+  {
+    "name": "6 pack",
+    "description": "Post 6 times in a week",
+    "verb": "Posting 6 times in a week",
+    "code": "6_pack",
+    "metric": "posts",
+    "activity": { "include": [], "exclude": [] },
+    "period": "week",
+    "threshold": 6
+  },
+  {
+    "name": "Holding Down the Fort",
+    "description": "Post 50 times at an AO in a year",
+    "verb": "Posting 50 times at an AO in a year",
+    "code": "holding_down_the_fort",
+    "metric": "posts_at_single_ao",
+    "activity": { "include": [], "exclude": [] },
+    "period": "year",
+    "threshold": 50
+  }
+]

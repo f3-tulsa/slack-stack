@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import datetime
 import logging
-import os
 import sys
+from datetime import date
 from pathlib import Path
 
 import matplotlib
@@ -26,11 +26,24 @@ _PAX_ROOT = Path(__file__).resolve().parent.parent
 if str(_PAX_ROOT) not in sys.path:
     sys.path.insert(0, str(_PAX_ROOT))
 
+from scheduling import (  # noqa: E402
+    caption_with_window,
+    default_chart_window,
+    format_window_label,
+    window_file_tag,
+)
+from slack_util import mention  # noqa: E402
 
-def _pax_charter_period():
-    off = int(os.environ.get("CHART_PERIOD_OFFSET_DAYS", "7"))
-    d = datetime.datetime.now() - datetime.timedelta(days=off)
-    return d.strftime("%m"), d.strftime("%b"), d.strftime("%B"), d.strftime("%Y")
+
+def pax_chart_dm_text(user_id, pax, title, label) -> str:
+    """DM caption for a PAX chart; mentions when the id is Slack-shaped."""
+    return (
+        "Hey "
+        + mention(user_id, pax)
+        + "! Here is "
+        + caption_with_window(title, label, "your posting summary")
+        + ". \nPush yourself, get those bars higher every month! SYITG!"
+    )
 
 
 def run_pax_charter(
@@ -40,9 +53,16 @@ def run_pax_charter(
     plot_dir: str | Path = "/tmp/paxminer_plots",
     region_method: str = "v2",
     log_to_file: bool = False,
+    user_ids: list[str] | None = None,
+    window: tuple[date, date] | None = None,
+    title: str | None = None,
 ) -> dict:
     """
     Build per-PAX attendance charts and DM via Slack (v2) or legacy channel upload (v1).
+
+    When ``user_ids`` is provided, only those users receive charts (schedule destinations).
+    ``window`` is (start_inclusive, end_inclusive); defaults to the legacy
+    CHART_PERIOD_OFFSET_DAYS calendar month.
     """
     plot_base = Path(plot_dir) / schema
     plot_base.mkdir(parents=True, exist_ok=True)
@@ -62,7 +82,9 @@ def run_pax_charter(
     rate_limit_handler = RateLimitErrorRetryHandler(max_retry_count=5)
     slack.retry_handlers.append(rate_limit_handler)
 
-    thismonthname, _, _, yearnum = _pax_charter_period()
+    start, end = window or default_chart_window()
+    label = format_window_label(start, end)
+    tag = window_file_tag(start, end)
 
     column_names = ["user_id", "user_name", "real_name"]
     users_df = pd.DataFrame(columns=column_names)
@@ -74,15 +96,22 @@ def run_pax_charter(
         next_cursor = response_metadata.get("next_cursor")
         users = users_response.data["members"]
         users_df_tmp = pd.json_normalize(users)
-        users_df_tmp = users_df_tmp[["id", "profile.display_name", "profile.real_name"]]
+        users_df_tmp = users_df_tmp.reindex(
+            columns=["id", "profile.display_name", "profile.real_name"]
+        )
         users_df_tmp = users_df_tmp.rename(
             columns={"id": "user_id", "profile.display_name": "user_name", "profile.real_name": "real_name"}
         )
+        users_df_tmp = users_df_tmp.fillna({"user_name": "", "real_name": ""})
         users_df = pd.concat([users_df, users_df_tmp], ignore_index=True)
         if next_cursor:
             data = next_cursor
         else:
             break
+
+    if user_ids is not None:
+        allowed = set(user_ids)
+        users_df = users_df[users_df["user_id"].isin(allowed)].copy()
 
     for _index, row in users_df.iterrows():
         un_tmp = row["user_name"]
@@ -119,14 +148,20 @@ def run_pax_charter(
                 f.write(f"{user_id_tmp} {pax}\n")
 
     total_graphs = 0
+    posted_users: list[dict] = []
+    failed_users: list[dict] = []
     current_method = region_method
     for user_id in users_df["user_id"]:
         try:
             attendance_tmp_df = pd.DataFrame([])
             with mydb.cursor() as cursor:
-                sql = "SELECT * FROM attendance_view WHERE PAX = (SELECT user_name FROM users WHERE user_id = %s) AND YEAR(Date) = %s ORDER BY Date"
+                sql = (
+                    "SELECT * FROM attendance_view WHERE PAX = "
+                    "(SELECT user_name FROM users WHERE user_id = %s) "
+                    "AND Date BETWEEN %s AND %s ORDER BY Date"
+                )
                 user_id_tmp = user_id
-                val = (user_id_tmp, yearnum)
+                val = (user_id_tmp, start.isoformat(), end.isoformat())
                 cursor.execute(sql, val)
                 attendance_tmp = cursor.fetchall()
                 attendance_tmp_df = pd.DataFrame(attendance_tmp)
@@ -158,25 +193,22 @@ def run_pax_charter(
                         verticalalignment="top",
                         horizontalalignment="right",
                     )
-                    plt.title("Number of posts by " + pax + " by AO/Month for " + yearnum)
+                    plt.title("Number of posts by " + pax + " by AO/Month for " + label)
                     plt.legend(loc="center left", bbox_to_anchor=(1, 0.5), frameon=False)
                     plt.ioff()
-                    out_jpg = plot_base / f"{user_id_tmp}_{thismonthname}{yearnum}.jpg"
+                    out_jpg = plot_base / f"{user_id_tmp}_{tag}.jpg"
                     plt.savefig(str(out_jpg), bbox_inches="tight")
                     total_graphs += 1
-                    message = (
-                        "Hey "
-                        + pax
-                        + "! Here is your monthly posting summary for "
-                        + yearnum
-                        + ". \nPush yourself, get those bars higher every month! SYITG!"
-                    )
+                    message = pax_chart_dm_text(user_id_tmp, pax, title, label)
                     file = str(out_jpg)
                     if total_graphs > 0:
+                        delivered = False
+                        last_err: Exception | None = None
                         if current_method == "v2":
                             try:
                                 send_slack_message_v2(user_id_tmp, message, file)
                                 success_message_sent(user_id_tmp, pax, schema)
+                                delivered = True
                             except SlackApiError as e:
                                 err = e.response.get("error") if e.response else None
                                 if err == "missing_scope":
@@ -186,26 +218,47 @@ def run_pax_charter(
                                     current_method = "v1"
                                 else:
                                     log_message_sent_error(user_id_tmp, schema, pax, e)
-                                    raise e
+                                    last_err = e
                             except Exception as e:
                                 log_message_sent_error(user_id_tmp, schema, pax, e)
-                                raise e
-                        if current_method != "v2":
+                                last_err = e
+                        if current_method != "v2" and not delivered:
                             try:
                                 channel = user_id_tmp
                                 send_slack_message(channel, message, file)
                                 success_message_sent(user_id_tmp, pax, schema)
+                                delivered = True
                             except Exception as e:
                                 log_message_sent_error(user_id_tmp, schema, pax, e)
-                                raise e
+                                last_err = e
+                        if delivered:
+                            posted_users.append({"user_id": user_id_tmp, "pax": pax})
+                        else:
+                            failed_users.append(
+                                {
+                                    "user_id": user_id_tmp,
+                                    "pax": pax,
+                                    "reason": str(last_err)[:200] if last_err else "unknown",
+                                }
+                            )
                     else:
                         logging.debug("PAX charter skipped (no graphs): %s", pax)
-        except Exception:
+        except Exception as exc:
             logging.exception("PAX charter: exception for user_id=%s", user_id)
+            failed_users.append({"user_id": user_id, "pax": "?", "reason": str(exc)[:200]})
         finally:
             plt.close("all")
 
-    return {"schema": schema, "graphs": total_graphs}
+    return {
+        "schema": schema,
+        "graphs": total_graphs,
+        "posted_users": posted_users,
+        "failed_users": failed_users,
+        "user_count": len(posted_users),
+        "channel_count": 0,
+        "window_start": start.isoformat(),
+        "window_end": end.isoformat(),
+    }
 
 
 if __name__ == "__main__":
