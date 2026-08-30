@@ -277,6 +277,18 @@ def iter_year_windows(start: date, end: date, overlap_days: int = 7) -> list[tup
     return windows
 
 
+def _bucket_in_period_year(bucket, year: int) -> bool:
+    """Scalar twin of `_filter_period_year`'s predicate.
+
+    A period bucket belongs to a calendar year when it is that year (``"2024"``)
+    or is prefixed by it (``"2024-03"``, ``"2024-W07"``). ISO-week buckets carry
+    their ISO year, so this stays consistent with the grant-side filter.
+    """
+    b = _norm_key(bucket)
+    y = str(year)
+    return b == y or b.startswith(f"{y}-")
+
+
 def _filter_period_year(qualified: pd.DataFrame, year: int) -> pd.DataFrame:
     if qualified.empty:
         return qualified
@@ -427,6 +439,18 @@ def run_achievements_for_region(
                         held_older_version += 1
                         continue
                 bucket = _row_period_key(row, period)
+                # Grants are clamped to `period_year` (see `_filter_period_year`),
+                # but `awarded` is loaded over the ±7-day overlap window and so
+                # pulls in the neighbouring year's awards. Without the same clamp
+                # here, `qual_keys` (this year only) would revoke a valid prior- or
+                # next-year award, which its own window then re-grants — an
+                # all-time reconcile that never reaches a 0/0 fixpoint. Hold any
+                # award whose bucket belongs to a different year; its own window
+                # judges it.
+                if period_year is not None and not _bucket_in_period_year(bucket, period_year):
+                    held += 1
+                    held_out_of_range += 1
+                    continue
                 if (str(row["pax_id"]), aid, bucket) in qual_keys:
                     held += 1
                     continue

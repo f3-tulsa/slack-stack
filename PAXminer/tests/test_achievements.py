@@ -486,6 +486,112 @@ def test_run_achievements_skips_revokes_on_unscoped_run():
     assert result["revokes"] == 0
 
 
+def test_reconcile_holds_prior_year_award_in_later_year_window():
+    """All-time reconcile must record awards for every year, not just the last.
+
+    Regression for the non-idempotent all-time re-eval: `iter_year_windows`
+    widens each year by +/-7 days, so `_load_awarded` pulls the prior year's
+    award into the next year's window. Grants are clamped to `period_year` via
+    `_filter_period_year`, but the revoke path was not, so `qual_keys` (this
+    year only) revoked the still-valid prior-year award. Its own window then
+    re-granted it, so a post-write dry run never reached grants:0/revokes:0.
+    """
+    from achievements.runner import run_achievements_for_region
+
+    rule = {
+        "id": 1,
+        "name": "El Quatro",
+        "verb": "posting 25 times",
+        "metric": "posts",
+        "activity": "beatdown",
+        "period": "year",
+        "threshold": 1,
+        "version_id": 7,
+        "enabled": 1,
+        "effective_from": None,
+        "effective_to": None,
+        "range_mode": "all_attendance",
+    }
+    region_row = {
+        "send_achievements": 1,
+        "achievement_channel": "C1",
+        "slack_token": "enc",
+        "region": "test",
+    }
+    # A valid 2025 award (prior year) plus the 2026 award for the same PAX.
+    awarded_rows = [
+        {
+            "id": 98,
+            "achievement_id": 1,
+            "pax_id": "U1",
+            "date_awarded": date(2025, 7, 1),
+            "period": "year",
+            "period_key": "2025",
+            "period_start": date(2025, 1, 1),
+            "period_end": date(2025, 12, 31),
+            "achievement_version_id": 7,
+        },
+        {
+            "id": 99,
+            "achievement_id": 1,
+            "pax_id": "U1",
+            "date_awarded": date(2026, 7, 1),
+            "period": "year",
+            "period_key": "2026",
+            "period_start": date(2026, 1, 1),
+            "period_end": date(2026, 12, 31),
+            "achievement_version_id": 7,
+        },
+    ]
+    # evaluate_rule (mocked) returns only the current-window (2026) qualifier.
+    qualified_2026 = pd.DataFrame(
+        {
+            "pax_id": ["U1"],
+            "achievement_id": [1],
+            "date_awarded": [date(2026, 7, 1)],
+            "period_bucket": ["2026"],
+            "period_key": ["2026"],
+            "period_start": [date(2026, 1, 1)],
+            "period_end": [date(2026, 12, 31)],
+            "qualifying_count": [25],
+        }
+    )
+    nation = pd.DataFrame(
+        {"email": ["a@b.c"], "user_id": ["U1"], "date": [date(2026, 7, 1)], "region": ["f3test"]}
+    )
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[rule], awarded_rows]
+
+    with patch("achievements.runner.decrypt_field", return_value="xoxb-test"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.load_nation_attendance", return_value=nation):
+                with patch("achievements.runner.attach_home_regions", side_effect=lambda _c, n, _s: n):
+                    with patch("achievements.runner.evaluate_rule", return_value=qualified_2026):
+                        result = run_achievements_for_region(
+                            mock_conn,
+                            pm_schema="paxminer_test",
+                            regional_schema="f3test",
+                            region_row=region_row,
+                            start=date(2025, 12, 25),
+                            end=date(2027, 1, 7),
+                            period_year=2026,
+                            allow_revoke=True,
+                            announce=False,
+                            emit_logs=False,
+                            dry_run=True,
+                        )
+
+    # The 2026 award is held (already present); the 2025 award must NOT be
+    # revoked while processing the 2026 window — it belongs to the 2025 window.
+    assert result["grants"] == 0
+    assert result["revokes"] == 0
+    assert result["held"] >= 2
+
+
 def test_run_achievements_scoped_revoke_only_for_webhook_pax():
     from achievements.runner import run_achievements_for_region
 
