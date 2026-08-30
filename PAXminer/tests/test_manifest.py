@@ -26,10 +26,16 @@ def test_manifest_enables_app_home_and_app_home_opened():
 
 
 def test_manifest_includes_emoji_read_and_reactions_write():
+    # Per-env manifests (manifest-*.json) are gitignored, so only the source
+    # manifest.json is asserted here; it is the template those are derived from.
     data = json.loads(_MANIFEST.read_text(encoding="utf-8"))
     scopes = data["oauth_config"]["scopes"]["bot"]
     assert "emoji:read" in scopes
     assert "reactions:write" in scopes
+    # Grants post via chat:write.public without joining, but reactions.add
+    # requires membership — the T-clap fire depends on being able to join.
+    assert "chat:write.public" in scopes
+    assert "channels:join" in scopes
 
 
 def test_manifest_needs_no_options_load_url():
