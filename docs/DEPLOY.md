@@ -186,15 +186,15 @@ With `--log-type Tail`, decode logs with `jq -r '.LogResult' | base64 -d` if nee
 ### Weaselbot → PAXMiner cutover checklist
 
 1. Deploy **PAXMiner** then **slackblast** (CI waits for PAXMiner when both run so **`AchievementsFunctionUrl`** is available).
-2. Run **`python migration/paxminer_migrate.py --env <stage> --all`** (weaselbot fold-in, scheduler tables, **achievements versioning**, drop legacy `regions` columns). Deploy updated application code **before** the `drop-legacy-columns` phase. **Exception:** the `achievements` phase must run **before** shipping the PAXminer image that JOINs `achievement_versions` (`python migration/paxminer_migrate.py --env <stage> --phase achievements`). Slackblast and QSignups do not need a deploy for that phase.
-3. Update **PAXMiner** Slack app from **`PAXminer/manifest-<stage>.json`** (**`SlackFunctionUrl`**, `reactions:write`, `emoji:read`). Reinstall so the new `emoji:read` scope is granted; until then the award-reaction picker falls back to the curated standard set.
+2. Run **`python migration/paxminer_migrate.py --env <stage> --all`** (weaselbot fold-in, scheduler tables, **achievements versioning**, drop legacy `regions` columns). Deploy updated application code **before** the `drop-legacy-columns` phase. **Exception:** the `achievements` phase must run **before** shipping the PAXminer image that JOINs `achievement_versions` (`python migration/paxminer_migrate.py --env <stage> --phase achievements`). Slackblast and QSignups do not need a deploy for that phase. Re-run that phase after any release that adds an `achievements_list` column (most recently **`emoji`**); the app self-heals it on the `/config-paxminer` paths, but the migration is what guarantees it.
+3. Update **PAXMiner** Slack app from **`PAXminer/manifest-<stage>.json`** (**`SlackFunctionUrl`**, `reactions:write`, `emoji:read`) and reinstall so `emoji:read` is granted. That scope populates the award-reaction picker; without it the picker falls back to a small curated list. No **Options Load URL** is needed — the picker is a `static_select` that filters client-side, so it never calls back.
 4. Re-install or verify **slackblast** OAuth if needed; confirm achievement webhook env on slackblast Lambda.
 5. Configure **`/config-paxminer`**: achievement channel/toggles, then **Schedule** destinations (set channels for `specific_channels` rows; disable any unwanted fan-out).
 6. Smoke-invoke the PAXMiner Lambdas (see above) and run the Slack Bolt manual smoke.
 7. **Uninstall** the legacy WeaselBot Slack app from the workspace.
 8. When stable, drop **`weaselbot_<stage>`** schema and delete any remaining **weaselbot** CloudFormation stack (optional `--drop-weaselbot-schema` on the weaselbot phase).
 
-**Free tier note:** Four container Lambdas (including the kept-warm Slack front door and the 15-minute schedule tick) plus Function URLs and EventBridge schedules fit typical light regional usage, but monitor Lambda invocations, log storage, and ECR if you run multiple stages.
+**This stack must cost $0/month on AWS — see [docs/COST.md](COST.md).** Lambda invocations, Function URLs, EventBridge, and CloudWatch Logs all sit inside always-free allowances at this volume, and every log group sets `RetentionInDays: 30` to keep it that way. The two things that have actually billed are **ECR image storage** (now capped by lifecycle policies on repositories declared in `infra/template.bootstrap.yaml`) and an **orphaned Lambda SnapStart snapshot** on a published version. Deploy the bootstrap stack before PAXminer, since the image repositories live there.
 
 ### Manual Lambda invocation (qsignups)
 
@@ -262,8 +262,9 @@ Reports/checkpoints are written under `migration/` (gitignored). After `migrate_
 ## Deploy (local)
 
 1. Copy `.env.deploy.example` to `.env.deploy.test` (or `.env.deploy.prod`) and fill in all values.
-2. **First-time AWS / GitHub Actions (optional):** from the repo root, with `origin` pointing at your GitHub repo:
-   - `./deploy.sh --env test --bootstrap` — creates/updates [`infra/template.bootstrap.yaml`](../infra/template.bootstrap.yaml): GitHub OIDC provider (if needed), SAM artifact bucket, and an IAM role trusted for `repo:<owner>/<repo>:*`. When combined with a full deploy in the same command, SAM uses the bootstrap bucket for packaged artifacts.
+2. **Bootstrap — required before the first PAXminer deploy**, from the repo root with `origin` pointing at your GitHub repo:
+   - `./deploy.sh --env test --bootstrap` — creates/updates [`infra/template.bootstrap.yaml`](../infra/template.bootstrap.yaml): GitHub OIDC provider (if needed), SAM artifact bucket, an IAM role trusted for `repo:<owner>/<repo>:*`, and the **ECR repositories for PAXminer's container functions** (with lifecycle policies — see [COST.md](COST.md)). When combined with a full deploy in the same command, SAM uses the bootstrap bucket for packaged artifacts.
+   - PAXminer deploys read the `EcrRepositoryBase` output from this stack and fail with an explicit message if it is missing, so bootstrap has to exist first.
    - After a successful deploy: `./deploy.sh --env test --setup-github` — requires `gh auth login`; creates the GitHub **environment** named after **`--env`** (`test` or `prod`) and sets the same variables/secrets documented under **GitHub Environments** below.
    - You can combine flags, e.g. `./deploy.sh --env test --bootstrap --setup-github`.
 3. Deploy:

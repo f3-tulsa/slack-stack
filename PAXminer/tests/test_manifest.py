@@ -30,3 +30,11 @@ def test_manifest_includes_emoji_read_and_reactions_write():
     scopes = data["oauth_config"]["scopes"]["bot"]
     assert "emoji:read" in scopes
     assert "reactions:write" in scopes
+
+
+def test_manifest_needs_no_options_load_url():
+    """The award emoji is a text input; nothing uses external_select any more."""
+    data = json.loads(_MANIFEST.read_text(encoding="utf-8"))
+    interactivity = data["settings"]["interactivity"]
+    assert interactivity.get("is_enabled") is True
+    assert "message_menu_options_url" not in interactivity

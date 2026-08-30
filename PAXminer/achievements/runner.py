@@ -29,6 +29,7 @@ from common.encryption import decrypt_field
 from slack_util import (
     format_log_message,
     is_slack_user_id,
+    log_header,
     mention,
     open_dm_channel,
     post_log,
@@ -36,39 +37,62 @@ from slack_util import (
     post_messages,
     resolve_display_name,
     slack_client,
+    workspace_archive_base,
     workspace_user_ids,
 )
 
 LOG = logging.getLogger(__name__)
 
-RULES_SQL = """
+_RULES_SELECT = """
 SELECT a.id AS id, a.id AS achievement_id, a.code, a.name, a.description, a.verb,
-       a.enabled, a.emoji, v.id AS version_id, v.version_key, v.metric, v.activity,
+       a.enabled,{emoji} v.id AS version_id, v.version_key, v.metric, v.activity,
        v.period, v.threshold, v.effective_from, v.effective_to, v.range_mode
-FROM `{schema}`.`achievements_list` a
-JOIN `{schema}`.`achievement_versions` v
+FROM `{{schema}}`.`achievements_list` a
+JOIN `{{schema}}`.`achievement_versions` v
   ON v.achievement_id = a.id AND v.superseded_at IS NULL
-WHERE a.enabled = 1
-ORDER BY a.id
 """
 
-RULES_ONE_SQL = """
-SELECT a.id AS id, a.id AS achievement_id, a.code, a.name, a.description, a.verb,
-       a.enabled, a.emoji, v.id AS version_id, v.version_key, v.metric, v.activity,
-       v.period, v.threshold, v.effective_from, v.effective_to, v.range_mode
-FROM `{schema}`.`achievements_list` a
-JOIN `{schema}`.`achievement_versions` v
-  ON v.achievement_id = a.id AND v.superseded_at IS NULL
-WHERE a.id = %s
-"""
+_RULES_ALL_WHERE = "WHERE a.enabled = 1\nORDER BY a.id\n"
+_RULES_ONE_WHERE = "WHERE a.id = %s\n"
+
+# Emoji is cosmetic and arrived in 5g, so the canonical statements omit it and
+# stay readable by a schema that has not had the achievements migration re-run.
+# `leaderboard` imports RULES_SQL and never needs the column.
+RULES_SQL = _RULES_SELECT.format(emoji="") + _RULES_ALL_WHERE
+RULES_ONE_SQL = _RULES_SELECT.format(emoji="") + _RULES_ONE_WHERE
+_RULES_SQL_EMOJI = _RULES_SELECT.format(emoji=" a.emoji,") + _RULES_ALL_WHERE
+_RULES_ONE_SQL_EMOJI = _RULES_SELECT.format(emoji=" a.emoji,") + _RULES_ONE_WHERE
 
 
 def _load_rules(cur, schema: str, *, achievement_id: int | None = None) -> list[dict]:
-    if achievement_id is not None:
-        cur.execute(RULES_ONE_SQL.format(schema=schema), (int(achievement_id),))
-    else:
-        cur.execute(RULES_SQL.format(schema=schema))
-    return list(cur.fetchall() or [])
+    """Load current-version rules, preferring the award emoji when the column exists.
+
+    Falls back to the emoji-free statement rather than failing the whole run on a
+    schema that predates the column. Costs one query in the normal case.
+    """
+    def _run(with_emoji: bool) -> None:
+        if achievement_id is not None:
+            sql = _RULES_ONE_SQL_EMOJI if with_emoji else RULES_ONE_SQL
+            cur.execute(sql.format(schema=schema), (int(achievement_id),))
+        else:
+            sql = _RULES_SQL_EMOJI if with_emoji else RULES_SQL
+            cur.execute(sql.format(schema=schema))
+
+    try:
+        _run(True)
+    except Exception as exc:
+        if "emoji" not in str(exc):
+            raise
+        LOG.warning(
+            "%s.achievements_list has no emoji column; run the achievements "
+            "migration phase. Awards will use the default reaction only.",
+            schema,
+        )
+        _run(False)
+    rules = list(cur.fetchall() or [])
+    for rule in rules:
+        rule.setdefault("emoji", None)
+    return rules
 
 
 def _load_awarded(
@@ -253,6 +277,18 @@ def iter_year_windows(start: date, end: date, overlap_days: int = 7) -> list[tup
     return windows
 
 
+def _bucket_in_period_year(bucket, year: int) -> bool:
+    """Scalar twin of `_filter_period_year`'s predicate.
+
+    A period bucket belongs to a calendar year when it is that year (``"2024"``)
+    or is prefixed by it (``"2024-03"``, ``"2024-W07"``). ISO-week buckets carry
+    their ISO year, so this stays consistent with the grant-side filter.
+    """
+    b = _norm_key(bucket)
+    y = str(year)
+    return b == y or b.startswith(f"{y}-")
+
+
 def _filter_period_year(qualified: pd.DataFrame, year: int) -> pd.DataFrame:
     if qualified.empty:
         return qualified
@@ -403,6 +439,18 @@ def run_achievements_for_region(
                         held_older_version += 1
                         continue
                 bucket = _row_period_key(row, period)
+                # Grants are clamped to `period_year` (see `_filter_period_year`),
+                # but `awarded` is loaded over the ±7-day overlap window and so
+                # pulls in the neighbouring year's awards. Without the same clamp
+                # here, `qual_keys` (this year only) would revoke a valid prior- or
+                # next-year award, which its own window then re-grants — an
+                # all-time reconcile that never reaches a 0/0 fixpoint. Hold any
+                # award whose bucket belongs to a different year; its own window
+                # judges it.
+                if period_year is not None and not _bucket_in_period_year(bucket, period_year):
+                    held += 1
+                    held_out_of_range += 1
+                    continue
                 if (str(row["pax_id"]), aid, bucket) in qual_keys:
                     held += 1
                     continue
@@ -487,6 +535,7 @@ def run_achievements_for_region(
 
     ytd_totals = {pax: int(sum(c.values())) for pax, c in counts.items()}
     ytd_family = {(pax, aid): int(cnt) for pax, c in counts.items() for aid, cnt in c.items()}
+    archive_base = workspace_archive_base(client)
 
     if announce and client is not None:
         grant_msgs = channel_grant_messages(
@@ -496,6 +545,7 @@ def run_achievements_for_region(
             known_ids=known_ids,
             ytd_totals=ytd_totals,
             ytd_family=ytd_family,
+            archive_base=archive_base,
         )
         packed = [(text, blocks, react) for text, blocks, react in grant_msgs]
         for cid in channels:
@@ -504,7 +554,11 @@ def run_achievements_for_region(
             post_messages(client, ao_channel_id, packed)
         for g in revokes:
             text, blocks = channel_revoke_message(
-                g, names=names, known_ids=known_ids, webhook=webhook
+                g,
+                names=names,
+                known_ids=known_ids,
+                webhook=webhook,
+                archive_base=archive_base,
             )
             for cid in channels:
                 post_message(client, cid, text, blocks=blocks)
@@ -517,9 +571,14 @@ def run_achievements_for_region(
             known_ids=known_ids,
             ytd_totals=ytd_totals,
             ytd_family=ytd_family,
+            archive_base=archive_base,
         )
         revoke_dms = dm_revoke_messages(
-            revokes, names=names, known_ids=known_ids, webhook=webhook
+            revokes,
+            names=names,
+            known_ids=known_ids,
+            webhook=webhook,
+            archive_base=archive_base,
         )
         for pax_id, (text, blocks) in {**dm_map, **revoke_dms}.items():
             if pax_id in dm_map and pax_id in revoke_dms:
@@ -550,9 +609,18 @@ def run_achievements_for_region(
     if client is not None and emit_logs:
         log_lines: list[str] = []
         for g in grants:
-            log_lines.append(grant_log_line(g, names.get(g["pax_id"])))
+            log_lines.append(
+                grant_log_line(g, names.get(g["pax_id"]), archive_base=archive_base)
+            )
         for g in revokes:
-            log_lines.append(revoke_log_line(g, names.get(g["pax_id"]), webhook=webhook))
+            log_lines.append(
+                revoke_log_line(
+                    g,
+                    names.get(g["pax_id"]),
+                    webhook=webhook,
+                    archive_base=archive_base,
+                )
+            )
         changed = bool(grants or revokes or dm_failed)
         if log_mode == "webhook":
             if changed:
@@ -563,7 +631,8 @@ def run_achievements_for_region(
                 post_log(client, line, region=region_row)
             # Scheduled / Run Now: one outcome line from schedule_runner, not a second dashed summary.
             if log_mode != "scheduled":
-                dest_channel = f"<#{channels[0]}>" if channels and str(channels[0]).startswith("C") else (channels[0] if channels else None)
+                # Plain id, never <#C…>: this lands inside the fenced envelope.
+                dest_channel = channels[0] if channels else None
                 post_log(
                     client,
                     run_summary_line(
@@ -656,6 +725,7 @@ def reconcile_rule_awards(
     end: date | None = None,
     automatic: bool = False,
     action: str = "re-evaluated",
+    dry_run: bool = False,
 ) -> dict:
     """Re-evaluate one family across its range; silent on T-claps/DMs, one channel summary."""
     from achievements.range import clear_reeval_lock
@@ -705,7 +775,7 @@ def reconcile_rule_awards(
                 regional_schema=regional_schema,
                 region_row=region_row,
                 pax_user_ids=None,
-                dry_run=False,
+                dry_run=dry_run,
                 announce=False,
                 start=chunk_start,
                 end=chunk_end,
@@ -743,7 +813,7 @@ def reconcile_rule_awards(
         channel = resolve_achievement_channel(conn, pm_schema, regional_schema, region_row)
         name = meta.get("name") or "achievement"
         duration_s = time.monotonic() - started
-        if token_enc and channel:
+        if token_enc and channel and not dry_run:
             try:
                 client = slack_client(decrypt_field(token_enc))
                 admin_tag = mention(actor, resolve_display_name(client, actor))
@@ -798,6 +868,7 @@ def reconcile_rule_awards(
             "skipped": last_result.get("skipped"),
             "action": action,
             "affected_pax": len(affected),
+            "dry_run": dry_run,
         }
 
     finally:
@@ -846,9 +917,10 @@ def _post_achievement_failure_log(region_row: dict, exc: Exception) -> None:
         post_log(
             client,
             format_log_message(
-                "The *Achievements* job was run as scheduled",
+                log_header("Achievements"),
                 status="failed",
                 detail=str(exc)[:500],
+                fields=[("Mode", "scheduled")],
             ),
             region=region_row,
         )

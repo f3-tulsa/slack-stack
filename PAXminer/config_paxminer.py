@@ -456,11 +456,18 @@ def _achievement_edit_modal(
         version_created=src.get("version_created"),
         earliest_beatdown=src.get("earliest_beatdown"),
     )
-    from achievements.emoji import emoji_select_options, list_custom_emoji, normalize_emoji_name
+    from achievements.emoji import (
+        emoji_option_groups,
+        initial_emoji_option,
+        load_emoji_catalog,
+        normalize_emoji_name,
+    )
 
     stored_emoji = normalize_emoji_name(src.get("emoji"))
-    custom_emoji = list_custom_emoji(client, team_id=team_id) if client is not None else []
-    emoji_opts = emoji_select_options(custom_emoji, stored=stored_emoji)
+    custom_emoji, emoji_categories = load_emoji_catalog(client, team_id=team_id)
+    emoji_groups = emoji_option_groups(
+        custom_emoji, emoji_categories, stored=stored_emoji
+    )
     blocks: list[dict] = []
     if is_edit:
         blocks.append(
@@ -515,13 +522,19 @@ def _achievement_edit_modal(
                 "label": {"type": "plain_text", "text": "Award reaction (optional)"},
                 "hint": {
                     "type": "plain_text",
-                    "text": "Added next to :fire: on the public award message.",
+                    "text": "Start typing to filter. Added next to :fire: on the "
+                    "public award message.",
                 },
                 "element": {
                     "type": "static_select",
                     "action_id": "val",
-                    "options": emoji_opts,
-                    **_with_initial(emoji_opts, stored_emoji),
+                    "placeholder": {
+                        "type": "plain_text",
+                        "text": "Search emoji",
+                        "emoji": True,
+                    },
+                    "option_groups": emoji_groups,
+                    **initial_emoji_option(emoji_groups, stored_emoji),
                 },
             },
         ]
@@ -734,8 +747,8 @@ def _parse_achievement_form(payload: dict) -> dict:
         return (state.get(block_id, {}).get("val", {}) or {}).get("value", "") or ""
         # strip below
 
-    def _select(block_id: str) -> str:
-        sel = (state.get(block_id, {}).get("val", {}) or {}).get("selected_option") or {}
+    def _select(block_id: str, action_id: str = "val") -> str:
+        sel = (state.get(block_id, {}).get(action_id, {}) or {}).get("selected_option") or {}
         return (sel.get("value") or "").strip()
 
     def _multi(block_id: str) -> list[str]:
@@ -778,6 +791,7 @@ def _parse_achievement_form(payload: dict) -> dict:
     }
     from achievements.emoji import normalize_emoji_name
 
+    # The picker's "None" option and an untouched optional block both mean clear.
     parsed["emoji"] = normalize_emoji_name(parsed["emoji"])
     return parsed
 

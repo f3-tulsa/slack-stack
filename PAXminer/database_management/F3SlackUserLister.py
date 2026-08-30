@@ -20,13 +20,13 @@ import logging
 import json
 
 try:
-    from slack_util import format_log_message
+    from slack_util import format_log_message, log_header
 except ImportError:
     import sys
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from slack_util import format_log_message
+    from slack_util import format_log_message, log_header
 
 
 def user_lookback(firsttime_run):
@@ -186,13 +186,14 @@ def database_slack_user_update(region_db, key, firsttime_run, mydb, log_channel=
             slack.chat_postMessage(
                 channel=(log_channel or "").strip() or "paxminer_logs",
                 text=format_log_message(
-                    "The *User sync* job was run as scheduled",
+                    log_header("User sync"),
                     status="success",
                     fields=[
+                        ("Mode", "scheduled"),
                         (
                             "Results",
                             f"{region_db}: {new_count} new PAX records, {updated_count} updated",
-                        )
+                        ),
                     ],
                 ),
             )

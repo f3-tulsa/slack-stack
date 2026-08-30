@@ -26,6 +26,7 @@ from scheduling import (
 from slack_util import (
     format_log_message,
     is_slack_user_id,
+    log_header,
     open_dm_channel,
     post_log,
     post_message,
@@ -425,7 +426,7 @@ def format_schedule_log_line(
         mode = f"manually by {who}"
     else:
         mode = "scheduled"
-    header = f"The *{_report_title(str(name))}* report was run."
+    header = log_header(_report_title(str(name)), noun="report")
 
     skipped = result.get("skipped") or nested.get("skipped")
     error = result.get("error") or nested.get("error")
@@ -504,7 +505,6 @@ def format_schedule_log_line(
         fields=fields,
         message_count=messages,
         destinations=dest,
-        code_block=True,
     )
 
 

@@ -74,10 +74,12 @@ from slack_http import ADMIN_REQUIRED_TEXT, is_http_request, is_slack_admin, not
 
 LOCAL_DEVELOPMENT = not os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
 
+# Bolt clears the root handlers the Lambda runtime installed, so one has to be
+# put back or the front door logs nothing at all in CloudWatch.
 SlackRequestHandler.clear_all_log_handlers()
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-if LOCAL_DEVELOPMENT:
+if not logger.handlers:
     logger.addHandler(logging.StreamHandler())
 
 app = App(

@@ -194,12 +194,36 @@ jobs:
         run: |
           set -euo pipefail
           sam build -t PAXminer/template.yaml --no-cached
+      # ECR repositories live in the bootstrap stack so they carry a lifecycle
+      # policy. --resolve-image-repos would create unmanaged repos in a SAM-owned
+      # CompanionStack that never expires anything. See docs/COST.md.
+      - name: Resolve ECR repositories
+        id: ecr
+        env:
+          BOOTSTRAP_STACK_NAME: ${{ vars.BOOTSTRAP_STACK_NAME || 'slack-stack-bootstrap' }}
+        run: |
+          set -euo pipefail
+          base="$(aws cloudformation describe-stacks \
+            --stack-name "$BOOTSTRAP_STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='EcrRepositoryBase'].OutputValue | [0]" \
+            --output text)"
+          if [[ -z "$base" || "$base" == "None" ]]; then
+            echo "::error::EcrRepositoryBase missing from ${BOOTSTRAP_STACK_NAME}. Redeploy infra/template.bootstrap.yaml."
+            exit 1
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
       - name: Deploy PAXminer
+        env:
+          ECR_BASE: ${{ steps.ecr.outputs.base }}
+          STAGE: ${{ vars.STAGE }}
         run: |
           sam deploy \
             --stack-name paxminer-${{ vars.STAGE }} \
             --no-confirm-changeset --no-fail-on-empty-changeset \
-            --resolve-image-repos \
+            --image-repositories SyncFunction="${ECR_BASE}/paxminer-${STAGE}-sync" \
+            --image-repositories AchievementsFunction="${ECR_BASE}/paxminer-${STAGE}-achievements" \
+            --image-repositories ScheduleFunction="${ECR_BASE}/paxminer-${STAGE}-schedule" \
+            --image-repositories SlackFunction="${ECR_BASE}/paxminer-${STAGE}-slack" \
             --s3-bucket ${{ env.SAM_S3_BUCKET }} \
             --capabilities CAPABILITY_IAM \
             --parameter-overrides \

@@ -93,5 +93,4 @@ def achievement_admin_log_line(
         status=status,
         duration_s=duration_s,
         fields=fields,
-        code_block=True,
     )

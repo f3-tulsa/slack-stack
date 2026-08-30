@@ -22,6 +22,7 @@ Each app has its own `template.yaml`; deploy order between stacks is flexible.
 | Doc | Contents |
 |-----|----------|
 | [docs/DEPLOY.md](docs/DEPLOY.md) | Env vars, OAuth tables, local & CI deploy, Lambda smoke tests, encryption, S3 |
+| [docs/COST.md](docs/COST.md) | **The stack must run $0/month on AWS** — free-tier allowances per service, and what to watch |
 | [docs/MIGRATION.md](docs/MIGRATION.md) | `migrate_data.py`, remap, images, artifacts |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Repo layout, schemas, DB map, QSignups permissions |
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | End-user help for each app |

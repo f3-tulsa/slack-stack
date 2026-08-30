@@ -28,7 +28,7 @@ from utilities.helper_functions import (
     remove_keys_from_dict,
     replace_user_channel_ids,
     safe_get,
-    short_backblast_date,
+    backblast_date_label,
     build_backblast_edit_summary,
     format_backblast_paxminer_log,
 )
@@ -827,7 +827,7 @@ COUNT: {count}
                         text=format_backblast_paxminer_log(
                             edited=create_or_edit == "edit",
                             ao_id=ao or chan,
-                            date_label=short_backblast_date(the_date),
+                            date_label=backblast_date_label(the_date),
                             permalink=(res_link or {}).get("permalink"),
                             summary_lines=summary_lines,
                         ),

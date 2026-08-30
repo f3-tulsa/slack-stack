@@ -6,6 +6,7 @@ import random
 from datetime import date
 from unittest.mock import MagicMock, patch
 
+import pytest
 from slack_sdk.errors import SlackApiError
 
 
@@ -153,79 +154,264 @@ def test_award_log_line_grant_and_revoke_share_suffix():
     assert "revoked from `Nacho`" in revoke
     assert "after evaluating" in grant
     assert "after evaluating" in revoke
-    assert "this Backblast" in grant
+    assert "the Backblast from <" in grant
+    assert "|August 16, 2026>" in grant
     bare = award_log_line({**row, "ao_id": None, "timestamp": None}, "Nacho", granted=False)
     assert "after evaluating" not in bare
-    assert bare.endswith("for period August 2026.") or "for period" in bare
+    assert bare.endswith("for period August 2026.")
+
+    scoped = award_log_line(
+        row, "Nacho", granted=True, archive_base="https://f3ttown-test.slack.com"
+    )
+    assert "https://f3ttown-test.slack.com/archives/C_AO/p1750000000000001" in scoped
 
 
-def test_emoji_select_options_cap_union_and_list_failure():
+def test_emoji_options_keep_every_workspace_emoji_but_shortlist_the_standard_set():
+    """The full ~1900 renders on desktop and freezes mobile, so standard is trimmed."""
+    from achievements.emoji import (
+        AWARD_EMOJI_CANDIDATES,
+        MAX_OPTION_GROUPS,
+        MAX_OPTIONS_PER_GROUP,
+        NONE_EMOJI_VALUE,
+        WORKSPACE_GROUP_LABEL,
+        emoji_option_groups,
+    )
+
+    custom = [f"f3_{i}" for i in range(40)]
+    categories = [
+        ("Smileys & People", ["fire", "muscle", *[f"smile_{i}" for i in range(500)]]),
+        ("Flags", [f"flag_{i}" for i in range(270)]),
+    ]
+    groups = emoji_option_groups(custom, categories)
+    values = [o["value"] for g in groups for o in g["options"]]
+
+    assert values[0] == NONE_EMOJI_VALUE
+    # Every workspace emoji survives; those are the ones a region cares about.
+    assert all(n in values for n in custom)
+    # Standard names come from the shortlist, not the whole catalog.
+    assert "fire" in values and "muscle" in values
+    assert "smile_499" not in values
+    assert "flag_269" not in values
+    # Comfortably smaller than the ~1900 that broke the mobile client.
+    assert len(values) < 400
+
+    assert len(groups) <= MAX_OPTION_GROUPS
+    assert all(len(g["options"]) <= MAX_OPTIONS_PER_GROUP for g in groups)
+    assert groups[1]["label"]["text"] == WORKSPACE_GROUP_LABEL
+    # A candidate the workspace does not actually have is dropped, not offered.
+    assert "sports_medal" in AWARD_EMOJI_CANDIDATES
+    assert "sports_medal" not in values
+
+
+def test_emoji_options_fall_back_when_there_is_no_category_data():
+    from achievements.emoji import CURATED_AWARD_EMOJI, emoji_option_groups
+
+    groups = emoji_option_groups(["f3_ruck"], [])
+    values = [o["value"] for g in groups for o in g["options"]]
+    assert "f3_ruck" in values
+    # Nothing to filter against, so offer the small hardcoded set rather than none.
+    assert all(n in values for n in CURATED_AWARD_EMOJI)
+
+
+def test_stored_emoji_survives_even_if_deleted_from_the_workspace():
+    """static_select rejects an initial_option that is not in the list."""
+    from achievements.emoji import emoji_option_groups, initial_emoji_option
+
+    categories = [("Activities", ["fire", "trophy"])]
+
+    groups = emoji_option_groups([], categories, stored="retired_slackmoji")
+    values = [o["value"] for g in groups for o in g["options"]]
+    assert "retired_slackmoji" in values
+    assert initial_emoji_option(groups, "retired_slackmoji") == {
+        "initial_option": {
+            "text": {
+                "type": "plain_text",
+                "text": ":retired_slackmoji: retired_slackmoji",
+                "emoji": True,
+            },
+            "value": "retired_slackmoji",
+        }
+    }
+
+    # A value already in the list is not duplicated into its own group.
+    groups = emoji_option_groups([], categories, stored="fire")
+    assert [o["value"] for g in groups for o in g["options"]].count("fire") == 1
+    assert initial_emoji_option(groups, "fire")["initial_option"]["value"] == "fire"
+
+    assert initial_emoji_option(groups, None) == {}
+
+
+def test_emoji_catalog_falls_back_when_slack_lookup_fails():
     from achievements.emoji import (
         CURATED_AWARD_EMOJI,
-        MAX_EMOJI_OPTIONS,
-        NONE_EMOJI_VALUE,
         clear_emoji_cache,
-        emoji_select_options,
-        list_custom_emoji,
+        load_emoji_catalog,
     )
 
     clear_emoji_cache()
-    custom = [f"custom_{i}" for i in range(80)]
-    opts = emoji_select_options(custom, stored="retired_slackmoji")
-    assert len(opts) <= MAX_EMOJI_OPTIONS
-    values = [o["value"] for o in opts]
-    assert values[0] == NONE_EMOJI_VALUE
-    assert "retired_slackmoji" in values
-    assert "fire" in values
     client = MagicMock()
-    client.emoji_list.side_effect = RuntimeError("missing_scope")
-    names = list_custom_emoji(client, team_id="T1")
-    assert names == []
-    fallback = emoji_select_options(names)
-    assert [o["value"] for o in fallback[1 : 1 + len(CURATED_AWARD_EMOJI)]][:3] == list(
-        CURATED_AWARD_EMOJI
-    )[:3]
+    client.emoji_list.return_value = {
+        "emoji": {"f3_logo": "https://x/1.png", "shipit": "alias:squirrel"},
+        "categories": [
+            {"name": "Smileys & People", "emoji_names": ["grinning", "joy"]},
+            {"name": "Activities", "emoji_names": ["soccer", "joy"]},
+        ],
+    }
+    custom, categories = load_emoji_catalog(client, team_id="T1")
+    assert custom == ["f3_logo", "shipit"]
+    # "joy" is de-duplicated across categories.
+    assert categories == [("Smileys & People", ["grinning", "joy"]), ("Activities", ["soccer"])]
+    assert client.emoji_list.call_args.kwargs["include_categories"] is True
+
+    load_emoji_catalog(client, team_id="T1")
+    assert client.emoji_list.call_count == 1
+
+    clear_emoji_cache()
+    broken = MagicMock()
+    broken.emoji_list.side_effect = RuntimeError("missing_scope")
+    custom, categories = load_emoji_catalog(broken, team_id="T2")
+    assert custom == []
+    assert categories == [("Awards", list(CURATED_AWARD_EMOJI))]
 
 
-def test_stored_emoji_survives_when_missing_from_options():
-    from config_paxminer import _achievement_edit_modal, _parse_achievement_form, _with_initial
+def test_emoji_field_is_a_static_select_needing_no_options_handler():
+    from config_paxminer import _achievement_edit_modal, _parse_achievement_form
 
     row = {
-        "id": 3,
-        "name": "Six Pack",
-        "code": "six_pack",
-        "description": "d",
-        "verb": "posting",
-        "metric": "posts",
-        "period": "week",
-        "threshold": 6,
-        "enabled": 1,
-        "emoji": "gone_custom",
+        "id": 3, "name": "Six Pack", "code": "six_pack", "description": "d",
+        "verb": "posting", "metric": "posts", "period": "week", "threshold": 6,
+        "enabled": 1, "emoji": "fire",
     }
-    modal = _achievement_edit_modal("T1", "f3test", row)
-    emoji_block = next(b for b in modal["blocks"] if b.get("block_id") == "emoji")
-    values = [o["value"] for o in emoji_block["element"]["options"]]
-    assert "gone_custom" in values
-    assert emoji_block["element"]["initial_option"]["value"] == "gone_custom"
-    parsed = _parse_achievement_form(
-        {
-            "view": {
-                "state": {
-                    "values": {
-                        "name": {"val": {"value": "Six Pack"}},
-                        "description": {"val": {"value": "d"}},
-                        "verb": {"val": {"value": "posting"}},
-                        "metric": {"val": {"selected_option": {"value": "posts"}}},
-                        "period": {"val": {"selected_option": {"value": "week"}}},
-                        "threshold": {"val": {"value": "6"}},
-                        "emoji": {"val": {"selected_option": {"value": "gone_custom"}}},
-                    }
-                }
-            }
-        }
+    client = MagicMock()
+    client.emoji_list.return_value = {
+        "emoji": {},
+        "categories": [{"name": "Activities", "emoji_names": ["fire", "trophy"]}],
+    }
+    from achievements.emoji import clear_emoji_cache
+
+    clear_emoji_cache()
+    modal = _achievement_edit_modal("T1", "f3test", row, client=client)
+    block = next(b for b in modal["blocks"] if b.get("block_id") == "emoji")
+    element = block["element"]
+    assert block["optional"] is True
+    assert element["type"] == "static_select"
+    # No external_select means no options handler and no per-keystroke request.
+    assert "min_query_length" not in element
+    assert element["option_groups"]
+    assert element["initial_option"]["value"] == "fire"
+
+    def _parse(selected):
+        val = {"selected_option": {"value": selected}} if selected else {}
+        return _parse_achievement_form(
+            {"view": {"state": {"values": {
+                "name": {"val": {"value": "Six Pack"}},
+                "description": {"val": {"value": "d"}},
+                "verb": {"val": {"value": "posting"}},
+                "code": {"val": {"value": "six_pack"}},
+                "metric": {"val": {"selected_option": {"value": "posts"}}},
+                "period": {"val": {"selected_option": {"value": "week"}}},
+                "threshold": {"val": {"value": "6"}},
+                "emoji": {"val": val},
+            }}}}
+        )
+
+    assert _parse("fire")["emoji"] == "fire"
+    # Both the None option and an untouched block clear the field.
+    assert _parse("_none")["emoji"] is None
+    assert _parse(None)["emoji"] is None
+
+
+def test_backblast_links_use_the_workspace_host():
+    """Bare slack.com archive links do not deep-link in the Slack mobile app."""
+    from achievements.period import backblast_archive_url
+    from slack_util import clear_archive_base_cache, workspace_archive_base
+
+    assert backblast_archive_url("C0APCSRGBB9", "1787335245.777559") == (
+        "https://slack.com/archives/C0APCSRGBB9/p1787335245777559"
     )
-    assert parsed["emoji"] == "gone_custom"
-    assert _with_initial(emoji_block["element"]["options"], "gone_custom")
+    assert backblast_archive_url(
+        "C0APCSRGBB9", "1787335245.777559", archive_base="https://f3ttown-test.slack.com/"
+    ) == "https://f3ttown-test.slack.com/archives/C0APCSRGBB9/p1787335245777559"
+    assert backblast_archive_url(None, "1787335245.777559") is None
+    assert backblast_archive_url("C1", "not-a-ts") is None
+
+    clear_archive_base_cache()
+    client = MagicMock(token="xoxb-1")
+    client.auth_test.return_value = {"url": "https://f3ttown-test.slack.com/"}
+    assert workspace_archive_base(client) == "https://f3ttown-test.slack.com"
+    assert workspace_archive_base(client) == "https://f3ttown-test.slack.com"
+    assert client.auth_test.call_count == 1
+
+    clear_archive_base_cache()
+    broken = MagicMock(token="xoxb-2")
+    broken.auth_test.side_effect = RuntimeError("nope")
+    assert workspace_archive_base(broken) == "https://slack.com"
+    assert workspace_archive_base(None) == "https://slack.com"
+
+
+def test_award_messages_carry_the_workspace_host_and_full_date():
+    from achievements.announcements import channel_grant_messages
+
+    g = {
+        "pax_id": "U01AAAAAAA1",
+        "achievement_id": 1,
+        "date_awarded": date(2026, 8, 21),
+        "ao_id": "C0APCSRGBB9",
+        "timestamp": "1787335245.777559",
+        "rule": {"name": "Beast", "verb": "posting"},
+    }
+    msgs = channel_grant_messages(
+        [g],
+        year=2026,
+        names={"U01AAAAAAA1": "A"},
+        known_ids={"U01AAAAAAA1"},
+        ytd_totals={"U01AAAAAAA1": 1},
+        rng=random.Random(0),
+        archive_base="https://f3ttown-test.slack.com",
+    )
+    assert (
+        "<https://f3ttown-test.slack.com/archives/C0APCSRGBB9/p1787335245777559"
+        "|August 21, 2026>" in msgs[0][0]
+    )
+
+
+def test_shared_rules_sql_omits_emoji_so_leaderboard_never_needs_it():
+    from achievements.runner import RULES_ONE_SQL, RULES_SQL, _RULES_SQL_EMOJI
+
+    assert "a.emoji" not in RULES_SQL
+    assert "a.emoji" not in RULES_ONE_SQL
+    assert "a.emoji" in _RULES_SQL_EMOJI
+    for sql in (RULES_SQL, RULES_ONE_SQL, _RULES_SQL_EMOJI):
+        assert "v.range_mode" in sql
+        assert "superseded_at IS NULL" in sql
+
+
+def test_load_rules_falls_back_when_emoji_column_is_missing():
+    """A schema that predates the 5g migration still evaluates."""
+    from achievements.runner import _load_rules
+
+    happy = MagicMock()
+    happy.fetchall.return_value = [{"id": 3, "name": "Beast", "emoji": "muscle"}]
+    loaded = _load_rules(happy, "f3test")
+    assert loaded[0]["emoji"] == "muscle"
+    assert happy.execute.call_count == 1
+    assert "a.emoji" in str(happy.execute.call_args.args[0])
+
+    pre_5g = MagicMock()
+    pre_5g.execute.side_effect = [
+        Exception("1054 (42S22): Unknown column 'a.emoji' in 'field list'"),
+        None,
+    ]
+    pre_5g.fetchall.return_value = [{"id": 3, "name": "Beast"}]
+    loaded = _load_rules(pre_5g, "f3test")
+    assert loaded[0]["emoji"] is None
+    assert pre_5g.execute.call_count == 2
+    assert "a.emoji" not in str(pre_5g.execute.call_args.args[0])
+
+    other = MagicMock()
+    other.execute.side_effect = Exception("connection lost")
+    with pytest.raises(Exception, match="connection lost"):
+        _load_rules(other, "f3test")
 
 
 def test_emoji_only_edit_does_not_mint_or_queue():

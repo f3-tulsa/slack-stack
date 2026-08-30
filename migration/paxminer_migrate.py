@@ -32,7 +32,13 @@ _MIGRATION_DIR = Path(__file__).resolve().parent
 if str(_MIGRATION_DIR) not in sys.path:
     sys.path.insert(0, str(_MIGRATION_DIR))
 
-from paxminer_phases.db import _ListHandler, _connect, _load_env, _write_receipt  # noqa: E402
+from paxminer_phases.db import (  # noqa: E402
+    ENV_STAGES,
+    _ListHandler,
+    _connect,
+    _load_env,
+    _write_receipt,
+)
 from paxminer_phases.achievements import run_achievements  # noqa: E402
 from paxminer_phases.drop_legacy import run_drop_legacy_columns  # noqa: E402
 from paxminer_phases.scheduler import run_scheduler  # noqa: E402
@@ -67,13 +73,13 @@ def _format_phase_summary(phase: str, result: dict) -> list[str]:
             f"  weaselbot_schema_dropped: {result.get('weaselbot_schema_dropped', False)}",
         ]
     if phase == "scheduler":
+        backfill = result.get("award_achievements_backfill") or {}
         return [
             f"  timezone_added: {result.get('timezone_added')}",
             f"  tables_created: {', '.join(result.get('tables_created') or []) or '(none)'}",
-            f"  active regions: {result.get('regions', 0)}",
-            f"  regions_with_schema: {result.get('regions_with_schema', 0)}",
-            f"  definitions upserted: {result.get('definitions', 0)}",
-            f"  schedules inserted: {result.get('schedules', 0)}",
+            f"  award_achievements definitions: {backfill.get('definitions_ensured', 0)}",
+            f"  award_achievements schedules: {backfill.get('schedules_inserted', 0)}",
+            f"  award_achievements skipped: {backfill.get('skipped', 0)}",
         ]
     if phase == "drop-legacy-columns":
         return [
@@ -118,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     log_capture = _setup_logging()
 
     parser = argparse.ArgumentParser(description="PAXMiner DB migration orchestrator")
-    parser.add_argument("--env", required=True, choices=("test", "prod"))
+    parser.add_argument("--env", required=True, choices=ENV_STAGES)
     phase_group = parser.add_mutually_exclusive_group(required=True)
     phase_group.add_argument("--phase", choices=PHASE_CHOICES)
     phase_group.add_argument(
@@ -165,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
 
     phase_outcomes: list[dict] = []
     overall_ok = True
-    conn = _connect()
+    conn = _connect(read_timeout=1800, write_timeout=1800)
     try:
         for phase in phases:
             LOG.info("--- Phase: %s ---", phase)

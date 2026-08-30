@@ -21,13 +21,13 @@ def database_slack_channel_update(region_db, key, mydb, log_channel=None):
     slack.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=5))
 
     try:
-        from slack_util import MAX_SLACK_PAGES, format_log_message, next_slack_cursor
+        from slack_util import MAX_SLACK_PAGES, format_log_message, log_header, next_slack_cursor
     except ImportError:
         import sys
         from pathlib import Path
 
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-        from slack_util import MAX_SLACK_PAGES, format_log_message, next_slack_cursor
+        from slack_util import MAX_SLACK_PAGES, format_log_message, log_header, next_slack_cursor
 
     cursor_slack = ""
     seen_cursors: set[str] = set()
@@ -99,13 +99,14 @@ def database_slack_channel_update(region_db, key, mydb, log_channel=None):
             slack.chat_postMessage(
                 channel=(log_channel or "").strip() or "paxminer_logs",
                 text=format_log_message(
-                    "The *Channel sync* job was run as scheduled",
+                    log_header("Channel sync"),
                     status="success",
                     fields=[
+                        ("Mode", "scheduled"),
                         (
                             "Results",
                             f"{region_db}: {inserted} created, {updated} updated",
-                        )
+                        ),
                     ],
                 ),
             )

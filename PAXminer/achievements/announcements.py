@@ -12,7 +12,14 @@ from achievements.copy import (
 from achievements.period import backblast_archive_url, format_date_label, spoken_period
 from scheduling import format_iso_range
 from slack_blocks import section
-from slack_util import format_log_message, mention, ordinal_suffix, plain_name, ticked_display_name
+from slack_util import (
+    format_log_message,
+    log_header,
+    mention,
+    ordinal_suffix,
+    plain_name,
+    ticked_display_name,
+)
 
 AWARD_OPENERS = (
     "Congrats :raised_hands: to our man",
@@ -58,18 +65,24 @@ def date_link(
     timestamp: str | None,
     *,
     label: str | None = None,
+    archive_base: str | None = None,
 ) -> str:
     d = _as_date(awarded_on)
     text = label or (format_date_label(d) if d else "this event")
-    url = backblast_archive_url(ao_id, timestamp)
+    url = backblast_archive_url(ao_id, timestamp, archive_base=archive_base)
     if url:
         return f"<{url}|{text}>"
     return text
 
 
-def _earned_at(grant: dict) -> str:
+def _earned_at(grant: dict, archive_base: str | None = None) -> str:
     ao = ao_tag(grant.get("ao_id"))
-    dlink = date_link(grant.get("date_awarded"), grant.get("ao_id"), grant.get("timestamp"))
+    dlink = date_link(
+        grant.get("date_awarded"),
+        grant.get("ao_id"),
+        grant.get("timestamp"),
+        archive_base=archive_base,
+    )
     if ao:
         return f"at {ao} on {dlink}"
     return f"on {dlink}"
@@ -112,6 +125,7 @@ def channel_grant_messages(
     ytd_totals: dict[str, int],
     ytd_family: dict[tuple[str, int], int] | None = None,
     rng: random.Random | None = None,
+    archive_base: str | None = None,
 ) -> list[tuple[str, list[dict], list[str]]]:
     """One public message per grant. ``rng`` pins opener selection in tests."""
     del year, ytd_family
@@ -125,7 +139,7 @@ def channel_grant_messages(
         total = ytd_totals.get(g["pax_id"], 0)
         text = (
             f"{opener} {tag} who just unlocked the achievement {label}! "
-            f"He earned this {_earned_at(g)}. "
+            f"He earned this {_earned_at(g, archive_base)}. "
             f"This is achievement #{total} this year. Encourage this HIM to keep it up!"
         )
         out.append((text, [section(text)], _award_reactions(rule)))
@@ -140,6 +154,7 @@ def dm_grant_messages(
     known_ids: set[str] | None,
     ytd_totals: dict[str, int],
     ytd_family: dict[tuple[str, int], int],
+    archive_base: str | None = None,
 ) -> dict[str, tuple[str, list[dict]]]:
     """One DM per PAX: personal single vs multi-award list."""
     by_pax: dict[str, list[dict]] = {}
@@ -156,13 +171,14 @@ def dm_grant_messages(
             ending = ordinal_suffix(idx)
             text = (
                 f"Hey {tag} you just unlocked the achievement {label}! "
-                f"You earned this {_earned_at(g)}. "
+                f"You earned this {_earned_at(g, archive_base)}. "
                 f"This is achievement #{total} in {year} for you and the {idx}{ending} "
                 f"time this year you've earned this award. Keep up the good work!"
             )
         else:
             bullets = [
-                f"{_family_label(g['rule'])}, earned {_earned_at(g)}" for g in group
+                f"{_family_label(g['rule'])}, earned {_earned_at(g, archive_base)}"
+                for g in group
             ]
             text = (
                 f"Hey {tag} you just earned {len(group)} achievements! Keep up the good work!\n"
@@ -176,14 +192,16 @@ def _revoke_period_label(row: dict) -> str:
     return spoken_period(row.get("period_start"), row.get("period_end"), row.get("period") or "year")
 
 
-def _revoke_backblast_link(row: dict, *, webhook: bool) -> str | None:
+def _revoke_backblast_link(
+    row: dict, *, webhook: bool, archive_base: str | None = None
+) -> str | None:
     ao_id = row.get("trigger_ao_id") or row.get("ao_id")
     ts = row.get("trigger_timestamp") or row.get("timestamp")
     d = row.get("trigger_date") or row.get("date_awarded")
     if not (ao_id and ts and d):
         return None
     label = format_date_label(_as_date(d))
-    return date_link(d, ao_id, ts, label=label)
+    return date_link(d, ao_id, ts, label=label, archive_base=archive_base)
 
 
 def channel_revoke_message(
@@ -192,11 +210,12 @@ def channel_revoke_message(
     names: dict[str, str],
     known_ids: set[str] | None,
     webhook: bool,
+    archive_base: str | None = None,
 ) -> tuple[str, list[dict]]:
     tag = mention(row["pax_id"], names.get(row["pax_id"]), known_ids=known_ids)
     name = (row.get("rule") or {}).get("name") or "achievement"
     period = _revoke_period_label(row)
-    link = _revoke_backblast_link(row, webhook=webhook)
+    link = _revoke_backblast_link(row, webhook=webhook, archive_base=archive_base)
     if link:
         text = (
             f"Correction: {tag}'s award for *{name}* during period {period} "
@@ -216,6 +235,7 @@ def dm_revoke_messages(
     names: dict[str, str],
     known_ids: set[str] | None,
     webhook: bool,
+    archive_base: str | None = None,
 ) -> dict[str, tuple[str, list[dict]]]:
     by_pax: dict[str, list[dict]] = {}
     for row in revokes:
@@ -227,7 +247,9 @@ def dm_revoke_messages(
         for row in group:
             name = (row.get("rule") or {}).get("name") or "achievement"
             period = _revoke_period_label(row)
-            link = _revoke_backblast_link(row, webhook=webhook)
+            link = _revoke_backblast_link(
+                row, webhook=webhook, archive_base=archive_base
+            )
             if link:
                 lines.append(
                     f"your award for *{name}* during period {period} was revoked "
@@ -254,7 +276,13 @@ def dm_revoke_messages(
     return out
 
 
-def award_log_line(row: dict, display_name: str | None, *, granted: bool) -> str:
+def award_log_line(
+    row: dict,
+    display_name: str | None,
+    *,
+    granted: bool,
+    archive_base: str | None = None,
+) -> str:
     name = (row.get("rule") or {}).get("name") or "achievement"
     period = spoken_period(
         row.get("period_start"), row.get("period_end"), row.get("period") or "year"
@@ -264,13 +292,20 @@ def award_log_line(row: dict, display_name: str | None, *, granted: bool) -> str
     ao_id = row.get("trigger_ao_id") or row.get("ao_id")
     ts = row.get("trigger_timestamp") or row.get("timestamp")
     d = row.get("trigger_date") or row.get("date_awarded")
-    link = date_link(d, ao_id, ts, label="this Backblast") if (ao_id and ts) else None
-    suffix = f" after evaluating {link}" if link else ""
+    label = format_date_label(_as_date(d)) if _as_date(d) else None
+    link = (
+        date_link(d, ao_id, ts, label=label, archive_base=archive_base)
+        if (ao_id and ts and label)
+        else None
+    )
+    suffix = f" after evaluating the Backblast from {link}" if link else ""
     return f"Achievement *{name}* was {verb} `{who}` for period {period}{suffix}."
 
 
-def grant_log_line(grant: dict, display_name: str | None) -> str:
-    return award_log_line(grant, display_name, granted=True)
+def grant_log_line(
+    grant: dict, display_name: str | None, *, archive_base: str | None = None
+) -> str:
+    return award_log_line(grant, display_name, granted=True, archive_base=archive_base)
 
 
 def revoke_log_line(
@@ -278,9 +313,10 @@ def revoke_log_line(
     display_name: str | None,
     *,
     webhook: bool = False,
+    archive_base: str | None = None,
 ) -> str:
     del webhook
-    return award_log_line(row, display_name, granted=False)
+    return award_log_line(row, display_name, granted=False, archive_base=archive_base)
 
 
 def run_summary_line(
@@ -351,10 +387,11 @@ def run_summary_line(
         fail = f" ({dm_failed} failed)" if dm_failed else ""
         dest_parts.append(f"{dms} DMs{fail}")
     return format_log_message(
-        f"The *Achievements ({kind})* job was run as scheduled",
+        log_header("Achievements"),
         status="success",
         duration_s=duration_s,
         fields=[
+            ("Mode", kind),
             ("Results", results),
             ("Period", span or ""),
         ],

@@ -128,7 +128,14 @@ def evaluate_rule(
     if crossing.empty:
         return _empty()
 
-    grouped = crossing.merge(counts, on=["user_id", "period_bucket"], how="left")
+    # posts_at_single_ao already carries qualifying_count on `crossing`; a second
+    # merge would suffix it to qualifying_count_x/_y (pandas 3) and KeyError.
+    count_cols = counts[["user_id", "period_bucket", "qualifying_count"]].drop_duplicates()
+    grouped = crossing.drop(columns=["qualifying_count"], errors="ignore").merge(
+        count_cols,
+        on=["user_id", "period_bucket"],
+        how="left",
+    )
     grouped = grouped[grouped["qualifying_count"] >= threshold]
     if grouped.empty:
         return _empty()

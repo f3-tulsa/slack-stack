@@ -821,28 +821,42 @@ def test_build_backblast_edit_summary_scalars_body_and_cap():
     assert any(ln.startswith("+") and ln.endswith("more changes") for ln in padded) or len(padded) <= helper_functions.BACKBLAST_EDIT_SUMMARY_CAP + 1
 
 
+def test_backblast_date_label_is_the_full_locale_date():
+    assert helper_functions.backblast_date_label(date(2026, 8, 21)) == "August 21, 2026"
+    assert helper_functions.backblast_date_label("2026-08-05") == "August 5, 2026"
+    assert helper_functions.backblast_date_label("2026-12-31") == "December 31, 2026"
+    assert helper_functions.backblast_date_label(None) == "this event"
+    assert helper_functions.backblast_date_label("not a date") == "not a date"
+
+
 def test_format_backblast_paxminer_log_shapes():
+    label = helper_functions.backblast_date_label(date(2026, 8, 21))
     imported = helper_functions.format_backblast_paxminer_log(
         edited=False,
         ao_id="C123",
-        date_label="Aug 21",
-        permalink="https://example.com/p",
+        date_label=label,
+        permalink="https://f3ttown-test.slack.com/archives/C123/p1787335245777559",
     )
-    assert imported == "Backblast successfully imported for <#C123> on <https://example.com/p|Aug 21>."
+    assert imported == (
+        "Backblast successfully imported for <#C123> on "
+        "<https://f3ttown-test.slack.com/archives/C123/p1787335245777559|August 21, 2026>."
+    )
     edited = helper_functions.format_backblast_paxminer_log(
         edited=True,
         ao_id="C123",
-        date_label="Aug 21",
+        date_label=label,
         permalink="https://example.com/p",
         summary_lines=["Q: A → B", "Backblast body was edited"],
     )
-    assert edited.startswith("Backblast successfully edited for <#C123> on <https://example.com/p|Aug 21>.")
+    assert edited.startswith(
+        "Backblast successfully edited for <#C123> on <https://example.com/p|August 21, 2026>."
+    )
     assert "```" in edited
     assert "Q: A → B" in edited
     no_block = helper_functions.format_backblast_paxminer_log(
         edited=True,
         ao_id="C123",
-        date_label="Aug 21",
+        date_label=label,
         permalink="https://example.com/p",
         summary_lines=[],
     )
