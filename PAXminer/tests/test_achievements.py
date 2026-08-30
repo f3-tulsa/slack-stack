@@ -2252,6 +2252,161 @@ def test_scheduled_run_revokes_current_year_dm_only():
     assert len([t for ch, t in posts if ch == "D1"]) == 1
 
 
+def test_ao_thread_grant_message_mentions_pax_without_detail():
+    from achievements.announcements import ao_thread_grant_message
+
+    a, b = "U01AAAAAAA1", "U01AAAAAAA2"
+    grant = {
+        "pax_id": a,
+        "achievement_id": 1,
+        "date_awarded": date(2026, 8, 16),
+        "rule": {"name": "Leader of Men", "verb": "Qing at 4 beatdowns"},
+    }
+    names = {a: "A", b: "B"}
+    known = {a, b}
+
+    single = ao_thread_grant_message(
+        [grant], achievement_channel_id="C_ACH", names=names, known_ids=known
+    )[0]
+    assert f"<@{a}>" in single
+    assert "<#C_ACH>" in single
+    assert "an achievement" in single
+    # A pointer, not a second copy of the T-clap.
+    assert "Leader of Men" not in single
+    assert "August 16" not in single
+
+    # One combined reply, and a PAX earning twice is only mentioned once.
+    many = ao_thread_grant_message(
+        [grant, dict(grant, pax_id=b), dict(grant, achievement_id=2)],
+        achievement_channel_id="C_ACH",
+        names=names,
+        known_ids=known,
+    )[0]
+    assert many.count(f"<@{a}>") == 1
+    assert f"<@{b}>" in many
+    assert "achievements" in many
+
+    assert (
+        ao_thread_grant_message(
+            [], achievement_channel_id="C_ACH", names=names, known_ids=known
+        )
+        is None
+    )
+    no_link = ao_thread_grant_message(
+        [grant], achievement_channel_id=None, names=names, known_ids=known
+    )[0]
+    assert "<#" not in no_link
+
+
+def _ao_grant_run(trigger_timestamp):
+    """A webhook grant with an AO channel to reply in."""
+    from achievements.runner import run_achievements_for_region
+
+    pax = "U01AOTHREAD"
+    rule = {
+        "id": 1,
+        "name": "6 pack",
+        "verb": "posting",
+        "period": "week",
+        "version_id": 7,
+        "enabled": 1,
+        "metric": "posts",
+        "threshold": 6,
+    }
+    qualified = pd.DataFrame(
+        {
+            "pax_id": [pax],
+            "period_key": ["2026-W11"],
+            "period_bucket": ["2026-W11"],
+            "date_awarded": [date(2026, 3, 9)],
+            "period_start": [date(2026, 3, 9)],
+            "period_end": [date(2026, 3, 15)],
+            "qualifying_count": [6],
+            "ao_id": ["C_AO"],
+            "timestamp": ["1750000000.000001"],
+        }
+    )
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[rule], []]
+    mock_cur.rowcount = 1
+    single_posts = []
+    batch_posts = []
+
+    with patch("achievements.runner.decrypt_field", return_value="x"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.workspace_user_ids", return_value={pax}):
+                with patch(
+                    "achievements.runner.load_nation_attendance",
+                    return_value=_posts(pax, ["2026-03-09"]),
+                ):
+                    with patch(
+                        "achievements.runner.attach_home_regions",
+                        side_effect=lambda c, n, s: n,
+                    ):
+                        with patch("achievements.runner.evaluate_rule", return_value=qualified):
+                            with patch(
+                                "achievements.runner.post_messages",
+                                side_effect=lambda _c, ch, items, **_k: batch_posts.append(
+                                    (ch, items)
+                                ),
+                            ):
+                                with patch(
+                                    "achievements.runner.post_message",
+                                    side_effect=lambda _c, ch, text, **kw: single_posts.append(
+                                        (ch, text, kw.get("thread_ts"))
+                                    ),
+                                ):
+                                    with patch("achievements.runner.post_log"):
+                                        with patch(
+                                            "achievements.runner.open_dm_channel",
+                                            return_value="D1",
+                                        ):
+                                            run_achievements_for_region(
+                                                mock_conn,
+                                                pm_schema="pm",
+                                                regional_schema="f3test",
+                                                region_row={
+                                                    "send_achievements": 1,
+                                                    "achievement_channel": "C1",
+                                                    "slack_token": "enc",
+                                                },
+                                                pax_user_ids={pax},
+                                                post_to_ao=True,
+                                                ao_channel_id="C_AO",
+                                                log_mode="webhook",
+                                                trigger_ao_id="C_AO",
+                                                trigger_timestamp=trigger_timestamp,
+                                                trigger_date=date(2026, 3, 9),
+                                            )
+    return single_posts, batch_posts, pax
+
+
+def test_ao_thread_reply_mentions_pax_and_links_channel():
+    single_posts, batch_posts, pax = _ao_grant_run("1750000000.000001")
+
+    # Full T-claps go to the achievements channel only.
+    assert [ch for ch, _items in batch_posts] == ["C1"]
+
+    ao_replies = [(t, ts) for ch, t, ts in single_posts if ch == "C_AO"]
+    assert len(ao_replies) == 1
+    text, thread_ts = ao_replies[0]
+    assert thread_ts == "1750000000.000001"
+    assert f"<@{pax}>" in text
+    assert "<#C1>" in text
+    assert "6 pack" not in text
+
+
+def test_ao_reply_falls_back_to_top_level_without_a_backblast_ts():
+    single_posts, _batch, _pax = _ao_grant_run(None)
+
+    ao_replies = [(t, ts) for ch, t, ts in single_posts if ch == "C_AO"]
+    assert len(ao_replies) == 1
+    assert ao_replies[0][1] is None
+
+
 def test_spoken_period_week_spells_out_both_ends():
     """2026-W01 starts in December 2025 — the label must not read as a 2025 award."""
     from achievements.period import spoken_period

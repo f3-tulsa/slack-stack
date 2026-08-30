@@ -146,6 +146,42 @@ def channel_grant_messages(
     return out
 
 
+def ao_thread_grant_message(
+    grants: list[dict],
+    *,
+    achievement_channel_id: str | None,
+    names: dict[str, str],
+    known_ids: set[str] | None,
+) -> tuple[str, list[dict]] | None:
+    """One short reply for the AO channel: who earned something, and where to read it.
+
+    The full T-claps already run in the achievements channel; repeating them on
+    the Backblast is the same news twice.
+    """
+    if not grants:
+        return None
+    tags: list[str] = []
+    seen: set[str] = set()
+    for g in grants:
+        pax_id = str(g["pax_id"])
+        if pax_id in seen:
+            continue
+        seen.add(pax_id)
+        tags.append(mention(pax_id, names.get(pax_id), known_ids=known_ids))
+    if not tags:
+        return None
+    if len(tags) == 1:
+        who = tags[0]
+    elif len(tags) == 2:
+        who = f"{tags[0]} and {tags[1]}"
+    else:
+        who = f"{', '.join(tags[:-1])}, and {tags[-1]}"
+    where = f" See <#{achievement_channel_id}> for the details." if achievement_channel_id else ""
+    noun = "an achievement" if len(tags) == 1 else "achievements"
+    text = f"T-Claps :clap: to {who} for unlocking {noun}!{where}"
+    return text, [section(text)]
+
+
 def dm_grant_messages(
     grants: list[dict],
     *,

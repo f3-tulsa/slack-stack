@@ -383,6 +383,7 @@ def post_message(
     reaction: str | Sequence[str] | None = "fire",
     unfurl_links: bool = False,
     unfurl_media: bool = False,
+    thread_ts: str | None = None,
     max_retries: int = 5,
 ) -> None:
     kwargs: dict = {
@@ -394,6 +395,8 @@ def post_message(
     }
     if blocks:
         kwargs["blocks"] = blocks
+    if thread_ts:
+        kwargs["thread_ts"] = thread_ts
     last_error: Exception | None = None
     response = None
     for attempt in range(max_retries):

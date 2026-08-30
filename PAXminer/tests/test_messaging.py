@@ -437,6 +437,19 @@ def test_emoji_only_edit_does_not_mint_or_queue():
     )
 
 
+def test_post_message_threads_only_when_given_a_parent_ts():
+    from slack_util import post_message
+
+    client = MagicMock()
+    client.chat_postMessage.return_value = {"ok": True, "ts": "1.0"}
+
+    post_message(client, "C1", "hi", thread_ts="1750000000.000001")
+    assert client.chat_postMessage.call_args.kwargs["thread_ts"] == "1750000000.000001"
+
+    post_message(client, "C1", "hi")
+    assert "thread_ts" not in client.chat_postMessage.call_args.kwargs
+
+
 def test_post_message_reaction_failures_never_repost_or_raise():
     from slack_util import post_message
 

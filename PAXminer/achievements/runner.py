@@ -13,6 +13,7 @@ import pandas as pd
 from achievements.activity import classify_null_activity_types
 from achievements.range import hold_prior_version_awards
 from achievements.announcements import (
+    ao_thread_grant_message,
     channel_grant_messages,
     dm_grant_messages,
     dm_revoke_messages,
@@ -558,7 +559,23 @@ def run_achievements_for_region(
         for cid in channels:
             post_messages(client, cid, packed)
         if post_to_ao and ao_channel_id:
-            post_messages(client, ao_channel_id, packed)
+            # The AO channel gets a pointer, not a second copy of the T-claps —
+            # threaded onto the Backblast that earned them where we know its ts.
+            ao_msg = ao_thread_grant_message(
+                grants,
+                achievement_channel_id=channels[0] if channels else None,
+                names=names,
+                known_ids=known_ids,
+            )
+            if ao_msg:
+                ao_text, ao_blocks = ao_msg
+                post_message(
+                    client,
+                    ao_channel_id,
+                    ao_text,
+                    blocks=ao_blocks,
+                    thread_ts=trigger_timestamp or None,
+                )
 
     if notify_dms and client is not None:
         # A run that revokes and re-grants the same achievement for the same PAX
