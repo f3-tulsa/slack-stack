@@ -31,6 +31,9 @@ def test_manifest_enables_app_home_and_app_home_opened():
 
 @pytest.mark.parametrize("manifest", _MANIFESTS, ids=lambda p: p.name)
 def test_manifest_includes_emoji_read_and_reactions_write(manifest):
+    if not manifest.exists():
+        # Per-env manifests are gitignored; check them when working locally.
+        pytest.skip(f"{manifest.name} not present")
     data = json.loads(manifest.read_text(encoding="utf-8"))
     scopes = data["oauth_config"]["scopes"]["bot"]
     assert "emoji:read" in scopes
