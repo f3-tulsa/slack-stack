@@ -1,5 +1,5 @@
 import os
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -2165,6 +2165,84 @@ def test_iter_year_windows_overlap_attributes_iso_week_once():
         qualified = _filter_period_year(evaluate_rule(chunk, rule, schema="f3test"), year)
         keys.extend(list(qualified["period_key"]) if not qualified.empty else [])
     assert keys.count("2026-W01") == 1
+
+
+def test_scheduled_run_holds_iso_w01_boundary_week():
+    """2026-W01 begins Dec 29, 2025: a bare Jan 1 start truncates it and wrongly revokes."""
+    from achievements.runner import run_achievements_for_region
+
+    pax = "U01BOUNDARY"
+    rule = {
+        "id": 1,
+        "name": "6 pack",
+        "verb": "posting 6 times in a week",
+        "metric": "posts",
+        "activity": [],
+        "period": "week",
+        "threshold": 6,
+        "version_id": 7,
+        "enabled": 1,
+    }
+    awarded_row = {
+        "id": 42,
+        "achievement_id": 1,
+        "pax_id": pax,
+        "date_awarded": date(2026, 1, 3),
+        "period": "week",
+        "achievement_version_id": 7,
+        "period_key": "2026-W01",
+        "period_start": date(2025, 12, 29),
+        "period_end": date(2026, 1, 4),
+    }
+    all_posts = _posts(
+        pax,
+        ["2025-12-29", "2025-12-30", "2025-12-31", "2026-01-01", "2026-01-02", "2026-01-03"],
+    )
+
+    def _run(start):
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_conn.cursor.return_value.__exit__.return_value = False
+        mock_cur.fetchall.side_effect = [[rule], [awarded_row]]
+
+        def _window(_conn, _schemas, start=None, end=None):
+            return all_posts[
+                (all_posts["date"] >= pd.Timestamp(start))
+                & (all_posts["date"] <= pd.Timestamp(end))
+            ]
+
+        with patch("achievements.runner.decrypt_field", return_value="x"):
+            with patch("achievements.runner.slack_client"):
+                with patch("achievements.runner.load_nation_attendance", side_effect=_window):
+                    with patch(
+                        "achievements.runner.attach_home_regions",
+                        side_effect=lambda c, n, s: n,
+                    ):
+                        return run_achievements_for_region(
+                            mock_conn,
+                            pm_schema="pm",
+                            regional_schema="f3test",
+                            region_row={
+                                "send_achievements": 1,
+                                "achievement_channel": "C1",
+                                "slack_token": "enc",
+                            },
+                            start=start,
+                            end=date(2026, 6, 1),
+                            allow_revoke=True,
+                            period_year=2026,
+                            announce=False,
+                            emit_logs=False,
+                            dry_run=True,
+                        )
+
+    padded = _run(date(2026, 1, 1) - timedelta(days=7))
+    assert padded["revokes"] == 0
+    assert padded["grants"] == 0
+
+    # Regression guard: without the pad the week loses Dec 29-31 and is revoked.
+    assert _run(date(2026, 1, 1))["revokes"] == 1
 
 
 def test_webhook_never_revokes():
