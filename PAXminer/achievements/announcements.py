@@ -192,60 +192,38 @@ def _revoke_period_label(row: dict) -> str:
     return spoken_period(row.get("period_start"), row.get("period_end"), row.get("period") or "year")
 
 
-def _revoke_backblast_link(
-    row: dict, *, webhook: bool, archive_base: str | None = None
-) -> str | None:
-    ao_id = row.get("trigger_ao_id") or row.get("ao_id")
-    ts = row.get("trigger_timestamp") or row.get("timestamp")
-    d = row.get("trigger_date") or row.get("date_awarded")
-    if not (ao_id and ts and d):
-        return None
-    label = format_date_label(_as_date(d))
-    return date_link(d, ao_id, ts, label=label, archive_base=archive_base)
-
-
 def dm_revoke_messages(
     revokes: list[dict],
     *,
     names: dict[str, str],
     known_ids: set[str] | None,
-    webhook: bool,
     archive_base: str | None = None,
 ) -> dict[str, tuple[str, list[dict]]]:
+    """One DM per PAX. The revoke is private, names the period, and points at the ITQ."""
+    del archive_base
     by_pax: dict[str, list[dict]] = {}
     for row in revokes:
         by_pax.setdefault(str(row["pax_id"]), []).append(row)
     out: dict[str, tuple[str, list[dict]]] = {}
     for pax_id, group in by_pax.items():
         tag = mention(pax_id, names.get(pax_id), known_ids=known_ids)
-        lines = []
-        for row in group:
+        contact = "If you believe this is an error, please contact your ITQ."
+        if len(group) == 1:
+            row = group[0]
             name = (row.get("rule") or {}).get("name") or "achievement"
-            period = _revoke_period_label(row)
-            link = _revoke_backblast_link(
-                row, webhook=webhook, archive_base=archive_base
-            )
-            if link:
-                lines.append(
-                    f"your award for *{name}* during period {period} was revoked "
-                    f"after attendance was updated for {link}"
-                )
-            else:
-                lines.append(
-                    f"your award for *{name}* during period {period} was revoked "
-                    f"after attendance was updated"
-                )
-        if len(lines) == 1:
             text = (
-                f"Correction: Hey {tag}, just letting you know that {lines[0]}. "
-                f"Keep showing up and you'll get it back!"
+                f"Correction: {tag}, your award for *{name}* ({_revoke_period_label(row)}) "
+                f"was revoked during a re-evaluation. {contact}"
             )
         else:
-            bullets = "\n".join(lines)
+            bullets = "\n".join(
+                f"• *{(row.get('rule') or {}).get('name') or 'achievement'}* "
+                f"({_revoke_period_label(row)})"
+                for row in group
+            )
             text = (
-                f"Correction: Hey {tag}, just letting you know that {len(lines)} awards "
-                f"were revoked after attendance was updated. Keep showing up and you'll get them back!\n"
-                f"{bullets}"
+                f"Correction: {tag}, {len(group)} of your awards were revoked during a "
+                f"re-evaluation. {contact}\n{bullets}"
             )
         out[pax_id] = (text, [section(text)])
     return out

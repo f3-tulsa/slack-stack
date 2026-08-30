@@ -310,6 +310,7 @@ def run_achievements_for_region(
     channel_override: str | None = None,
     post_channels: list[str] | None = None,
     announce: bool = True,
+    notify_dms: bool | None = None,
     start: date | None = None,
     end: date | None = None,
     log_mode: str = "scheduled",
@@ -323,6 +324,8 @@ def run_achievements_for_region(
     emit_logs: bool = True,
     rejudge_prior_versions: bool = False,
 ) -> dict:
+    if notify_dms is None:
+        notify_dms = announce
     started = time.time()
     today = date.today()
     year = today.year
@@ -556,8 +559,21 @@ def run_achievements_for_region(
             post_messages(client, cid, packed)
         if post_to_ao and ao_channel_id:
             post_messages(client, ao_channel_id, packed)
+
+    if notify_dms and client is not None:
+        # A run that revokes and re-grants the same achievement for the same PAX
+        # in equal number has only moved it between periods — he still holds it,
+        # so a "you lost it / you got it" pair would be noise. Anything
+        # unbalanced is a real gain or loss and still gets its DM.
+        granted_pairs = Counter((g["pax_id"], g["achievement_id"]) for g in grants)
+        revoked_pairs = Counter((r["pax_id"], int(r["rule"]["id"])) for r in revokes)
+        net_neutral = {
+            pair
+            for pair, n in granted_pairs.items()
+            if n and revoked_pairs.get(pair) == n
+        }
         dm_map = dm_grant_messages(
-            grants,
+            [g for g in grants if (g["pax_id"], g["achievement_id"]) not in net_neutral],
             year=year,
             names=names,
             known_ids=known_ids,
@@ -566,16 +582,11 @@ def run_achievements_for_region(
             archive_base=archive_base,
         )
         revoke_dms = dm_revoke_messages(
-            revokes,
+            [r for r in revokes if (r["pax_id"], int(r["rule"]["id"])) not in net_neutral],
             names=names,
             known_ids=known_ids,
-            webhook=webhook,
             archive_base=archive_base,
         )
-        for pax_id, (text, blocks) in {**dm_map, **revoke_dms}.items():
-            if pax_id in dm_map and pax_id in revoke_dms:
-                # Send grant and revoke DMs separately when both happen.
-                pass
         for pax_id, (text, blocks) in dm_map.items():
             if not is_slack_user_id(pax_id) or (known_ids is not None and pax_id not in known_ids):
                 LOG.info("Skip achievement DM for non-Slack user_id=%s", pax_id)
@@ -718,8 +729,13 @@ def reconcile_rule_awards(
     automatic: bool = False,
     action: str = "re-evaluated",
     dry_run: bool = False,
+    send_dms: bool = False,
 ) -> dict:
-    """Re-evaluate one family across its range; silent on T-claps/DMs, one channel summary."""
+    """Re-evaluate one family across its range; one channel summary, no T-claps.
+
+    DMs stay off by default so a bulk re-import cannot spray hundreds of PAX;
+    an operator can opt in per run with ``send_dms``.
+    """
     from achievements.range import clear_reeval_lock
 
     started = time.monotonic()
@@ -769,6 +785,7 @@ def reconcile_rule_awards(
                 pax_user_ids=None,
                 dry_run=dry_run,
                 announce=False,
+                notify_dms=send_dms,
                 start=chunk_start,
                 end=chunk_end,
                 log_mode="backfill",
