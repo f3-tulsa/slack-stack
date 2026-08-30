@@ -5,11 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
-_ROOT = Path(__file__).resolve().parents[1]
-_MANIFEST = _ROOT / "manifest.json"
-_MANIFESTS = (_MANIFEST, _ROOT / "manifest-prod.json")
+_MANIFEST = Path(__file__).resolve().parents[1] / "manifest.json"
 
 
 def test_manifest_has_no_incoming_webhook_scope():
@@ -29,12 +25,10 @@ def test_manifest_enables_app_home_and_app_home_opened():
     assert events.get("request_url")
 
 
-@pytest.mark.parametrize("manifest", _MANIFESTS, ids=lambda p: p.name)
-def test_manifest_includes_emoji_read_and_reactions_write(manifest):
-    if not manifest.exists():
-        # Per-env manifests are gitignored; check them when working locally.
-        pytest.skip(f"{manifest.name} not present")
-    data = json.loads(manifest.read_text(encoding="utf-8"))
+def test_manifest_includes_emoji_read_and_reactions_write():
+    # Per-env manifests (manifest-*.json) are gitignored, so only the source
+    # manifest.json is asserted here; it is the template those are derived from.
+    data = json.loads(_MANIFEST.read_text(encoding="utf-8"))
     scopes = data["oauth_config"]["scopes"]["bot"]
     assert "emoji:read" in scopes
     assert "reactions:write" in scopes

@@ -301,10 +301,8 @@ def revoke_log_line(
     row: dict,
     display_name: str | None,
     *,
-    webhook: bool = False,
     archive_base: str | None = None,
 ) -> str:
-    del webhook
     return award_log_line(row, display_name, granted=False, archive_base=archive_base)
 
 

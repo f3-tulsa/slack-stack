@@ -2567,6 +2567,120 @@ def test_net_neutral_move_suppresses_both_dms():
     assert "6 pack" not in texts[0]
 
 
+def test_standalone_revoke_and_grant_still_dm():
+    """Only a balanced move is silent; standalone or unbalanced changes still DM."""
+    from achievements.runner import run_achievements_for_region
+
+    pax = "U01MIXER001"
+    six = {
+        "id": 1,
+        "name": "6 pack",
+        "verb": "posting",
+        "period": "week",
+        "version_id": 7,
+        "enabled": 1,
+        "metric": "posts",
+        "threshold": 6,
+    }
+    leader = dict(six, id=2, name="Leader of Men")
+    centurion = dict(six, id=3, name="Centurion")
+
+    def _award(aid, key, day):
+        return {
+            "id": aid * 100 + day,
+            "achievement_id": aid,
+            "pax_id": pax,
+            "date_awarded": date(2026, 3, day),
+            "period": "week",
+            "achievement_version_id": 7,
+            "period_key": key,
+            "period_start": date(2026, 3, day),
+            "period_end": date(2026, 3, day + 6),
+        }
+
+    # 6 pack: 2 old weeks disqualified, 1 new week earned -> unbalanced (not a move).
+    # Leader of Men: standalone revoke. Centurion: standalone grant.
+    awarded_rows = [
+        _award(1, "2026-W10", 2),
+        _award(1, "2026-W11", 9),
+        _award(2, "2026-W10", 2),
+    ]
+    won = pd.DataFrame(
+        {
+            "pax_id": [pax],
+            "period_key": ["2026-W12"],
+            "period_bucket": ["2026-W12"],
+            "date_awarded": [date(2026, 3, 16)],
+            "period_start": [date(2026, 3, 16)],
+            "period_end": [date(2026, 3, 22)],
+            "qualifying_count": [6],
+            "ao_id": ["C_AO"],
+            "timestamp": ["1750000000.000001"],
+        }
+    )
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+    mock_conn.cursor.return_value.__exit__.return_value = False
+    mock_cur.fetchall.side_effect = [[six, leader, centurion], awarded_rows]
+    mock_cur.rowcount = 1
+    dms = []
+
+    def _evaluate(_nation, r, **_kw):
+        return won if int(r["id"]) in (1, 3) else pd.DataFrame()
+
+    with patch("achievements.runner.decrypt_field", return_value="x"):
+        with patch("achievements.runner.slack_client"):
+            with patch("achievements.runner.workspace_user_ids", return_value={pax}):
+                with patch(
+                    "achievements.runner.load_nation_attendance",
+                    return_value=_posts(pax, ["2026-03-16"]),
+                ):
+                    with patch(
+                        "achievements.runner.attach_home_regions",
+                        side_effect=lambda c, n, s: n,
+                    ):
+                        with patch("achievements.runner.evaluate_rule", side_effect=_evaluate):
+                            with patch("achievements.runner.post_messages"):
+                                with patch(
+                                    "achievements.runner.post_message",
+                                    side_effect=lambda _c, ch, text, **_k: dms.append((ch, text)),
+                                ):
+                                    with patch("achievements.runner.post_log"):
+                                        with patch(
+                                            "achievements.runner.open_dm_channel",
+                                            return_value="D1",
+                                        ):
+                                            result = run_achievements_for_region(
+                                                mock_conn,
+                                                pm_schema="pm",
+                                                regional_schema="f3test",
+                                                region_row={
+                                                    "send_achievements": 1,
+                                                    "achievement_channel": "C1",
+                                                    "slack_token": "enc",
+                                                },
+                                                start=date(2026, 1, 1),
+                                                end=date(2026, 12, 31),
+                                                allow_revoke=True,
+                                                period_year=2026,
+                                                log_mode="scheduled",
+                                            )
+
+    assert result["grants"] == 2  # 6 pack W12, Centurion W12
+    assert result["revokes"] == 3  # 6 pack W10 + W11, Leader of Men W10
+    texts = [t for ch, t in dms if ch == "D1"]
+    grant_dm = next(t for t in texts if "just earned" in t or "just unlocked" in t)
+    revoke_dm = next(t for t in texts if "was revoked" in t or "were revoked" in t)
+    # Standalone grant and standalone revoke each reach the PAX.
+    assert "Centurion" in grant_dm
+    assert "Leader of Men" in revoke_dm
+    # Unbalanced same-achievement (2 revoked, 1 granted) is NOT treated as a move.
+    assert "6 pack" in grant_dm
+    assert "6 pack" in revoke_dm
+
+
 def test_scheduled_run_holds_iso_w01_boundary_week():
     """2026-W01 begins Dec 29, 2025: a bare Jan 1 start truncates it and wrongly revokes."""
     from achievements.runner import run_achievements_for_region

@@ -147,7 +147,7 @@ def test_award_log_line_grant_and_revoke_share_suffix():
         "rule": {"name": "Leader of Men"},
     }
     grant = grant_log_line(row, "Nacho")
-    revoke = revoke_log_line(row, "Nacho", webhook=True)
+    revoke = revoke_log_line(row, "Nacho")
     assert grant == award_log_line(row, "Nacho", granted=True)
     assert revoke == award_log_line(row, "Nacho", granted=False)
     assert "granted to `Nacho`" in grant

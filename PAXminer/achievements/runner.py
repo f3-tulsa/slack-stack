@@ -539,7 +539,6 @@ def run_achievements_for_region(
     known_ids = workspace_user_ids(client) if client is not None else None
     dm_failed = 0
     dms_sent = 0
-    webhook = log_mode == "webhook"
 
     ytd_totals = {pax: int(sum(c.values())) for pax, c in counts.items()}
     ytd_family = {(pax, aid): int(cnt) for pax, c in counts.items() for aid, cnt in c.items()}
@@ -637,7 +636,6 @@ def run_achievements_for_region(
                 revoke_log_line(
                     g,
                     names.get(g["pax_id"]),
-                    webhook=webhook,
                     archive_base=archive_base,
                 )
             )
