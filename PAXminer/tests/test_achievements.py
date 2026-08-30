@@ -2167,7 +2167,8 @@ def test_iter_year_windows_overlap_attributes_iso_week_once():
     assert keys.count("2026-W01") == 1
 
 
-def test_genuine_revoke_posts_channel_dm_and_log():
+def test_webhook_never_revokes():
+    """A Backblast webhook grants only — it never retracts an existing award."""
     from achievements.runner import run_achievements_for_region
 
     pax = "U01REVOKE01"
@@ -2240,21 +2241,15 @@ def test_genuine_revoke_posts_channel_dm_and_log():
                                             trigger_timestamp="1750000000.000001",
                                             trigger_date=date(2026, 8, 16),
                                         )
-    assert result["revokes"] == 1
+    assert result["revokes"] == 0
     assert result["grants"] == 0
-    channel_msgs = [t for ch, t in posts if ch == "C1"]
-    dm_msgs = [t for ch, t in posts if ch == "D1"]
-    assert len(channel_msgs) == 1
-    assert "Correction:" in channel_msgs[0]
-    assert "T-Claps" not in channel_msgs[0]
-    assert "this Backblast" not in channel_msgs[0]
-    assert "August 16" in channel_msgs[0]
-    assert len(dm_msgs) == 1
-    assert "Keep showing up and you'll get it back!" in dm_msgs[0]
-    assert len(logs) == 1
-    assert "was revoked from" in logs[0]
-    assert "after evaluating" in logs[0]
-    assert "<@" not in logs[0]
+    assert not [t for ch, t in posts if ch == "C1"]
+    assert not [t for ch, t in posts if ch == "D1"]
+    assert not [t for t in logs if "revoked" in t]
+    deletes = [
+        c for c in mock_cur.execute.call_args_list if "DELETE" in str(c.args[0]).upper()
+    ]
+    assert not deletes
 
 
 def test_ytd_run_does_not_revoke_prior_year():

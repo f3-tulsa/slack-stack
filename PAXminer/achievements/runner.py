@@ -333,6 +333,11 @@ def run_achievements_for_region(
         end = today
     if allow_revoke is None:
         allow_revoke = pax_user_ids is not None
+    if log_mode == "webhook":
+        # Backblast webhooks grant only. A single backblast has no authority to
+        # retract an award from any period; revokes belong to the scheduled or
+        # manual re-evaluation runs, which evaluate a whole year window.
+        allow_revoke = False
     channels = [c for c in (post_channels or []) if c]
     if channel_override and channel_override not in channels:
         channels.insert(0, channel_override)
