@@ -144,6 +144,15 @@ class User(BaseClass, GetDBClass):
         return User.id
 
 
+class WelcomeDelivery(BaseClass):
+    __tablename__ = "welcome_deliveries"
+    event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    destination: Mapped[str] = mapped_column(String(30), primary_key=True)
+    team_id: Mapped[str100]
+    user_id: Mapped[str100]
+    created: Mapped[dt_create]
+
+
 class PaxminerUser(BaseClass, GetDBClass):
     __tablename__ = "users"
     user_id: Mapped[str45pk]

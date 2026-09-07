@@ -346,6 +346,54 @@ def test_achievements_ddl_stays_additive_for_slackblast_orm():
     assert "activity_type" not in beatdowns
 
 
+def test_slackblast_welcome_delivery_ddl_matches_local_schema():
+    from migrate_data import _ddl_slackblast_welcome_deliveries
+
+    migration_ddl = _ddl_slackblast_welcome_deliveries("slackblast_test")
+    assert "CREATE TABLE IF NOT EXISTS `slackblast_test`.`welcome_deliveries`" in migration_ddl
+    assert "PRIMARY KEY (`event_id`, `destination`)" in migration_ddl
+    assert "`team_id` varchar(100) NOT NULL" in migration_ddl
+    assert "`user_id` varchar(100) NOT NULL" in migration_ddl
+
+    sql_path = (
+        _REPO
+        / "slackblast"
+        / "slackblast"
+        / "utilities"
+        / "database"
+        / "create_clear_local_db.sql"
+    )
+    local = sql_path.read_text(encoding="utf-8")
+    local_ddl = local.split("CREATE TABLE slackblast.`welcome_deliveries`")[1].split("CREATE TABLE")[0]
+    assert "PRIMARY KEY (`event_id`, `destination`)" in local_ddl
+    assert "`team_id` varchar(100) NOT NULL" in local_ddl
+    assert "`user_id` varchar(100) NOT NULL" in local_ddl
+
+
+def test_bootstrap_only_does_not_require_source_database_settings():
+    import migrate_data
+
+    connection = MagicMock()
+    env = {
+        "TARGET_HOST": "target.example",
+        "TARGET_USER": "target-user",
+        "TARGET_PASSWORD": "target-password",
+    }
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch.object(sys, "argv", ["migrate_data.py", "--env", "test", "--bootstrap-only"]),
+        patch.object(Path, "is_file", return_value=True),
+        patch.object(migrate_data, "load_dotenv"),
+        patch.object(migrate_data, "load_checkpoint", return_value=set()),
+        patch.object(migrate_data, "with_retry", return_value=connection),
+        patch.object(migrate_data, "pre_migration_bootstrap_schemas") as bootstrap,
+    ):
+        assert migrate_data.main() == 0
+
+    bootstrap.assert_called_once_with(connection, "test")
+    connection.close.assert_called_once()
+
+
 def test_award_unique_dedupes_keeping_lowest_id(caplog):
     from paxminer_phases.achievements import _enforce_award_period_unique
 
