@@ -7,6 +7,7 @@ Use this when copying data from an existing MySQL/RDS (or similar) host to a new
 The main script is **`migration/migrate_data.py`**. It can:
 
 - **Bootstrap** target admin schemas `paxminer_{STAGE}`, `slackblast_{STAGE}` and seed registry rows (tokens filled later by Lambdas).
+- Create the Slackblast `welcome_deliveries` receipt table used to suppress duplicate Slack Events API retries.
 - **Copy** regional schemas (e.g. `f3ttown`, `f3scissortail`) and selective **qsignups** data from a shared source schema when **`QSIGNUPS_TEAM_IDS`** is set.
 - **Recreate** QSignups views (`vw_weekly_events`, `vw_aos_sort`, `vw_master_events`).
 - **Widen** encrypted token columns and optionally **encrypt** fields in place when **`DB_ENCRYPTION_KEY`** is set (must match deploy).
@@ -47,6 +48,8 @@ Reports and checkpoints are written under `migration/` (often gitignored). Human
 ## After migration
 
 Continue with **[DEPLOY.md](DEPLOY.md)** for Slack OAuth install URLs, `CREATE_OAUTH_TABLES` one-shot flags, Schedule channel setup, and smoke tests.
+
+For an existing environment that only needs new admin-schema objects, run `python migration/migrate_data.py --env test --bootstrap-only` (or `--env prod --bootstrap-only`). This applies idempotent bootstrap DDL, including `welcome_deliveries`, without reading, dropping, or copying source regional tables. Run it before deploying Slackblast code that records welcome deliveries.
 
 ## Environment reference
 

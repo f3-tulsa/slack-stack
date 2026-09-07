@@ -646,6 +646,20 @@ CREATE TABLE IF NOT EXISTS `{schema}`.`slackblast_users` (
 """
 
 
+def _ddl_slackblast_welcome_deliveries(schema: str) -> str:
+    return f"""
+CREATE TABLE IF NOT EXISTS `{schema}`.`welcome_deliveries` (
+  `event_id` varchar(255) NOT NULL,
+  `destination` varchar(30) NOT NULL,
+  `team_id` varchar(100) NOT NULL,
+  `user_id` varchar(100) NOT NULL,
+  `created` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`event_id`, `destination`),
+  KEY `idx_welcome_deliveries_team_user` (`team_id`, `user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+"""
+
+
 def _seed_slackblast_regions(cur, conn: Any, sb_s: str, stage: str) -> None:
     """Optional rows in slackblast regions (team_id + paxminer_schema)."""
     tt_tid = (os.environ.get("MIGRATION_SEED_TEAM_F3TTOWN") or "").strip()
@@ -704,6 +718,7 @@ def pre_migration_bootstrap_schemas(conn: Any, stage: str) -> None:
         cur.execute(_ddl_paxminer_region_schedules(pm_s))
         cur.execute(_ddl_slackblast_regions(sb_s))
         cur.execute(_ddl_slackblast_users(sb_s))
+        cur.execute(_ddl_slackblast_welcome_deliveries(sb_s))
         conn.commit()
         cur.execute(
             f"SELECT COUNT(*) AS seed_cnt FROM `{pm_s}`.`regions` WHERE `schema_name` IN (%s, %s)",
@@ -1494,6 +1509,11 @@ def main() -> int:
         choices=["test", "prod"],
         help="Environment: loads migration/.env.migration.<env> (same idea as deploy.sh --env)",
     )
+    parser.add_argument(
+        "--bootstrap-only",
+        action="store_true",
+        help="Create or update target admin schemas without copying source data",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Only log planned steps, no writes to target")
     parser.add_argument("--skip-schema", action="append", default=[], help="Skip a source schema name (repeatable)")
     parser.add_argument("--skip-table", action="append", default=[], help="Skip table as schema.table (repeatable)")
@@ -1519,12 +1539,6 @@ def main() -> int:
     batch_size = int(os.environ.get("BATCH_SIZE", "500"))
     checkpoint_path = Path(os.environ.get("CHECKPOINT_FILE", Path(__file__).parent / "migration_checkpoint.json"))
 
-    source_host = os.environ["SOURCE_HOST"]
-    source_port = int(os.environ.get("SOURCE_PORT", "3306"))
-    source_user = os.environ["SOURCE_USER"]
-    source_password = os.environ["SOURCE_PASSWORD"]
-    source_tls = _env_bool("SOURCE_TLS_ENABLED", False)
-
     target_host = os.environ["TARGET_HOST"]
     target_port = int(os.environ.get("TARGET_PORT", "4000"))
     target_user = os.environ["TARGET_USER"]
@@ -1535,17 +1549,8 @@ def main() -> int:
     skip_tables = {tuple(s.split(".", 1)) for s in args.skip_table if "." in s}
 
     if args.dry_run:
-        LOG.info("DRY RUN: would migrate %s", schema_map)
+        LOG.info("DRY RUN: would %s %s", "bootstrap" if args.bootstrap_only else "migrate", schema_map)
         return 0
-
-    report_path = Path(
-        os.environ.get("MIGRATION_REPORT_FILE", Path(__file__).parent / "migration_report.json")
-    )
-    report = new_migration_report(source_host, source_port, target_host, target_port)
-    write_migration_report(report_path, report)
-
-    def source_connect(db: str | None = None):
-        return pymysql.connect(**_connect_kwargs(source_host, source_port, source_user, source_password, db, source_tls))
 
     def target_connect(db: str | None = None):
         return pymysql.connect(**_connect_kwargs(target_host, target_port, target_user, target_password, db, target_tls))
@@ -1555,6 +1560,25 @@ def main() -> int:
         pre_migration_bootstrap_schemas(tgt_boot, env_suffix)
     finally:
         tgt_boot.close()
+
+    if args.bootstrap_only:
+        LOG.info("Bootstrap-only complete")
+        return 0
+
+    source_host = os.environ["SOURCE_HOST"]
+    source_port = int(os.environ.get("SOURCE_PORT", "3306"))
+    source_user = os.environ["SOURCE_USER"]
+    source_password = os.environ["SOURCE_PASSWORD"]
+    source_tls = _env_bool("SOURCE_TLS_ENABLED", False)
+
+    report_path = Path(
+        os.environ.get("MIGRATION_REPORT_FILE", Path(__file__).parent / "migration_report.json")
+    )
+    report = new_migration_report(source_host, source_port, target_host, target_port)
+    write_migration_report(report_path, report)
+
+    def source_connect(db: str | None = None):
+        return pymysql.connect(**_connect_kwargs(source_host, source_port, source_user, source_password, db, source_tls))
 
     source_to_target = {k: v for k, v in schema_map.items()}
 
