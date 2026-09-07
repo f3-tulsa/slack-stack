@@ -237,7 +237,7 @@ Use this when migrating data from an existing MySQL/RDS instance to a new TiDB o
 
 ### What `migrate_data.py` does
 
-- **Target bootstrap (no source read):** creates `paxminer_{STAGE}`, `slackblast_{STAGE}` with core admin tables and seeds `paxminer.regions` rows with **empty** `slack_token` (first deploy/Lambda cold start fills encrypted tokens from **`PM_SLACK_TOKEN`**). Optionally set **`MIGRATION_SEED_TEAM_*`** to seed matching rows in `slackblast` `regions` (`team_id` + `paxminer_schema`).
+- **Target bootstrap (no source read):** creates `paxminer_{STAGE}`, `slackblast_{STAGE}` with core admin tables, including Slackblast's `welcome_deliveries` retry-deduplication receipts, and seeds `paxminer.regions` rows with **empty** `slack_token` (first deploy/Lambda cold start fills encrypted tokens from **`PM_SLACK_TOKEN`**). Optionally set **`MIGRATION_SEED_TEAM_*`** to seed matching rows in `slackblast` `regions` (`team_id` + `paxminer_schema`).
 - **Source copy:** `f3ttown`, `f3scissortail`, and `f3stcharles` → regional schemas on the target; **`f3stcharles`** only copies base tables named `qsignups_*` (regional PAXminer objects in that schema are skipped). Set **`QSIGNUPS_TEAM_IDS`** in `migration/.env.migration.<env>` to comma-separated Slack **source** team IDs so only those rows are copied from the shared national `f3stcharles` qsignups tables (avoids importing other regions’ tokens). Use the team ID as it appears in the source DB (often prod), not the test workspace ID.
 - **Qsignups views:** after copy, recreates **`vw_weekly_events`**, **`vw_aos_sort`**, and **`vw_master_events`** on `{QSIGNUPS_SCHEMA}_{STAGE}` (same definitions as `qsignups/db/views/*.sql`).
 - **Encryption prep:** widens token columns to `VARCHAR(512)` and `qsignups_regions.google_auth_data` to `LONGTEXT` where needed, verifies each widen, and logs results under **`column_widens`** in the JSON report. If **`DB_ENCRYPTION_KEY`** is set (min 16 characters, not a placeholder), the script encrypts secrets in place; otherwise this step is skipped (Lambdas still require the key at runtime after deploy).
@@ -254,6 +254,8 @@ Use this when migrating data from an existing MySQL/RDS instance to a new TiDB o
 2. **(Test only, optional)** If your test Slack workspace uses different channel / team IDs than the source data, run **`python migration/remap_qsignups.py --env test --csv path/to/mapping.csv`** after step 1. The CSV maps prod `ao_channel_id` / `team_id` to test values; **`--env prod`** exits without changes.
 3. **Deploy** (`./deploy.sh --env test|prod`) if you have not already — creates the image S3 bucket (slackblast stack). Use `.env.deploy.test` / `.env.deploy.prod` (see **Deploy (local)** below).
 4. **`python migration/migrate_images.py --env test`** (or **`--env prod`**) — if the bucket did not exist during step 1, run this after deploy with **`IMAGE_S3_BUCKET`** set in the matching `.env.migration.<env>` to copy images and rewrite `beatdowns.json` URLs.
+
+For an existing stage that only needs new admin-schema objects, use **`python migration/migrate_data.py --env test --bootstrap-only`** (or the prod equivalent) before deploying dependent application code. The command applies idempotent DDL such as Slackblast's `welcome_deliveries` table without copying or replacing regional data.
 
 ### Artifacts
 
