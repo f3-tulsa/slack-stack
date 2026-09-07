@@ -29,30 +29,52 @@ def _q_label(q_id: str | None, q_name: str | None) -> str:
 
 
 _OPEN_TO_CLAIMED_MESSAGES = (
-    ":fire: Sound off, PAX—{slot} was wide open, and {new_q} just called HC to lead from the front—updated by {actor}.",
-    ":muscle::skin-tone-3: Aye! {new_q} stepped into the breach and grabbed {slot}; time to sharpen the iron—updated by {actor}.",
-    ":triangular_flag_on_post: The shovel flag has a new driver: {new_q} took the open Q at {location}, so SYITG—updated by {actor}.",
-    ":boom: No more open slot at {location}—{new_q} answered the call and is ready to bring the DRP—updated by {actor}.",
+    ":fire: Sound off, PAX—{slot} was wide open, and {new_q} just called HC to lead from the front.",
+    ":muscle::skin-tone-3: Aye! {new_q} stepped into the breach and grabbed {slot}; time to sharpen the iron.",
+    ":triangular_flag_on_post: The shovel flag has a new driver: {new_q} took the open Q at {location}, so SYITG.",
+    ":boom: No more open slot at {location}—{new_q} answered the call and is ready to bring the DRP.",
 )
 
 _CLAIMED_TO_OPEN_MESSAGES = (
-    ":rotating_light: Sound off, PAX—{previous_q} released the HC for {slot}, and the Q is back in the gloom looking for a HIM—updated by {actor}.",
-    ":triangular_flag_on_post: The shovel flag needs a driver at {location}; {previous_q} stepped out, so who will step up?—updated by {actor}.",
-    ":eyes: Q-source needed: {previous_q} opened up {slot}, and the PAX needs a HIM to grab it—updated by {actor}.",
-    ":mega: Audible! {slot} is open again after {previous_q} handed it back; no sad clowns, step up and lead—updated by {actor}.",
+    ":rotating_light: Sound off, PAX—{previous_q} released the HC for {slot}, and the Q is back in the gloom looking for a HIM.",
+    ":triangular_flag_on_post: The shovel flag needs a driver at {location}; {previous_q} stepped out, so who will step up?",
+    ":eyes: Q-source needed: {previous_q} opened up {slot}, and the PAX needs a HIM to grab it.",
+    ":mega: Audible! {slot} is open again after {previous_q} handed it back; no sad clowns, step up and lead.",
 )
 
 _REASSIGNED_MESSAGES = (
-    ":arrows_counterclockwise: Audible at {location}—{previous_q} passed the shovel flag to {new_q}, who now has the Q—updated by {actor}.",
-    ":fire::muscle::skin-tone-3: Iron sharpens iron: {previous_q} handed {slot} to {new_q}, and the new QIC is locked in—updated by {actor}.",
-    ":triangular_flag_on_post: New HIM on point at {location}: {new_q} takes the Q from {previous_q} and will lead from the front—updated by {actor}.",
-    ":boom: The Q sheet called an audible for {location}—{previous_q} is out, {new_q} is in, and the DRP rolls on—updated by {actor}.",
+    ":arrows_counterclockwise: Audible at {location}—{new_q} took the shovel flag from {previous_q} and now has the Q.",
+    ":fire::muscle::skin-tone-3: Iron sharpens iron: {new_q} picked up {slot} from {previous_q}, and the new QIC is locked in.",
+    ":triangular_flag_on_post: New HIM on point at {location}: {new_q} takes the Q from {previous_q} and will lead from the front.",
+    ":boom: The Q sheet called an audible for {location}—{previous_q} is out, {new_q} is in, and the DRP rolls on.",
+)
+
+_OTHER_PAX_CLAIMED_MESSAGES = (
+    ":clipboard: {actor} called in the HC for {new_q}, filling {slot}; the shovel flag has a driver.",
+    ":fire: Roster move from {actor}: {new_q} is stepping up to Q at {location} and lead the PAX.",
+    ":muscle::skin-tone-3: {actor} put {new_q} on point for {slot}; another HIM is ready to bring the DRP.",
+    ":triangular_flag_on_post: The Q sheet got an assist from {actor}, who handed the open spot at {location} to {new_q}.",
+)
+
+_OTHER_PAX_OPENED_MESSAGES = (
+    ":clipboard: {actor} took {previous_q} off {slot}, so the shovel flag needs a new driver.",
+    ":rotating_light: Roster move from {actor}: {previous_q} is off the Q at {location}, and the spot is open.",
+    ":eyes: {actor} reopened {slot} after removing {previous_q}; PAX, a HIM needs to step up.",
+    ":mega: Audible from {actor}—{previous_q} is out at {location}, and the Q is back in the gloom.",
+)
+
+_OTHER_PAX_REASSIGNED_MESSAGES = (
+    ":clipboard: {actor} called the audible at {location}, moving the Q from {previous_q} to {new_q}.",
+    ":arrows_counterclockwise: Roster move from {actor}: {previous_q} hands the shovel flag to {new_q} for {slot}.",
+    ":fire::muscle::skin-tone-3: {actor} put {new_q} on point for {slot} in place of {previous_q}; iron sharpens iron.",
+    ":boom: Q-sheet audible from {actor} at {location}—{previous_q} is out, {new_q} is in, and the DRP rolls on.",
 )
 
 
 def _q_change_message(
     ao_name: str,
     when_text: str,
+    actor_id: str | None,
     actor_label: str,
     previous_q_id: str | None,
     previous_q_name: str | None,
@@ -65,11 +87,11 @@ def _q_change_message(
     location = f"*{ao_name}* on *{when_text}*"
 
     if not previous_q_id and not previous_q_name:
-        templates = _OPEN_TO_CLAIMED_MESSAGES
+        templates = _OPEN_TO_CLAIMED_MESSAGES if actor_id == new_q_id else _OTHER_PAX_CLAIMED_MESSAGES
     elif not new_q_id and not new_q_name:
-        templates = _CLAIMED_TO_OPEN_MESSAGES
+        templates = _CLAIMED_TO_OPEN_MESSAGES if actor_id == previous_q_id else _OTHER_PAX_OPENED_MESSAGES
     else:
-        templates = _REASSIGNED_MESSAGES
+        templates = _REASSIGNED_MESSAGES if actor_id == new_q_id else _OTHER_PAX_REASSIGNED_MESSAGES
 
     return random.choice(templates).format(
         actor=actor_label,
@@ -104,6 +126,7 @@ def _notify_signup_state_change(
     message = _q_change_message(
         ao_name,
         when_text,
+        actor.id if actor and actor.id else None,
         actor_label,
         previous_q_id,
         previous_q_name,

@@ -39,7 +39,7 @@ def test_assign_event_q_notifies_ao_channel() -> None:
     assert kwargs["channel"] == "CAO1"
     assert kwargs["text"] == (
         ":fire: Sound off, PAX—the Q spot at *The Bridge* on *Friday, May 8 @ 0530* "
-        "was wide open, and <@U_NEW> just called HC to lead from the front—updated by <@U_NEW>."
+        "was wide open, and <@U_NEW> just called HC to lead from the front."
     )
 
 
@@ -68,9 +68,8 @@ def test_clear_event_q_notifies_ao_channel() -> None:
     kwargs = client.chat_postMessage.call_args.kwargs
     assert kwargs["channel"] == "CAO1"
     assert kwargs["text"] == (
-        ":rotating_light: Sound off, PAX—<@U_OLD> released the HC for the Q spot at "
-        "*The Bridge* on *Friday, May 8 @ 0530*, and the Q is back in the gloom looking "
-        "for a HIM—updated by <@U_EDITOR>."
+        ":clipboard: <@U_EDITOR> took <@U_OLD> off the Q spot at *The Bridge* on "
+        "*Friday, May 8 @ 0530*, so the shovel flag needs a new driver."
     )
 
 
@@ -124,22 +123,41 @@ def test_update_events_from_state_notifies_only_when_q_changes() -> None:
     kwargs = client.chat_postMessage.call_args.kwargs
     assert kwargs["channel"] == "CAO1"
     assert kwargs["text"] == (
-        ":arrows_counterclockwise: Audible at *The Bridge* on *Friday, May 8 @ 0530*—"
-        "<@U_OLD> passed the shovel flag to <@U_NEW>, who now has the Q—updated by <@U_EDITOR>."
+        ":clipboard: <@U_EDITOR> called the audible at *The Bridge* on *Friday, May 8 @ 0530*, "
+        "moving the Q from <@U_OLD> to <@U_NEW>."
     )
 
 
-def test_q_change_message_rotations_keep_required_context() -> None:
+def test_q_change_message_rotations_keep_required_context_and_attribution() -> None:
     from slack.handlers import master as master_handler
 
-    template_groups = (
+    self_service_groups = (
         master_handler._OPEN_TO_CLAIMED_MESSAGES,
         master_handler._CLAIMED_TO_OPEN_MESSAGES,
         master_handler._REASSIGNED_MESSAGES,
     )
+    other_pax_groups = (
+        master_handler._OTHER_PAX_CLAIMED_MESSAGES,
+        master_handler._OTHER_PAX_OPENED_MESSAGES,
+        master_handler._OTHER_PAX_REASSIGNED_MESSAGES,
+    )
 
-    assert all(len(templates) >= 4 for templates in template_groups)
-    for templates in template_groups:
+    assert all(len(templates) >= 4 for templates in self_service_groups + other_pax_groups)
+    for templates in self_service_groups:
+        for template in templates:
+            message = template.format(
+                actor="<@U_EDITOR>",
+                location="*The Bridge* on *Friday, May 8 @ 0530*",
+                new_q="<@U_NEW>",
+                previous_q="<@U_OLD>",
+                slot="the Q spot at *The Bridge* on *Friday, May 8 @ 0530*",
+            )
+            assert "The Bridge" in message
+            assert "Friday, May 8 @ 0530" in message
+            assert "<@U_EDITOR>" not in message
+            assert message.startswith(":")
+
+    for templates in other_pax_groups:
         for template in templates:
             message = template.format(
                 actor="<@U_EDITOR>",
@@ -151,7 +169,36 @@ def test_q_change_message_rotations_keep_required_context() -> None:
             assert "The Bridge" in message
             assert "Friday, May 8 @ 0530" in message
             assert "<@U_EDITOR>" in message
+            assert "updated by" not in message.lower()
             assert message.startswith(":")
+
+
+def test_q_change_message_selects_self_or_other_pax_bucket() -> None:
+    from slack.handlers import master as master_handler
+
+    cases = (
+        ("U_NEW", None, None, "U_NEW", "New Pax", master_handler._OPEN_TO_CLAIMED_MESSAGES),
+        ("U_EDITOR", None, None, "U_NEW", "New Pax", master_handler._OTHER_PAX_CLAIMED_MESSAGES),
+        ("U_OLD", "U_OLD", "Old Pax", None, None, master_handler._CLAIMED_TO_OPEN_MESSAGES),
+        ("U_EDITOR", "U_OLD", "Old Pax", None, None, master_handler._OTHER_PAX_OPENED_MESSAGES),
+        ("U_NEW", "U_OLD", "Old Pax", "U_NEW", "New Pax", master_handler._REASSIGNED_MESSAGES),
+        ("U_EDITOR", "U_OLD", "Old Pax", "U_NEW", "New Pax", master_handler._OTHER_PAX_REASSIGNED_MESSAGES),
+    )
+
+    for actor_id, previous_id, previous_name, new_id, new_name, expected_templates in cases:
+        with patch("slack.handlers.master.random.choice", side_effect=lambda templates: templates[0]) as choose:
+            master_handler._q_change_message(
+                "The Bridge",
+                "Friday, May 8 @ 0530",
+                actor_id,
+                f"<@{actor_id}>",
+                previous_id,
+                previous_name,
+                new_id,
+                new_name,
+            )
+
+        assert choose.call_args.args[0] is expected_templates
 
 
 def test_matching_q_state_does_not_notify() -> None:
