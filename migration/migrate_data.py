@@ -660,6 +660,19 @@ CREATE TABLE IF NOT EXISTS `{schema}`.`welcome_deliveries` (
 """
 
 
+def _ddl_slackblast_interaction_claims(schema: str) -> str:
+    return f"""
+CREATE TABLE IF NOT EXISTS `{schema}`.`interaction_claims` (
+  `claim_key` varchar(255) NOT NULL,
+  `kind` varchar(30) NOT NULL,
+  `team_id` varchar(100) NOT NULL,
+  `created` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`claim_key`, `kind`),
+  KEY `idx_interaction_claims_team` (`team_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+"""
+
+
 def _seed_slackblast_regions(cur, conn: Any, sb_s: str, stage: str) -> None:
     """Optional rows in slackblast regions (team_id + paxminer_schema)."""
     tt_tid = (os.environ.get("MIGRATION_SEED_TEAM_F3TTOWN") or "").strip()
@@ -719,6 +732,7 @@ def pre_migration_bootstrap_schemas(conn: Any, stage: str) -> None:
         cur.execute(_ddl_slackblast_regions(sb_s))
         cur.execute(_ddl_slackblast_users(sb_s))
         cur.execute(_ddl_slackblast_welcome_deliveries(sb_s))
+        cur.execute(_ddl_slackblast_interaction_claims(sb_s))
         conn.commit()
         cur.execute(
             f"SELECT COUNT(*) AS seed_cnt FROM `{pm_s}`.`regions` WHERE `schema_name` IN (%s, %s)",

@@ -15,6 +15,7 @@ from utilities.database import DbManager
 from utilities.database.orm import Region, User
 from utilities.field_encryption import decrypt_field, encrypt_field
 from utilities.helper_functions import parse_rich_block, replace_user_channel_ids, safe_get, static_image_url
+from utilities.interaction_claims import KIND_STRAVA, run_once
 from utilities.slack import actions, forms
 from utilities.slack import orm as slack_orm
 
@@ -367,8 +368,13 @@ def get_strava_activity(
 
 
 def handle_strava_modify(body: dict, client: WebClient, logger: Logger, context: dict, region_record: Region):
-    strava_data: dict = forms.STRAVA_ACTIVITY_MODIFY_FORM.get_selected_values(body)
     event_type = safe_get(body, "type")
+    # notify_on_close sends view_closed on cancel; do not post or consume view.id.
+    if event_type == "view_closed":
+        logger.info("Ignoring Strava modify view_closed (no thread post)")
+        return
+
+    strava_data: dict = forms.STRAVA_ACTIVITY_MODIFY_FORM.get_selected_values(body)
     metadata = json.loads(body["view"]["private_metadata"])
     strava_activity_id = metadata["strava_activity_id"]
     channel_id = metadata["channel_id"]
@@ -376,7 +382,7 @@ def handle_strava_modify(body: dict, client: WebClient, logger: Logger, context:
     user_id = safe_get(body, "user_id") or safe_get(body, "user", "id")
     team_id = safe_get(body, "team_id") or safe_get(body, "team", "id")
 
-    if (event_type != "view_closed") and strava_data:
+    if strava_data:
         activity_data = update_strava_activity(
             strava_activity_id=strava_activity_id,
             user_id=user_id,
@@ -406,9 +412,16 @@ def handle_strava_modify(body: dict, client: WebClient, logger: Logger, context:
         ).as_form_field(),
     ]
 
-    client.chat_postMessage(
-        channel=channel_id,
-        thread_ts=backblast_ts,
-        text=msg,
-        blocks=blocks,
+    # view_submission retries share view.id; claim collapses them.
+    run_once(
+        body=body,
+        kind=KIND_STRAVA,
+        team_id=team_id or "",
+        logger=logger,
+        action=lambda: client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=backblast_ts,
+            text=msg,
+            blocks=blocks,
+        ),
     )
