@@ -66,6 +66,15 @@ CREATE TABLE slackblast.`welcome_deliveries` (
   PRIMARY KEY (`event_id`, `destination`),
   KEY `idx_welcome_deliveries_team_user` (`team_id`, `user_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+DROP TABLE IF EXISTS slackblast.interaction_claims;
+CREATE TABLE slackblast.`interaction_claims` (
+  `claim_key` varchar(255) NOT NULL,
+  `kind` varchar(30) NOT NULL,
+  `team_id` varchar(100) NOT NULL,
+  `created` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`claim_key`, `kind`),
+  KEY `idx_interaction_claims_team` (`team_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 -- Create or replace f3devregion tables
 DROP TABLE IF EXISTS f3devregion.beatdowns;
 CREATE TABLE f3devregion.`beatdowns` (

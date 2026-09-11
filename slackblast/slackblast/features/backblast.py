@@ -32,6 +32,12 @@ from utilities.helper_functions import (
     build_backblast_edit_summary,
     format_backblast_paxminer_log,
 )
+from utilities.interaction_claims import (
+    KIND_BACKBLAST,
+    claim_interaction,
+    claim_key,
+    release_interaction,
+)
 from utilities.slack import actions, forms
 from utilities.slack import orm as slack_orm
 
@@ -305,6 +311,42 @@ def handle_backblast_post(body: dict, client: WebClient, logger: Logger, context
     file_slack_urls = safe_get(backblast_data, actions.BACKBLAST_FILE_SLACK_URLS) or []
 
     user_id = safe_get(body, "user_id") or safe_get(body, "user", "id")
+    team_id = (
+        safe_get(body, "team_id")
+        or safe_get(body, "team", "id")
+        or context.get("team_id")
+        or getattr(region_record, "team_id", None)
+        or ""
+    )
+    # Claim before file/S3 work so Slack retries skip it. Missing key refuses to post.
+    interaction_key = claim_key(body)
+    if not interaction_key:
+        logger.error(
+            "Refusing non-idempotent backblast post: missing view.id and trigger_id team_id=%s",
+            team_id,
+        )
+        return
+    if not claim_interaction(interaction_key, KIND_BACKBLAST, team_id):
+        logger.info(
+            "Skipping duplicate backblast claim_key=%s team_id=%s",
+            interaction_key,
+            team_id,
+        )
+        return
+
+    if create_or_edit == "create" and check_for_duplicate(
+        q=the_q,
+        ao=ao or the_ao,
+        date=the_date,
+        region_record=region_record,
+        logger=logger,
+    ):
+        release_interaction(interaction_key, KIND_BACKBLAST)
+        client.chat_postMessage(
+            channel=user_id or context.get("user_id"),
+            text=_backblast_db_failure_text(create_or_edit, duplicate=True),
+        )
+        return
 
     file_list = []
     low_res_file_list = []
@@ -396,7 +438,6 @@ def handle_backblast_post(body: dict, client: WebClient, logger: Logger, context
             )
         except Exception as e:
             logger.error(f"Error uploading file: {e}")
-    user_id = safe_get(body, "user_id") or safe_get(body, "user", "id")
 
     user_records = None
     if region_record.paxminer_schema:
@@ -591,100 +632,121 @@ def handle_backblast_post(body: dict, client: WebClient, logger: Logger, context
     moleskin_text = parse_rich_block(moleskin)
     moleskin_text_w_names = replace_user_channel_ids(moleskin_text, region_record, client, logger)
 
-    if create_or_edit == "create":
-        if region_record.paxminer_schema is None:
-            text = (post_msg + "\n" + moleskin_text)[:1500]
-            res = client.chat_postMessage(
-                channel=chan,
-                text=text,
-                username=f"{q_name} (via Slackblast)",
-                icon_url=q_url,
-            )
-        else:
+    try:
+        if create_or_edit == "create":
+            if region_record.paxminer_schema is None:
+                text = (post_msg + "\n" + moleskin_text)[:1500]
+                res = client.chat_postMessage(
+                    channel=chan,
+                    text=text,
+                    username=f"{q_name} (via Slackblast)",
+                    icon_url=q_url,
+                )
+            else:
+                text = (f"{moleskin_text_w_names}\n\nUse the 'New Backblast' button to create a new backblast")[:1500]
+                res = client.chat_postMessage(
+                    channel=chan,
+                    text=text,
+                    username=f"{q_name} (via Slackblast)",
+                    icon_url=q_url,
+                    blocks=blocks,
+                    metadata={"event_type": "backblast", "event_payload": backblast_data},
+                )
+
+        elif create_or_edit == "edit":
             text = (f"{moleskin_text_w_names}\n\nUse the 'New Backblast' button to create a new backblast")[:1500]
-            res = client.chat_postMessage(
-                channel=chan,
+            res = client.chat_update(
+                channel=message_channel,
+                ts=message_ts,
                 text=text,
                 username=f"{q_name} (via Slackblast)",
                 icon_url=q_url,
                 blocks=blocks,
                 metadata={"event_type": "backblast", "event_payload": backblast_data},
             )
+    except Exception:
+        # Only the channel write may release. Permalink / email / DB stay claimed
+        # so a Slack retry cannot post a second message.
+        release_interaction(interaction_key, KIND_BACKBLAST)
+        raise
+
+    if create_or_edit == "create":
         logger.info("Message posted to Slack: %s", post_msg[:500])
         logger.info(json.dumps({"event_type": "successful_slack_post", "team_name": region_record.workspace_name}))
-        if (email_send and email_send == "yes") or (email_send is None and region_record.email_enabled == 1):
-            moleskin_msg = moleskin_text_w_names
+    elif create_or_edit == "edit":
+        logger.info("Backblast updated in Slack: %s", post_msg[:500])
+        logger.info(json.dumps({"event_type": "successful_slack_edit", "team_name": region_record.workspace_name}))
 
-            if region_record.postie_format:
-                subject = f"[{ao_name}] {title}"
-                moleskin_msg += f"\n\nTags: {ao_name}, {pax_names}"
-            else:
-                subject = title
+    if create_or_edit == "create" and (
+        (email_send and email_send == "yes") or (email_send is None and region_record.email_enabled == 1)
+    ):
+        moleskin_msg = moleskin_text_w_names
 
-            email_msg = f"""Date: {the_date}
+        if region_record.postie_format:
+            subject = f"[{ao_name}] {title}"
+            moleskin_msg += f"\n\nTags: {ao_name}, {pax_names}"
+        else:
+            subject = title
+
+        email_msg = f"""Date: {the_date}
 AO: {ao_name}
 Q: {q_name} {the_coqs_names}
 PAX: {pax_names}
 FNGs: {fngs_formatted}
 COUNT: {count}
 {moleskin_msg}
-            """
+        """
 
-            try:
-                email_password_decrypted = decrypt_field(region_record.email_password) or ""
-                sendmail.send(
-                    subject=subject,
-                    body=email_msg,
-                    email_server=region_record.email_server,
-                    email_server_port=region_record.email_server_port,
-                    email_user=region_record.email_user,
-                    email_password=email_password_decrypted,
-                    email_to=region_record.email_to,
-                    attachments=file_send_list,
+        try:
+            email_password_decrypted = decrypt_field(region_record.email_password) or ""
+            sendmail.send(
+                subject=subject,
+                body=email_msg,
+                email_server=region_record.email_server,
+                email_server_port=region_record.email_server_port,
+                email_user=region_record.email_user,
+                email_password=email_password_decrypted,
+                email_to=region_record.email_to,
+                attachments=file_send_list,
+            )
+            logger.debug("\nEmail Sent! \n{}".format(email_msg))
+            logger.info(
+                json.dumps(
+                    {
+                        "event_type": "successful_email_sent",
+                        "team_name": region_record.workspace_name,
+                    }
                 )
-                logger.debug("\nEmail Sent! \n{}".format(email_msg))
-                logger.info(
-                    json.dumps(
-                        {
-                            "event_type": "successful_email_sent",
-                            "team_name": region_record.workspace_name,
-                        }
-                    )
-                )
-            except Exception as sendmail_err:
-                logger.error("Error with sendmail: {}".format(sendmail_err))
-                logger.debug("\nEmail Sent! \n{}".format(email_msg))
-                logger.info(json.dumps({"event_type": "failed_email", "team_name": region_record.workspace_name}))
+            )
+        except Exception as sendmail_err:
+            logger.error("Error with sendmail: {}".format(sendmail_err))
+            logger.debug("\nEmail Sent! \n{}".format(email_msg))
+            logger.info(json.dumps({"event_type": "failed_email", "team_name": region_record.workspace_name}))
 
-    elif create_or_edit == "edit":
-        text = (f"{moleskin_text_w_names}\n\nUse the 'New Backblast' button to create a new backblast")[:1500]
-        res = client.chat_update(
-            channel=message_channel,
-            ts=message_ts,
-            text=text,
-            username=f"{q_name} (via Slackblast)",
-            icon_url=q_url,
-            blocks=blocks,
-            metadata={"event_type": "backblast", "event_payload": backblast_data},
+    if create_or_edit == "edit" and message_ts and region_record.paxminer_schema:
+        prior_attendance = DbManager.find_records(
+            cls=Attendance,
+            schema=region_record.paxminer_schema,
+            filters=[Attendance.timestamp == message_ts],
         )
-        logger.info("Backblast updated in Slack: %s", post_msg[:500])
-        logger.info(json.dumps({"event_type": "successful_slack_edit", "team_name": region_record.workspace_name}))
+        prior_pax_ids = {a.user_id for a in prior_attendance}
+        prior_rows = DbManager.find_records(
+            cls=Backblast,
+            schema=region_record.paxminer_schema,
+            filters=[Backblast.timestamp == message_ts],
+        )
+        prior_backblast = prior_rows[0] if prior_rows else None
 
-        if message_ts and region_record.paxminer_schema:
-            prior_attendance = DbManager.find_records(
-                cls=Attendance,
-                schema=region_record.paxminer_schema,
-                filters=[Attendance.timestamp == message_ts],
-            )
-            prior_pax_ids = {a.user_id for a in prior_attendance}
-            prior_rows = DbManager.find_records(
-                cls=Backblast,
-                schema=region_record.paxminer_schema,
-                filters=[Backblast.timestamp == message_ts],
-            )
-            prior_backblast = prior_rows[0] if prior_rows else None
-
-    res_link = client.chat_getPermalink(channel=chan or message_channel, message_ts=res["ts"])
+    res_link = {}
+    try:
+        res_link = client.chat_getPermalink(channel=chan or message_channel, message_ts=res["ts"])
+    except Exception:
+        logger.error(
+            "chat_getPermalink failed team_id=%s ts=%s",
+            team_id,
+            res.get("ts") if isinstance(res, dict) else None,
+            exc_info=True,
+        )
 
     if region_record.paxminer_schema:
         all_user_ids = list({u for u in [the_q, *(the_coq or []), *pax] if u})

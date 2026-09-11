@@ -370,6 +370,30 @@ def test_slackblast_welcome_delivery_ddl_matches_local_schema():
     assert "`user_id` varchar(100) NOT NULL" in local_ddl
 
 
+def test_slackblast_interaction_claims_ddl_matches_local_schema():
+    from migrate_data import _ddl_slackblast_interaction_claims
+
+    migration_ddl = _ddl_slackblast_interaction_claims("slackblast_test")
+    assert "CREATE TABLE IF NOT EXISTS `slackblast_test`.`interaction_claims`" in migration_ddl
+    assert "PRIMARY KEY (`claim_key`, `kind`)" in migration_ddl
+    assert "`team_id` varchar(100) NOT NULL" in migration_ddl
+    assert "KEY `idx_interaction_claims_team`" in migration_ddl
+
+    sql_path = (
+        _REPO
+        / "slackblast"
+        / "slackblast"
+        / "utilities"
+        / "database"
+        / "create_clear_local_db.sql"
+    )
+    local = sql_path.read_text(encoding="utf-8")
+    local_ddl = local.split("CREATE TABLE slackblast.`interaction_claims`")[1].split("CREATE TABLE")[0]
+    assert "PRIMARY KEY (`claim_key`, `kind`)" in local_ddl
+    assert "`team_id` varchar(100) NOT NULL" in local_ddl
+    assert "KEY `idx_interaction_claims_team`" in local_ddl
+
+
 def test_bootstrap_only_does_not_require_source_database_settings():
     import migrate_data
 
