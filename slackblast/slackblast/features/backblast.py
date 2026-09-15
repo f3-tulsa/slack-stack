@@ -319,6 +319,7 @@ def handle_backblast_post(body: dict, client: WebClient, logger: Logger, context
         or ""
     )
     # Claim before file/S3 work so Slack retries skip it. Missing key refuses to post.
+    # See utilities.interaction_claims (table required; beatdowns PK cannot lock first).
     interaction_key = claim_key(body)
     if not interaction_key:
         logger.error(

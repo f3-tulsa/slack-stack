@@ -661,6 +661,9 @@ CREATE TABLE IF NOT EXISTS `{schema}`.`welcome_deliveries` (
 
 
 def _ddl_slackblast_interaction_claims(schema: str) -> str:
+    # Claim-before-post lock. Slack retries view_submission on slow ack; beatdowns
+    # PKs need Slack ts from chat_postMessage and cannot lock first. See
+    # slackblast/utilities/interaction_claims.py.
     return f"""
 CREATE TABLE IF NOT EXISTS `{schema}`.`interaction_claims` (
   `claim_key` varchar(255) NOT NULL,
@@ -670,6 +673,7 @@ CREATE TABLE IF NOT EXISTS `{schema}`.`interaction_claims` (
   PRIMARY KEY (`claim_key`, `kind`),
   KEY `idx_interaction_claims_team` (`team_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='Claim view.id before Slack post so retries cannot duplicate messages'
 """
 
 
@@ -1526,7 +1530,10 @@ def main() -> int:
     parser.add_argument(
         "--bootstrap-only",
         action="store_true",
-        help="Create or update target admin schemas without copying source data",
+        help=(
+            "Create or update target admin schemas without copying source data "
+            "(includes slackblast welcome_deliveries and interaction_claims)"
+        ),
     )
     parser.add_argument("--dry-run", action="store_true", help="Only log planned steps, no writes to target")
     parser.add_argument("--skip-schema", action="append", default=[], help="Skip a source schema name (repeatable)")

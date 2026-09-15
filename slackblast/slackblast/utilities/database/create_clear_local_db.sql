@@ -66,6 +66,8 @@ CREATE TABLE slackblast.`welcome_deliveries` (
   PRIMARY KEY (`event_id`, `destination`),
   KEY `idx_welcome_deliveries_team_user` (`team_id`, `user_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+-- Receipt lock for Slack view_submission retries (view.id + kind). beatdowns /
+-- bd_attendance PKs use Slack ts from chat_postMessage, so they cannot claim first.
 DROP TABLE IF EXISTS slackblast.interaction_claims;
 CREATE TABLE slackblast.`interaction_claims` (
   `claim_key` varchar(255) NOT NULL,
@@ -74,7 +76,8 @@ CREATE TABLE slackblast.`interaction_claims` (
   `created` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`claim_key`, `kind`),
   KEY `idx_interaction_claims_team` (`team_id`)
-) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+COMMENT = 'Claim view.id before Slack post so retries cannot duplicate messages';
 -- Create or replace f3devregion tables
 DROP TABLE IF EXISTS f3devregion.beatdowns;
 CREATE TABLE f3devregion.`beatdowns` (

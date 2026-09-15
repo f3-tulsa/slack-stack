@@ -1,6 +1,31 @@
-"""Claim-before-post receipts for Slack view_submission retries.
+"""Claim-before-post lock for Slack ``view_submission`` retries.
 
-Mirrors welcome_deliveries: INSERT claim → Slack I/O → release only if Slack fails.
+Why a table
+-----------
+Slack retries the same modal submit when the ack HTTP response takes more than
+~3 seconds. Each retry is a **new Lambda invoke**. ``beatdowns`` /
+``bd_attendance`` uniqueness uses Slack's message ``ts``, which only exists
+*after* ``chat_postMessage``, so those PKs cannot prevent a second channel
+message. An in-memory flag does not survive a second invoke.
+
+This table is the lock: INSERT ``(claim_key, kind)`` where ``claim_key`` is
+``view.id`` (else ``trigger_id``). Duplicate key 1062 means another invoke
+already claimed this submit — skip Slack I/O. Same pattern as
+``welcome_deliveries`` (that table is keyed on Events API ``event_id``, not
+modal ``view.id``).
+
+Rules
+-----
+- Claim **before** file/S3 work and **before** any Slack channel write.
+- Release **only** if the Slack write itself failed, so the user can retry.
+- Do not release after a successful post (permalink / email / DB errors must
+  not allow Slack to post again).
+- Fail closed: missing claim key refuses to post; missing table or non-1062
+  DB errors raise (do not post).
+- Kinds: ``backblast``, ``preblast``, ``strava``.
+
+Ops: create with ``python migration/migrate_data.py --env <stage>
+--bootstrap-only`` before deploying code that writes this table.
 """
 
 from __future__ import annotations

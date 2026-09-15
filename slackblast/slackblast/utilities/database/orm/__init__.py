@@ -154,7 +154,11 @@ class WelcomeDelivery(BaseClass):
 
 
 class InteractionClaim(BaseClass):
-    """Receipt for Slack view_submission retries (backblast / preblast / Strava)."""
+    """Admin-schema receipt: one row per Slack modal submit (view.id + kind).
+
+    See ``utilities.interaction_claims``. Cannot reuse ``beatdowns`` PKs:
+    those rows are keyed on Slack ``ts`` from ``chat_postMessage``.
+    """
 
     __tablename__ = "interaction_claims"
     claim_key: Mapped[str] = mapped_column(String(255), primary_key=True)

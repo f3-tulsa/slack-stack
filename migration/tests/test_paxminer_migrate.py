@@ -378,6 +378,7 @@ def test_slackblast_interaction_claims_ddl_matches_local_schema():
     assert "PRIMARY KEY (`claim_key`, `kind`)" in migration_ddl
     assert "`team_id` varchar(100) NOT NULL" in migration_ddl
     assert "KEY `idx_interaction_claims_team`" in migration_ddl
+    assert "Claim view.id before Slack post" in migration_ddl
 
     sql_path = (
         _REPO
@@ -392,6 +393,7 @@ def test_slackblast_interaction_claims_ddl_matches_local_schema():
     assert "PRIMARY KEY (`claim_key`, `kind`)" in local_ddl
     assert "`team_id` varchar(100) NOT NULL" in local_ddl
     assert "KEY `idx_interaction_claims_team`" in local_ddl
+    assert "Claim view.id before Slack post" in local_ddl
 
 
 def test_bootstrap_only_does_not_require_source_database_settings():
