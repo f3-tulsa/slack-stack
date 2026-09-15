@@ -23,6 +23,10 @@ Rules
 - Fail closed: missing claim key refuses to post; missing table or non-1062
   DB errors raise (do not post).
 - Kinds: ``backblast``, ``preblast``, ``strava``.
+- Retention: keep rows for ``CLAIM_RETENTION`` (7 days). Slack retries last
+  seconds to minutes; do **not** delete on success (a retry still needs the
+  row). Each claim prunes older rows in a **separate** transaction so a 1062
+  on INSERT does not roll back the delete.
 
 Ops: create with ``python migration/migrate_data.py --env <stage>
 --bootstrap-only`` before deploying code that writes this table.
@@ -30,6 +34,7 @@ Ops: create with ``python migration/migrate_data.py --env <stage>
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from logging import Logger
 from typing import Callable
 
@@ -42,6 +47,9 @@ from utilities.helper_functions import safe_get
 KIND_BACKBLAST = "backblast"
 KIND_PREBLAST = "preblast"
 KIND_STRAVA = "strava"
+# Slack's retry window is seconds–minutes. 7 days is well past that and keeps
+# a delayed lazy invoke from racing a purge.
+CLAIM_RETENTION = timedelta(days=7)
 
 
 def _is_duplicate_key_error(error: IntegrityError) -> bool:
@@ -56,8 +64,25 @@ def claim_key(body: dict) -> str | None:
     return str(key)
 
 
+def _naive_utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def prune_stale_interaction_claims(*, now: datetime | None = None) -> int:
+    """Delete claims older than ``CLAIM_RETENTION``. Own transaction (not the INSERT)."""
+    cutoff = now or _naive_utc_now()
+    if cutoff.tzinfo is not None:
+        cutoff = cutoff.astimezone(timezone.utc).replace(tzinfo=None)
+    cutoff = cutoff - CLAIM_RETENTION
+    with DbManager.transaction() as session:
+        return session.query(InteractionClaim).filter(
+            InteractionClaim.created < cutoff,
+        ).delete(synchronize_session=False)
+
+
 def claim_interaction(key: str, kind: str, team_id: str) -> bool:
     """Return True if this process owns the claim; False if already claimed (1062)."""
+    prune_stale_interaction_claims()
     try:
         with DbManager.transaction() as session:
             session.add(

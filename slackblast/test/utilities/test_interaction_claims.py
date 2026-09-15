@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 from contextlib import contextmanager
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,11 +11,13 @@ from sqlalchemy.exc import IntegrityError
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "slackblast"))
 
 from utilities.interaction_claims import (
+    CLAIM_RETENTION,
     KIND_BACKBLAST,
     KIND_PREBLAST,
     KIND_STRAVA,
     claim_interaction,
     claim_key,
+    prune_stale_interaction_claims,
     run_once,
 )
 
@@ -54,6 +57,42 @@ def test_claim_interaction_non_duplicate_propagates():
         pytest.raises(IntegrityError),
     ):
         claim_interaction("V1", KIND_BACKBLAST, "T1")
+
+
+def test_claim_interaction_prunes_before_insert():
+    session = MagicMock()
+
+    @contextmanager
+    def transaction():
+        yield session
+
+    with (
+        patch("utilities.interaction_claims.prune_stale_interaction_claims") as prune,
+        patch("utilities.interaction_claims.DbManager.transaction", transaction),
+    ):
+        assert claim_interaction("V1", KIND_BACKBLAST, "T1") is True
+    prune.assert_called_once_with()
+    session.add.assert_called_once()
+
+
+def test_prune_stale_deletes_rows_older_than_retention():
+    session = MagicMock()
+    session.query.return_value.filter.return_value.delete.return_value = 4
+
+    @contextmanager
+    def transaction():
+        yield session
+
+    now = datetime(2026, 9, 15, 18, 0, 0)
+    with patch("utilities.interaction_claims.DbManager.transaction", transaction):
+        assert prune_stale_interaction_claims(now=now) == 4
+
+    expr = session.query.return_value.filter.call_args[0][0]
+    cutoff = expr.right.value
+    assert cutoff == now - CLAIM_RETENTION
+    session.query.return_value.filter.return_value.delete.assert_called_once_with(
+        synchronize_session=False
+    )
 
 
 def test_run_once_skips_without_claim_key():

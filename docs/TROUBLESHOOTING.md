@@ -16,7 +16,7 @@
 
 - **Encryption key mismatch:** `DB_ENCRYPTION_KEY` used at **migration** time must match **deploy** for that stage; otherwise reads fail or data looks corrupt.
 - **Regional schema not linked (QSignups):** If **`PM_REGIONAL_SCHEMA`** is unset, Site Q / past-Q detection is skipped; only Slack admins get calendar management.
-- **`interaction_claims` missing:** Slackblast claim-before-post needs `slackblast_<stage>.interaction_claims` (PK `claim_key` + `kind`). On existing environments run `python migration/migrate_data.py --env <stage> --bootstrap-only` (idempotent DDL) **before** deploying the Lambda that writes it; missing table fails closed (raises — does not post). Use venv `.venv-migration`.
+- **`interaction_claims` missing:** Slackblast claim-before-post needs `slackblast_<stage>.interaction_claims` (PK `claim_key` + `kind`). On existing environments run `python migration/migrate_data.py --env <stage> --bootstrap-only` (idempotent DDL) **before** deploying the Lambda that writes it; missing table fails closed (raises — does not post). Use venv `.venv-migration`. Rows older than 7 days are pruned on each claim; do not truncate the table by hand while Slack may still retry a submit.
 
 ## PAXminer container upgrade
 
