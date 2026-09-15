@@ -4,6 +4,7 @@ import sys
 from contextlib import ExitStack, contextmanager
 from unittest.mock import MagicMock, patch
 
+import pytest
 from sqlalchemy.exc import IntegrityError
 
 # Match Lambda layout (CodeUri = slackblast/slackblast): imports are features.* and utilities.*
@@ -112,8 +113,9 @@ def _names_side_effect(*_args, **_kwargs):
 
 def _create_body():
     return {
-        "view": {"callback_id": actions.BACKBLAST_CALLBACK_ID},
+        "view": {"id": "V_CREATE", "callback_id": actions.BACKBLAST_CALLBACK_ID},
         "user": {"id": "U_SUBMITTER"},
+        "team": {"id": "T_TEST"},
     }
 
 
@@ -123,10 +125,12 @@ def _edit_body(*, message_ts="111.222"):
         meta["message_ts"] = message_ts
     return {
         "view": {
+            "id": "V_EDIT",
             "callback_id": actions.BACKBLAST_EDIT_CALLBACK_ID,
             "private_metadata": json.dumps(meta),
         },
         "user": {"id": "U_SUBMITTER"},
+        "team": {"id": "T_TEST"},
     }
 
 
@@ -166,6 +170,8 @@ def _run_handle(*, body, session, region=None, client=None, find_records=None, e
         patch("features.backblast.replace_user_channel_ids", return_value="moleskin with names"),
         patch("features.backblast.parse_rich_block", return_value="moleskin text"),
         patch("features.backblast.get_channel_name", return_value="downrange"),
+        patch("features.backblast.claim_interaction", return_value=True),
+        patch("features.backblast.check_for_duplicate", return_value=False),
     ]
     if extra_patches:
         patches.extend(extra_patches)
@@ -201,8 +207,9 @@ def test_handle_backblast_post_uses_empty_icon_url_when_q_url_missing(
         return ["PAX One"]
 
     body = {
-        "view": {"callback_id": actions.BACKBLAST_CALLBACK_ID},
+        "view": {"id": "V_ICON", "callback_id": actions.BACKBLAST_CALLBACK_ID},
         "user": {"id": "U_OP"},
+        "team": {"id": "T_TEST"},
     }
     client = MagicMock()
     client.chat_postMessage.return_value = {"ts": "123.456"}
@@ -214,11 +221,14 @@ def test_handle_backblast_post_uses_empty_icon_url_when_q_url_missing(
     region_record.workspace_name = "test-workspace"
     region_record.email_enabled = 0
     region_record.postie_format = False
+    region_record.team_id = "T_TEST"
 
     with (
         patch("features.backblast.copy.deepcopy", return_value=form),
         patch("features.backblast.add_custom_field_blocks", side_effect=lambda f, _r: f),
         patch("features.backblast.get_user_names", side_effect=_get_user_names),
+        patch("features.backblast.claim_interaction", return_value=True),
+        patch("features.backblast.check_for_duplicate", return_value=False),
     ):
         backblast.handle_backblast_post(
             body=body,
@@ -488,3 +498,226 @@ def test_backblast_edit_logs_summary_and_skips_unchanged_block():
     assert "PAX added:" in text or "PAX removed:" in text
     assert "Backblast body was edited" in text
 
+
+def test_retried_backblast_create_posts_once():
+    """Slack view_submission retries share view.id — only the first claim may post."""
+    claimed = set()
+
+    def claim(key, kind, team_id):
+        token = (key, kind)
+        if token in claimed:
+            return False
+        claimed.add(token)
+        return True
+
+    session = RecordingSession()
+    client = MagicMock()
+    client.chat_postMessage.return_value = {"ts": "123.456"}
+    client.chat_getPermalink.return_value = {"permalink": "https://example.com/bb"}
+    form = MagicMock()
+    form.get_selected_values.return_value = _base_backblast_data()
+    body = _create_body()
+    region = _region()
+
+    patches = [
+        patch("features.backblast.copy.deepcopy", return_value=form),
+        patch("features.backblast.add_custom_field_blocks", side_effect=lambda f, _r: f),
+        patch("features.backblast.get_user_names", side_effect=_names_side_effect),
+        patch("features.backblast.DbManager.find_records", side_effect=_find_records()),
+        patch("features.backblast.DbManager.transaction", _transaction_for(session)),
+        patch("features.backblast.ensure_users_in_db", return_value=None),
+        patch("features.backblast.replace_user_channel_ids", return_value="moleskin with names"),
+        patch("features.backblast.parse_rich_block", return_value="moleskin text"),
+        patch("features.backblast.get_channel_name", return_value="downrange"),
+        patch("features.backblast.claim_interaction", side_effect=claim),
+        patch("features.backblast.check_for_duplicate", return_value=False),
+        patch("features.backblast.trigger_achievement_webhook"),
+        patch("features.backblast.resolve_paxminer_log_channel", return_value=None),
+    ]
+    with ExitStack() as stack:
+        for p in patches:
+            stack.enter_context(p)
+        for _ in range(2):
+            backblast.handle_backblast_post(
+                body=body,
+                client=client,
+                logger=MagicMock(),
+                context={"user_id": "U_SUBMITTER"},
+                region_record=region,
+            )
+
+    ao_posts = [c for c in client.chat_postMessage.call_args_list if c.kwargs.get("channel") == "C_DOWNRANGE"]
+    assert len(ao_posts) == 1
+
+
+def test_backblast_create_releases_claim_when_slack_post_fails():
+    session = RecordingSession()
+    client = MagicMock()
+    client.chat_postMessage.side_effect = RuntimeError("Slack unavailable")
+    form = MagicMock()
+    form.get_selected_values.return_value = _base_backblast_data()
+
+    with (
+        patch("features.backblast.copy.deepcopy", return_value=form),
+        patch("features.backblast.add_custom_field_blocks", side_effect=lambda f, _r: f),
+        patch("features.backblast.get_user_names", side_effect=_names_side_effect),
+        patch("features.backblast.DbManager.find_records", side_effect=_find_records()),
+        patch("features.backblast.DbManager.transaction", _transaction_for(session)),
+        patch("features.backblast.replace_user_channel_ids", return_value="moleskin"),
+        patch("features.backblast.parse_rich_block", return_value="moleskin"),
+        patch("features.backblast.get_channel_name", return_value="downrange"),
+        patch("features.backblast.claim_interaction", return_value=True),
+        patch("features.backblast.check_for_duplicate", return_value=False),
+        patch("features.backblast.release_interaction") as release,
+        pytest.raises(RuntimeError, match="Slack unavailable"),
+    ):
+        backblast.handle_backblast_post(
+            body=_create_body(),
+            client=client,
+            logger=MagicMock(),
+            context={"user_id": "U_SUBMITTER"},
+            region_record=_region(),
+        )
+
+    release.assert_called_once()
+    assert release.call_args.args[0] == "V_CREATE"
+
+
+def test_backblast_create_duplicate_check_skips_post_and_releases_claim():
+    session = RecordingSession()
+    client = MagicMock()
+    form = MagicMock()
+    form.get_selected_values.return_value = _base_backblast_data()
+
+    with (
+        patch("features.backblast.copy.deepcopy", return_value=form),
+        patch("features.backblast.add_custom_field_blocks", side_effect=lambda f, _r: f),
+        patch("features.backblast.get_user_names", side_effect=_names_side_effect),
+        patch("features.backblast.DbManager.find_records", side_effect=_find_records()),
+        patch("features.backblast.DbManager.transaction", _transaction_for(session)),
+        patch("features.backblast.replace_user_channel_ids", return_value="moleskin"),
+        patch("features.backblast.parse_rich_block", return_value="moleskin"),
+        patch("features.backblast.get_channel_name", return_value="downrange"),
+        patch("features.backblast.claim_interaction", return_value=True),
+        patch("features.backblast.check_for_duplicate", return_value=True),
+        patch("features.backblast.release_interaction") as release,
+    ):
+        backblast.handle_backblast_post(
+            body=_create_body(),
+            client=client,
+            logger=MagicMock(),
+            context={"user_id": "U_SUBMITTER"},
+            region_record=_region(),
+        )
+
+    release.assert_called_once()
+    ao_posts = [c for c in client.chat_postMessage.call_args_list if c.kwargs.get("channel") == "C_DOWNRANGE"]
+    assert ao_posts == []
+    # Warning DM to submitter
+    assert any(c.kwargs.get("channel") == "U_SUBMITTER" for c in client.chat_postMessage.call_args_list)
+
+
+def test_backblast_refuses_post_without_claim_key():
+    session = RecordingSession()
+    client = MagicMock()
+    form = MagicMock()
+    form.get_selected_values.return_value = _base_backblast_data()
+    body = {"view": {"callback_id": actions.BACKBLAST_CALLBACK_ID}, "user": {"id": "U_SUBMITTER"}}
+
+    with (
+        patch("features.backblast.copy.deepcopy", return_value=form),
+        patch("features.backblast.add_custom_field_blocks", side_effect=lambda f, _r: f),
+        patch("features.backblast.get_user_names", side_effect=_names_side_effect),
+        patch("features.backblast.DbManager.find_records", side_effect=_find_records()),
+        patch("features.backblast.replace_user_channel_ids", return_value="moleskin"),
+        patch("features.backblast.parse_rich_block", return_value="moleskin"),
+        patch("features.backblast.get_channel_name", return_value="downrange"),
+        patch("features.backblast.claim_interaction") as claim,
+    ):
+        backblast.handle_backblast_post(
+            body=body,
+            client=client,
+            logger=MagicMock(),
+            context={"user_id": "U_SUBMITTER"},
+            region_record=_region(schema=None),
+        )
+
+    claim.assert_not_called()
+    client.chat_postMessage.assert_not_called()
+
+
+def test_already_claimed_backblast_skips_file_download():
+    """Retries that lose the claim must not hit Slack file/S3 work."""
+    data = _base_backblast_data()
+    data[actions.BACKBLAST_FILE] = [
+        {
+            "id": "F1",
+            "filetype": "png",
+            "url_private_download": "https://files.slack.com/full",
+            "mimetype": "image/png",
+            "original_w": 100,
+            "original_h": 100,
+            "thumb_1024": "https://files.slack.com/thumb",
+            "permalink": "https://slack.com/p",
+        }
+    ]
+    form = MagicMock()
+    form.get_selected_values.return_value = data
+    client = MagicMock()
+
+    with (
+        patch("features.backblast.copy.deepcopy", return_value=form),
+        patch("features.backblast.add_custom_field_blocks", side_effect=lambda f, _r: f),
+        patch("features.backblast.claim_interaction", return_value=False),
+        patch("features.backblast.requests.get") as download,
+        patch("features.backblast.boto3.client") as s3,
+    ):
+        backblast.handle_backblast_post(
+            body=_create_body(),
+            client=client,
+            logger=MagicMock(),
+            context={"user_id": "U_SUBMITTER"},
+            region_record=_region(schema=None),
+        )
+
+    download.assert_not_called()
+    s3.assert_not_called()
+    client.chat_postMessage.assert_not_called()
+
+
+def test_backblast_create_keeps_claim_when_permalink_fails():
+    session = RecordingSession()
+    client = MagicMock()
+    client.chat_postMessage.return_value = {"ts": "123.456", "message": {"edited": {"ts": "123.457"}}}
+    client.chat_getPermalink.side_effect = RuntimeError("permalink failed")
+    form = MagicMock()
+    form.get_selected_values.return_value = _base_backblast_data()
+
+    with (
+        patch("features.backblast.copy.deepcopy", return_value=form),
+        patch("features.backblast.add_custom_field_blocks", side_effect=lambda f, _r: f),
+        patch("features.backblast.get_user_names", side_effect=_names_side_effect),
+        patch("features.backblast.DbManager.find_records", side_effect=_find_records()),
+        patch("features.backblast.DbManager.transaction", _transaction_for(session)),
+        patch("features.backblast.ensure_users_in_db", return_value=None),
+        patch("features.backblast.replace_user_channel_ids", return_value="moleskin"),
+        patch("features.backblast.parse_rich_block", return_value="moleskin"),
+        patch("features.backblast.get_channel_name", return_value="downrange"),
+        patch("features.backblast.claim_interaction", return_value=True),
+        patch("features.backblast.check_for_duplicate", return_value=False),
+        patch("features.backblast.trigger_achievement_webhook"),
+        patch("features.backblast.resolve_paxminer_log_channel", return_value=None),
+        patch("features.backblast.release_interaction") as release,
+    ):
+        backblast.handle_backblast_post(
+            body=_create_body(),
+            client=client,
+            logger=MagicMock(),
+            context={"user_id": "U_SUBMITTER"},
+            region_record=_region(),
+        )
+
+    release.assert_not_called()
+    ao_posts = [c for c in client.chat_postMessage.call_args_list if c.kwargs.get("channel") == "C_DOWNRANGE"]
+    assert len(ao_posts) == 1
+    assert any(op[0] == "add" and op[1] == "beatdowns" for op in session.ops)
