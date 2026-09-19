@@ -5,4 +5,4 @@ slack_bolt>=1.30.0,<2
 pymysql>=1.1.1,<2
 pytz>=2026.3.post1
 SQLAlchemy>=2.0.54,<3
-urllib3>=2.7.0,<3
+urllib3>=2.8.0,<3
