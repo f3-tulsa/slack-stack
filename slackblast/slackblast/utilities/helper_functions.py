@@ -33,6 +33,19 @@ def app_timezone():
     return pytz.timezone(os.environ.get(constants.TIMEZONE, "US/Central"))
 
 
+def ensure_bolt_lambda_client(runner):
+    """Attach a boto3 Lambda client to Bolt's lazy runner if it has none.
+
+    Keep-warm and module init call this so the first Slack ack does not
+    construct a new client inside ``LambdaLazyListenerRunner.start``.
+    """
+    if getattr(runner, "lambda_client", None) is None:
+        import boto3
+
+        runner.lambda_client = boto3.client("lambda")
+    return runner.lambda_client
+
+
 def static_image_url(object_key: str) -> str:
     """Public S3 URL for static images (Strava buttons, etc.)."""
     bucket = (os.environ.get(constants.IMAGE_S3_BUCKET) or "").strip()

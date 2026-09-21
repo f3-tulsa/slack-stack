@@ -153,6 +153,20 @@ class WelcomeDelivery(BaseClass):
     created: Mapped[dt_create]
 
 
+class InteractionClaim(BaseClass):
+    """Admin-schema receipt: one row per Slack modal submit (view.id + kind).
+
+    See ``utilities.interaction_claims``. Cannot reuse ``beatdowns`` PKs:
+    those rows are keyed on Slack ``ts`` from ``chat_postMessage``.
+    """
+
+    __tablename__ = "interaction_claims"
+    claim_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(30), primary_key=True)
+    team_id: Mapped[str100]
+    created: Mapped[dt_create]
+
+
 class PaxminerUser(BaseClass, GetDBClass):
     __tablename__ = "users"
     user_id: Mapped[str45pk]

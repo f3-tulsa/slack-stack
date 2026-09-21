@@ -15,6 +15,7 @@ from utilities.constants import LOCAL_DEVELOPMENT
 from utilities.database.orm import Region
 from utilities.field_encryption import require_encryption_key
 from utilities.helper_functions import (
+    ensure_bolt_lambda_client,
     get_oauth_flow,
     get_region_record,
     get_request_type,
@@ -26,23 +27,26 @@ from utilities.slack.actions import LOADING_ID
 
 require_encryption_key()
 
-# Avoid duplicate CloudWatch lines: Lambda already attaches a root handler; Bolt can add more.
+# Bolt clears the root handlers the Lambda runtime installed, so one has to be
+# put back or the front door logs nothing at all in CloudWatch.
 SlackRequestHandler.clear_all_log_handlers()
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-# Local / non-Lambda runs need an explicit handler; Lambda must not get a second StreamHandler.
-if not os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
-    _stream_handler = logging.StreamHandler()
-    logger.addHandler(_stream_handler)
+if not logger.handlers:
+    logger.addHandler(logging.StreamHandler())
 
 app = App(
     process_before_response=not LOCAL_DEVELOPMENT,
     oauth_flow=get_oauth_flow(),
 )
 
+# Reuse one handler so Bolt's LambdaLazyListenerRunner keeps a single boto3
+# Lambda client across invocations (new handler per request rebuilt that client).
+slack_handler = SlackRequestHandler(app=app)
+
 
 def _warmup(log: logging.Logger) -> None:
-    """Pre-warm DB pool and Fernet derivation for EventBridge keep-warm."""
+    """Pre-warm DB pool, Fernet, and Bolt's lazy-invoke Lambda client."""
     from utilities.database import get_engine
     from utilities.field_encryption import _get_fernet, require_encryption_key
 
@@ -58,6 +62,12 @@ def _warmup(log: logging.Logger) -> None:
         log.info("Keep-warm: Fernet key derived")
     except Exception:
         log.warning("Keep-warm: Fernet derivation failed", exc_info=True)
+    try:
+        runner = slack_handler.app.listener_runner.lazy_listener_runner
+        ensure_bolt_lambda_client(runner)
+        log.info("Keep-warm: Lambda client attached to lazy runner")
+    except Exception:
+        log.warning("Keep-warm: Lambda client failed", exc_info=True)
     # Region rows are loaded lazily per team_id in get_region_record (no full-table scan).
 
 
@@ -99,7 +109,6 @@ def handler(event, context):
         path = event.get("path") or event.get("rawPath", "")
         if path == "/exchange_token":
             return strava.strava_exchange_token(event, context)
-    slack_handler = SlackRequestHandler(app=app)
     return slack_handler.handle(event, context)
 
 

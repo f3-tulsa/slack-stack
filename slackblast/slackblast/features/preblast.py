@@ -13,6 +13,7 @@ from utilities.helper_functions import (
     remove_keys_from_dict,
     safe_get,
 )
+from utilities.interaction_claims import KIND_PREBLAST, run_once
 from utilities.slack import actions, forms
 from utilities.slack import orm as slack_orm
 
@@ -167,32 +168,43 @@ def handle_preblast_post(body: dict, client: WebClient, logger: Logger, context:
         blocks.append(moleskin)
     blocks.append(action_block)
 
-    if create_or_edit == "create":
-        client.chat_postMessage(
-            channel=chan,
-            text=msg,
-            username=f"{q_name} (via Slackblast)",
-            icon_url=q_url,
-            blocks=blocks,
-            metadata={"event_type": "backblast", "event_payload": preblast_data},
-        )
-        logger.debug("\nPreblast posted to Slack! \n{}".format(msg))
-        logger.info(
-            json.dumps({"event_type": "successful_preblast_create", "team_name": region_record.workspace_name})
-        )
-    elif create_or_edit == "edit":
-        client.chat_update(
-            channel=message_channel,
-            ts=message_ts,
-            text=msg,
-            username=f"{q_name} (via Slackblast)",
-            icon_url=q_url,
-            blocks=blocks,
-        )
-        logger.debug("\nPreblast updated in Slack! \n{}".format(msg))
-        logger.info(
-            json.dumps({"event_type": "successful_preblast_edit", "team_name": region_record.workspace_name})
-        )
+    team_id = (
+        safe_get(body, "team_id")
+        or safe_get(body, "team", "id")
+        or context.get("team_id")
+        or getattr(region_record, "team_id", None)
+        or ""
+    )
+
+    def _post():
+        if create_or_edit == "create":
+            client.chat_postMessage(
+                channel=chan,
+                text=msg,
+                username=f"{q_name} (via Slackblast)",
+                icon_url=q_url,
+                blocks=blocks,
+                metadata={"event_type": "backblast", "event_payload": preblast_data},
+            )
+            logger.debug("\nPreblast posted to Slack! \n{}".format(msg))
+            logger.info(
+                json.dumps({"event_type": "successful_preblast_create", "team_name": region_record.workspace_name})
+            )
+        elif create_or_edit == "edit":
+            client.chat_update(
+                channel=message_channel,
+                ts=message_ts,
+                text=msg,
+                username=f"{q_name} (via Slackblast)",
+                icon_url=q_url,
+                blocks=blocks,
+            )
+            logger.debug("\nPreblast updated in Slack! \n{}".format(msg))
+            logger.info(
+                json.dumps({"event_type": "successful_preblast_edit", "team_name": region_record.workspace_name})
+            )
+
+    run_once(body=body, kind=KIND_PREBLAST, team_id=team_id, logger=logger, action=_post)
 
 
 def handle_preblast_edit_button(body: dict, client: WebClient, logger: Logger, context: dict, region_record: Region):

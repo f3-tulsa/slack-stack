@@ -660,6 +660,23 @@ CREATE TABLE IF NOT EXISTS `{schema}`.`welcome_deliveries` (
 """
 
 
+def _ddl_slackblast_interaction_claims(schema: str) -> str:
+    # Claim-before-post lock. Slack retries view_submission on slow ack; beatdowns
+    # PKs need Slack ts from chat_postMessage and cannot lock first. See
+    # slackblast/utilities/interaction_claims.py.
+    return f"""
+CREATE TABLE IF NOT EXISTS `{schema}`.`interaction_claims` (
+  `claim_key` varchar(255) NOT NULL,
+  `kind` varchar(30) NOT NULL,
+  `team_id` varchar(100) NOT NULL,
+  `created` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`claim_key`, `kind`),
+  KEY `idx_interaction_claims_team` (`team_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='Claim view.id before Slack post so retries cannot duplicate messages'
+"""
+
+
 def _seed_slackblast_regions(cur, conn: Any, sb_s: str, stage: str) -> None:
     """Optional rows in slackblast regions (team_id + paxminer_schema)."""
     tt_tid = (os.environ.get("MIGRATION_SEED_TEAM_F3TTOWN") or "").strip()
@@ -719,6 +736,7 @@ def pre_migration_bootstrap_schemas(conn: Any, stage: str) -> None:
         cur.execute(_ddl_slackblast_regions(sb_s))
         cur.execute(_ddl_slackblast_users(sb_s))
         cur.execute(_ddl_slackblast_welcome_deliveries(sb_s))
+        cur.execute(_ddl_slackblast_interaction_claims(sb_s))
         conn.commit()
         cur.execute(
             f"SELECT COUNT(*) AS seed_cnt FROM `{pm_s}`.`regions` WHERE `schema_name` IN (%s, %s)",
@@ -1512,7 +1530,10 @@ def main() -> int:
     parser.add_argument(
         "--bootstrap-only",
         action="store_true",
-        help="Create or update target admin schemas without copying source data",
+        help=(
+            "Create or update target admin schemas without copying source data "
+            "(includes slackblast welcome_deliveries and interaction_claims)"
+        ),
     )
     parser.add_argument("--dry-run", action="store_true", help="Only log planned steps, no writes to target")
     parser.add_argument("--skip-schema", action="append", default=[], help="Skip a source schema name (repeatable)")
