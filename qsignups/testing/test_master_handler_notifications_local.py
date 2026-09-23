@@ -43,6 +43,44 @@ def test_assign_event_q_notifies_ao_channel() -> None:
     )
 
 
+def test_assign_event_q_can_assign_someone_else() -> None:
+    from database.orm import Master
+    from slack.handlers import master as master_handler
+
+    log = logging.getLogger("test")
+    client = MagicMock()
+    actor = SimpleNamespace(id="U_EDITOR", name="Editor")
+    assignee = SimpleNamespace(id="U_PICKED", name="Picked Pax")
+    result = SimpleNamespace(
+        ao=SimpleNamespace(ao_channel_id="CAO1", ao_display_name="The Bridge"),
+        event=SimpleNamespace(id=11, event_date=date(2026, 5, 8), event_time="0530", q_pax_id=None, q_pax_name=None),
+    )
+
+    with patch("slack.handlers.master.helper.find_master_event", return_value=result):
+        with patch("slack.handlers.master.DbManager.update_record") as update_record:
+            with patch("slack.handlers.master.random.choice", side_effect=lambda templates: templates[0]):
+                response = master_handler.assign_event_q(
+                    client,
+                    actor,
+                    "T1",
+                    log,
+                    datetime(2026, 5, 8, 5, 30),
+                    ao_display_name="The Bridge",
+                    assigned_user=assignee,
+                )
+
+    assert response.success is True
+    update_record.assert_called_once()
+    fields = update_record.call_args.args[2]
+    assert fields[Master.q_pax_id] == "U_PICKED"
+    assert fields[Master.q_pax_name] == "Picked Pax"
+    kwargs = client.chat_postMessage.call_args.kwargs
+    assert kwargs["text"] == (
+        ":clipboard: <@U_EDITOR> called in the HC for <@U_PICKED>, filling the Q spot at *The Bridge* on "
+        "*Friday, May 8 @ 0530*; the shovel flag has a driver."
+    )
+
+
 def test_clear_event_q_notifies_ao_channel() -> None:
     from slack.handlers import master as master_handler
 

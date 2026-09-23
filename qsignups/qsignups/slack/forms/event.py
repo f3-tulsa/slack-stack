@@ -10,6 +10,70 @@ from slack import actions, forms, inputs
 from utilities import list_to_dict
 
 
+def _fmt_event_datetime(dt: datetime) -> str:
+    return f"{dt.strftime('%A, %B')} {dt.day} @ {dt.strftime('%H%M')}"
+
+
+def build_open_slot_assignment_view(
+    ao_display_name: str,
+    selected_dt: datetime,
+    initial_user_id: str,
+) -> dict:
+    return {
+        "type": "home",
+        "blocks": [
+            {"type": "section", "text": {"type": "mrkdwn", "text": "Assign the Q slot for:"}},
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{ao_display_name}* on *{_fmt_event_datetime(selected_dt)}*",
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "open_slot_q_select",
+                "element": {
+                    "type": "users_select",
+                    "action_id": "open_slot_q_select",
+                    "placeholder": {"type": "plain_text", "text": "Select the Q", "emoji": True},
+                    "initial_user": initial_user_id,
+                },
+                "label": {"type": "plain_text", "text": "Q", "emoji": True},
+            },
+            forms.make_action_button_row(
+                [
+                    inputs.make_submit_button(actions.SUBMIT_ASSIGN_OPEN_SLOT_ACTION),
+                    inputs.CANCEL_BUTTON,
+                ]
+            ),
+        ],
+        "private_metadata": json.dumps(
+            {
+                "ao_display_name": ao_display_name,
+                "selected_date": selected_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        ),
+    }
+
+
+def publish_open_slot_assignment_view(
+    user_id: str,
+    client,
+    logger,
+    ao_display_name: str,
+    selected_dt: datetime,
+    initial_user_id: str,
+):
+    try:
+        client.views_publish(
+            user_id=user_id,
+            view=build_open_slot_assignment_view(ao_display_name, selected_dt, initial_user_id),
+        )
+    except Exception as e:
+        logger.error("Error publishing open slot assignment view: %s", e, exc_info=True)
+
+
 def _aos_for_team(
     team_id: str, allowed_ao_channel_ids: Optional[List[str]] = None
 ) -> list[vwAOsSort]:

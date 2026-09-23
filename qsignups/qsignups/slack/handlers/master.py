@@ -342,17 +342,27 @@ def clear_event_q(client, user: User, team_id, logger, ao_display_name, selected
         logger.error("Error updating: %s", e, exc_info=True)
         return UpdateResponse(success = False, message = f"Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker. Errors:\n{e}")
 
-def assign_event_q(client, user: User, team_id, logger, selected_dt, ao_display_name = None, ao_channel_id = None) -> UpdateResponse:
+def assign_event_q(
+    client,
+    user: User,
+    team_id,
+    logger,
+    selected_dt,
+    ao_display_name = None,
+    ao_channel_id = None,
+    assigned_user: User | None = None,
+) -> UpdateResponse:
 
     result: helper.MasterEventAndAO = helper.find_master_event(team_id, selected_dt, ao_display_name = ao_display_name, ao_channel_id = ao_channel_id)
 
     if not result:
         return UpdateResponse(success = False, message = "Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker.")
+    assignee = assigned_user or user
     previous_q_id = result.event.q_pax_id
     previous_q_name = result.event.q_pax_name
     DbManager.update_record(Master, result.event.id, {
-        Master.q_pax_id: user.id,
-        Master.q_pax_name: user.name
+        Master.q_pax_id: assignee.id,
+        Master.q_pax_name: assignee.name
     })
     _notify_signup_state_change(
         client=client,
@@ -364,8 +374,8 @@ def assign_event_q(client, user: User, team_id, logger, selected_dt, ao_display_
         event_time=result.event.event_time,
         previous_q_id=previous_q_id,
         previous_q_name=previous_q_name,
-        new_q_id=user.id,
-        new_q_name=user.name,
+        new_q_id=assignee.id,
+        new_q_name=assignee.name,
     )
     # if authenticate.is_connected(team_id):
     #     new_master = DbManager.get_record(Master, result.event.id)

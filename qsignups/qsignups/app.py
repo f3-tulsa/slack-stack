@@ -11,7 +11,7 @@ from slack_bolt.oauth.oauth_settings import OAuthSettings
 from slack_sdk.oauth import OAuthStateUtils
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
 
-from utilities import safe_get, get_user
+from utilities import User, safe_get, get_user
 
 # from google import authenticate, commands
 
@@ -1168,7 +1168,7 @@ def ao_select_slot(ack, client, body, logger, context):
             date_style = "primary"
             action_id = "date_select_button"
             value = str(event_date_time)
-            button_text = "Take slot"
+            button_text = "Assign Slot"
         # Otherwise default (grey) button, listing Qs name
         else:
             date_status = event.q_pax_name
@@ -1221,17 +1221,14 @@ def handle_date_select_button(ack, client, body, logger, context):
     # gather info needed for message and SQL
     ao_display_name = body["view"]["blocks"][1]["text"]["text"].replace("*", "")
 
-    response = master_handler.assign_event_q(
-        client, user, team_id, logger, selected_dt, ao_display_name=ao_display_name
+    event.publish_open_slot_assignment_view(
+        user_id=user_id,
+        client=client,
+        logger=logger,
+        ao_display_name=ao_display_name,
+        selected_dt=selected_dt,
+        initial_user_id=user_id,
     )
-
-    # Generate top message and go back home
-    if response.success:
-        top_message = f":fire: You're on the Q sheet, {user.name}! Time to bring the pain at *{ao_display_name}* on *{selected_dt.strftime('%A, %B %-d @ %H%M')}*. Start prepping that Weinke!"
-    else:
-        top_message = response.message or "Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker."
-
-    home.refresh(client, user, logger, top_message, team_id, context)
 
 
 # triggered when user selects open slot on a message
@@ -1241,60 +1238,74 @@ def handle_date_select_button_from_message(ack, client, body, logger, context):
     ack()
     logger.info(body)
     user_id = context["user_id"]
-    user = get_user(user_id, client)
     team_id = context["team_id"]
-    input_data = body
-
     ao_channel_id = body["channel"]["id"]
-    selected_date = input_data["actions"][0]["value"]
-    response = master_handler.assign_event_q(client, user, team_id, logger, selected_date, ao_channel_id=ao_channel_id)
+    selected_date = body["actions"][0]["value"]
+    selected_dt = datetime.strptime(selected_date, "%Y-%m-%d %H:%M:%S")
+    ao = helper.find_ao(team_id, ao_channel_id=ao_channel_id)
+    ao_display_name = ao.ao_display_name if ao else ao_channel_id
+    event.publish_open_slot_assignment_view(
+        user_id=user_id,
+        client=client,
+        logger=logger,
+        ao_display_name=ao_display_name,
+        selected_dt=selected_dt,
+        initial_user_id=user_id,
+    )
+
+
+@app.action(actions.SUBMIT_ASSIGN_OPEN_SLOT_ACTION)
+def handle_submit_assign_open_slot_button(ack, client, body, logger, context):
+    ack()
+    logger.info(body)
+    user_id = context["user_id"]
+    team_id = context["team_id"]
+    actor = get_user(user_id, client)
+    meta = json.loads(body["view"].get("private_metadata") or "{}")
+    ao_display_name = meta["ao_display_name"]
+    selected_dt = datetime.strptime(meta["selected_date"], "%Y-%m-%d %H:%M:%S")
+    assigned_user_id = (
+        safe_get(body["view"], "state", "values", "open_slot_q_select", "open_slot_q_select", "selected_user") or user_id
+    )
+    assigned_user = get_user(assigned_user_id, client)
+
+    if not actor or not assigned_user:
+        home.refresh(
+            client,
+            actor or User(id=user_id, name=user_id),
+            logger,
+            "Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker.",
+            team_id,
+            context,
+        )
+        return
+
+    response = master_handler.assign_event_q(
+        client,
+        actor,
+        team_id,
+        logger,
+        selected_dt,
+        ao_display_name=ao_display_name,
+        assigned_user=assigned_user,
+    )
+
     if response.success:
-        # gather info needed for message and SQL
-        message_ts = body["message"]["ts"]
-        message_blocks = body["message"]["blocks"]
-        message_ts = input_data["message"]["ts"]
-        message_blocks = input_data["message"]["blocks"]
-
-        # Update original message
-        open_count = 0
-        block_num = -1
-        for counter, block in enumerate(message_blocks):
-            logger.debug(
-                "comparing accessory value=%s selected_date=%s",
-                safe_get(block, "accessory", "value"),
-                selected_date,
+        when_text = f"{selected_dt.strftime('%A, %B')} {selected_dt.day} @ {selected_dt.strftime('%H%M')}"
+        if actor.id == assigned_user.id:
+            top_message = (
+                f":fire: You're on the Q sheet, {actor.name}! Time to bring the pain at *{ao_display_name}* "
+                f"on *{when_text}*. Start prepping that Weinke!"
             )
-            if safe_get(block, "accessory", "value") == selected_date:
-                block_num = counter
-
-            if safe_get(block, "accessory", "text", "text"):
-                if block["accessory"]["text"]["text"][-5] == "OPEN!":
-                    open_count += 1
-
-        logger.debug("assign_event_q message block_num=%s", block_num)
-        if block_num >= 0:
-            message_blocks[block_num]["text"]["text"] = message_blocks[block_num]["text"]["text"].replace(
-                "OPEN!", user.name
+        else:
+            top_message = (
+                f":white_check_mark: Locked in, {actor.name}! *{assigned_user.name}* now has the Q slot at "
+                f"*{ao_display_name}* on *{when_text}*."
             )
-            message_blocks[block_num]["accessory"]["action_id"] = "ignore_button"
-            message_blocks[block_num]["accessory"]["value"] = selected_date + "|" + user.name
-            message_blocks[block_num]["accessory"]["text"]["text"] = user.name
-            del message_blocks[block_num]["accessory"]["style"]
+    else:
+        top_message = response.message or "Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker."
 
-            # update top message
-            open_count += -1
-            if open_count == 1:
-                open_msg = " One Q slot is still open—step up, HIM!"
-            elif open_count > 1:
-                open_msg = " There are open Q slots—get after it, HIMs!"
-            else:
-                open_msg = ""
-
-            message_blocks[0]["text"]["text"] = f"Hello HIMs! :fire: Here's your Q lineup for the week.{open_msg}"
-
-            # publish update
-            logging.info("sending blocks: %s", message_blocks)
-            client.chat_update(channel=ao_channel_id, ts=message_ts, blocks=message_blocks)
+    home.refresh(client, actor, logger, top_message, team_id, context)
 
 
 # triggered when user selects closed slot on a message
