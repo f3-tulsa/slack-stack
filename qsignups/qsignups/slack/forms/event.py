@@ -14,13 +14,17 @@ def _fmt_event_datetime(dt: datetime) -> str:
     return f"{dt.strftime('%A, %B')} {dt.day} @ {dt.strftime('%H%M')}"
 
 
-def build_open_slot_assignment_view(
+def build_open_slot_assignment_modal(
     ao_display_name: str,
     selected_dt: datetime,
     initial_user_id: str,
 ) -> dict:
     return {
-        "type": "home",
+        "type": "modal",
+        "callback_id": actions.ASSIGN_OPEN_SLOT_VIEW,
+        "title": {"type": "plain_text", "text": "Assign Q Slot"},
+        "submit": {"type": "plain_text", "text": "Assign"},
+        "close": {"type": "plain_text", "text": "Cancel"},
         "blocks": [
             {"type": "section", "text": {"type": "mrkdwn", "text": "Assign the Q slot for:"}},
             {
@@ -41,12 +45,6 @@ def build_open_slot_assignment_view(
                 },
                 "label": {"type": "plain_text", "text": "Q", "emoji": True},
             },
-            forms.make_action_button_row(
-                [
-                    inputs.make_submit_button(actions.SUBMIT_ASSIGN_OPEN_SLOT_ACTION),
-                    inputs.CANCEL_BUTTON,
-                ]
-            ),
         ],
         "private_metadata": json.dumps(
             {
@@ -56,9 +54,8 @@ def build_open_slot_assignment_view(
         ),
     }
 
-
-def publish_open_slot_assignment_view(
-    user_id: str,
+def open_open_slot_assignment_modal(
+    trigger_id: str,
     client,
     logger,
     ao_display_name: str,
@@ -66,12 +63,12 @@ def publish_open_slot_assignment_view(
     initial_user_id: str,
 ):
     try:
-        client.views_publish(
-            user_id=user_id,
-            view=build_open_slot_assignment_view(ao_display_name, selected_dt, initial_user_id),
+        client.views_open(
+            trigger_id=trigger_id,
+            view=build_open_slot_assignment_modal(ao_display_name, selected_dt, initial_user_id),
         )
     except Exception as e:
-        logger.error("Error publishing open slot assignment view: %s", e, exc_info=True)
+        logger.error("Error opening open slot assignment modal: %s", e, exc_info=True)
 
 
 def _aos_for_team(

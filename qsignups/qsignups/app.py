@@ -1221,8 +1221,8 @@ def handle_date_select_button(ack, client, body, logger, context):
     # gather info needed for message and SQL
     ao_display_name = body["view"]["blocks"][1]["text"]["text"].replace("*", "")
 
-    event.publish_open_slot_assignment_view(
-        user_id=user_id,
+    event.open_open_slot_assignment_modal(
+        trigger_id=body["trigger_id"],
         client=client,
         logger=logger,
         ao_display_name=ao_display_name,
@@ -1244,8 +1244,8 @@ def handle_date_select_button_from_message(ack, client, body, logger, context):
     selected_dt = datetime.strptime(selected_date, "%Y-%m-%d %H:%M:%S")
     ao = helper.find_ao(team_id, ao_channel_id=ao_channel_id)
     ao_display_name = ao.ao_display_name if ao else ao_channel_id
-    event.publish_open_slot_assignment_view(
-        user_id=user_id,
+    event.open_open_slot_assignment_modal(
+        trigger_id=body["trigger_id"],
         client=client,
         logger=logger,
         ao_display_name=ao_display_name,
@@ -1254,14 +1254,15 @@ def handle_date_select_button_from_message(ack, client, body, logger, context):
     )
 
 
-@app.action(actions.SUBMIT_ASSIGN_OPEN_SLOT_ACTION)
+@app.view(actions.ASSIGN_OPEN_SLOT_VIEW)
 def handle_submit_assign_open_slot_button(ack, client, body, logger, context):
     ack()
     logger.info(body)
-    user_id = context["user_id"]
-    team_id = context["team_id"]
+    user_id = body["user"]["id"]
+    team_id = _team_id_from_interaction(body)
+    hctx = _context_for_home_refresh(body, client, context)
     actor = get_user(user_id, client)
-    meta = json.loads(body["view"].get("private_metadata") or "{}")
+    meta = load_modal_metadata(body["view"].get("private_metadata") or "{}")
     ao_display_name = meta["ao_display_name"]
     selected_dt = datetime.strptime(meta["selected_date"], "%Y-%m-%d %H:%M:%S")
     assigned_user_id = (
@@ -1276,7 +1277,7 @@ def handle_submit_assign_open_slot_button(ack, client, body, logger, context):
             logger,
             "Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker.",
             team_id,
-            context,
+            hctx,
         )
         return
 
@@ -1305,7 +1306,7 @@ def handle_submit_assign_open_slot_button(ack, client, body, logger, context):
     else:
         top_message = response.message or "Uh-oh, something broke out in the Gloom! Please try again or contact your Weasel Shaker."
 
-    home.refresh(client, actor, logger, top_message, team_id, context)
+    home.refresh(client, actor, logger, top_message, team_id, hctx)
 
 
 # triggered when user selects closed slot on a message
