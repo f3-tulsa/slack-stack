@@ -78,7 +78,85 @@ def test_handle_date_select_button_from_message_publishes_assignment_view() -> N
     )
 
 
+def test_handle_submit_assign_open_slot_button_assigns_self() -> None:
+    app_mod = _load_app_module()
+    ack = MagicMock()
+    client = MagicMock()
+    logger = MagicMock()
+    actor = app_mod.User(id="U_SELF", name="Self Pax")
+    body = {
+        "view": {
+            "private_metadata": '{"ao_display_name":"The Bridge","selected_date":"2026-05-08 05:30:00"}',
+            "state": {"values": {"open_slot_q_select": {"open_slot_q_select": {"selected_user": "U_SELF"}}}},
+        }
+    }
+    context = {"user_id": "U_SELF", "team_id": "T1"}
+
+    with patch.object(app_mod, "get_user", return_value=actor) as get_user:
+        with patch.object(
+            app_mod.master_handler,
+            "assign_event_q",
+            return_value=type("Resp", (), {"success": True, "message": "ok"})(),
+        ) as assign_event_q:
+            with patch.object(app_mod.home, "refresh") as refresh:
+                app_mod.handle_submit_assign_open_slot_button(ack, client, body, logger, context)
+
+    ack.assert_called_once()
+    assert get_user.call_count == 2
+    assign_event_q.assert_called_once_with(
+        client,
+        actor,
+        "T1",
+        logger,
+        app_mod.datetime(2026, 5, 8, 5, 30),
+        ao_display_name="The Bridge",
+        assigned_user=actor,
+    )
+    refresh.assert_called_once()
+    assert "You're on the Q sheet" in refresh.call_args.args[3]
+
+
+def test_handle_submit_assign_open_slot_button_assigns_other_user() -> None:
+    app_mod = _load_app_module()
+    ack = MagicMock()
+    client = MagicMock()
+    logger = MagicMock()
+    actor = app_mod.User(id="U_EDITOR", name="Editor")
+    assignee = app_mod.User(id="U_OTHER", name="Other Pax")
+    body = {
+        "view": {
+            "private_metadata": '{"ao_display_name":"The Bridge","selected_date":"2026-05-08 05:30:00"}',
+            "state": {"values": {"open_slot_q_select": {"open_slot_q_select": {"selected_user": "U_OTHER"}}}},
+        }
+    }
+    context = {"user_id": "U_EDITOR", "team_id": "T1"}
+
+    with patch.object(app_mod, "get_user", side_effect=[actor, assignee]):
+        with patch.object(
+            app_mod.master_handler,
+            "assign_event_q",
+            return_value=type("Resp", (), {"success": True, "message": "ok"})(),
+        ) as assign_event_q:
+            with patch.object(app_mod.home, "refresh") as refresh:
+                app_mod.handle_submit_assign_open_slot_button(ack, client, body, logger, context)
+
+    ack.assert_called_once()
+    assign_event_q.assert_called_once_with(
+        client,
+        actor,
+        "T1",
+        logger,
+        app_mod.datetime(2026, 5, 8, 5, 30),
+        ao_display_name="The Bridge",
+        assigned_user=assignee,
+    )
+    refresh.assert_called_once()
+    assert "*Other Pax* now has the Q slot" in refresh.call_args.args[3]
+
+
 if __name__ == "__main__":
     test_handle_date_select_button_publishes_assignment_view()
     test_handle_date_select_button_from_message_publishes_assignment_view()
+    test_handle_submit_assign_open_slot_button_assigns_self()
+    test_handle_submit_assign_open_slot_button_assigns_other_user()
     print("open slot assignment action tests OK")
