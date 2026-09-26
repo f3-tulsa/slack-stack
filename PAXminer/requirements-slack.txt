@@ -2,6 +2,6 @@
 # Manually pinned (CI requirements-sync stays Slackblast-centric unless extended).
 slack-bolt==1.30.0
 slack-sdk==3.44.1
-PyMySQL==1.1.3
+PyMySQL==1.2.3
 cryptography==50.0.1
 tzdata==2026.4
