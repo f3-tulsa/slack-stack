@@ -1,4 +1,4 @@
-pymysql>=1.2.0,<2
+pymysql>=1.2.3,<2
 python-dotenv>=1.2.3,<2
 cryptography>=50.0.1,<51
 boto3>=1.43.95,<2
