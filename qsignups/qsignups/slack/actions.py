@@ -1,6 +1,7 @@
 
 CANCEL_BUTTON_ACTION = "cancel_button_select"
 BACK_TO_MANAGE_ACTION = "back_to_manage_select"
+ASSIGN_OPEN_SLOT_VIEW = "assign_open_slot_modal"
 CONFIRM_EDIT_AO_VIEW = "confirm_edit_ao_modal"
 CONFIRM_EDIT_EVENT_VIEW = "confirm_edit_event_modal"
 CONFIRM_EDIT_RECURRING_EVENT_VIEW = "confirm_edit_recurring_event_modal"
