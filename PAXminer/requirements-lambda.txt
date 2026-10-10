@@ -2,8 +2,8 @@
 # This file is the deploy contract. Keep shared pins in sync with requirements.txt.
 cryptography>=50.0.2,<51
 PyMySQL>=1.2.3,<2
-slack-sdk>=3.44.1,<4
+slack-sdk>=3.45.0,<4
 pandas>=3.0.6,<4
 numpy>=2.5.3,<3
 matplotlib>=3.11.2,<4
-tzdata>=2026.4
+tzdata>=2026.5
