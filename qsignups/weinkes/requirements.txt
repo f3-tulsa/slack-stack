@@ -5,5 +5,5 @@ dataframe-image>=0.2.7
 numpy>=2.5.3,<3
 pandas>=3.0.6,<4
 pymysql>=1.2.3,<2
-python-dotenv>=1.2.3
+python-dotenv>=1.2.4
 slack_sdk>=3.45.0,<4
