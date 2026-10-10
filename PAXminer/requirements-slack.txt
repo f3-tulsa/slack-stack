@@ -1,7 +1,7 @@
 # Lightweight Slack interactive Lambda only — NO pandas/numpy/matplotlib.
 # Manually pinned (CI requirements-sync stays Slackblast-centric unless extended).
 slack-bolt==1.30.0
-slack-sdk==3.44.1
+slack-sdk==3.45.0
 PyMySQL==1.2.3
 cryptography==50.0.2
-tzdata==2026.4
+tzdata==2026.5
