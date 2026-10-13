@@ -8,7 +8,13 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "slackblast"))
 import utilities.helper_functions as helper_functions
 from utilities.database.orm import PaxminerUser, Region
-from utilities.helper_functions import check_for_duplicate, ensure_users_in_db, get_oauth_flow, safe_get
+from utilities.helper_functions import (
+    check_for_duplicate,
+    ensure_bolt_lambda_client,
+    ensure_users_in_db,
+    get_oauth_flow,
+    safe_get,
+)
 
 
 def _slack_user(
@@ -129,6 +135,20 @@ def _assert_award_merge_in_one_transaction(calls, mock_engine):
 def test_safe_get():
     assert safe_get({"a": {"b": {"c": 1}}}, "a", "b", "c") == 1
     assert safe_get({"a": {"b": {"c": 1}}}, "a", "b", "d") == None
+
+
+def test_ensure_bolt_lambda_client_sets_and_reuses_runner_client():
+    from types import SimpleNamespace
+
+    runner = SimpleNamespace(lambda_client=None)
+    fake = MagicMock()
+    with patch("boto3.client", return_value=fake) as client_factory:
+        first = ensure_bolt_lambda_client(runner)
+        second = ensure_bolt_lambda_client(runner)
+    assert first is fake
+    assert second is fake
+    assert runner.lambda_client is fake
+    client_factory.assert_called_once_with("lambda")
 
 
 def test_get_region_record_uses_cache_without_db_query():
