@@ -1,7 +1,7 @@
 # Local / scraping extras. Shared packages must match requirements-lambda.txt.
 dateparser>=1.4.3,<2
 matplotlib>=3.11.2,<4
-numpy>=2.5.3,<3
+numpy>=2.5.4,<3
 pandas>=3.0.6,<4
 PyMySQL>=1.2.3,<2
 slack-sdk>=3.45.0,<4
