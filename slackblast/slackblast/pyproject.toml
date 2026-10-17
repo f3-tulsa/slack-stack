@@ -43,7 +43,7 @@ pytz = ">=2024.1"
 [tool.poetry.group.dev.dependencies]
 boto3 = "^1.42.89"
 pytest = "^9.0.3"
-sqlalchemy-utils = "^0.42.1"
+sqlalchemy-utils = ">=0.42.1,<0.44.0"
 
 [build-system]
 requires = ["poetry-core"]
